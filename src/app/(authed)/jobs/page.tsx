@@ -11,7 +11,7 @@ import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, CalendarCheck, MapPin, RefreshCw,
-  ClipboardCheck,
+  ClipboardCheck, ClipboardList,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -43,6 +43,7 @@ import {
 } from '@/lib/job-tabs';
 import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PS_OFFER_STATE_OPTIONS } from '@/components/job/PendingSchedulingFilters';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
@@ -103,6 +104,11 @@ type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
   job_status: number; job_type: string; source_type: string | null;
   job_desc: string | null;
+  // Pending for Material (status 16) sub-state — 1 Quotation Pending, 2
+  // Review Pending. Meaningless at any other job_status. May arrive as a
+  // boolean for a TINYINT(1) column, hence Number() normalisation at the
+  // Material Review row-action gate rather than a direct equality check.
+  material_sub_status?: number | boolean | null;
   created_date_time: string; requested_date_time: string; scheduled_date_time: string | null;
   checkin_date_time: string | null; checkout_date_time: string | null;
   // Extra fields surfaced on the Unconfirmed tab — see UnconfirmedJobsTable.
@@ -297,6 +303,11 @@ export default function JobsPage() {
     // resolves the keys it is asked for, so a button gated on an unrequested
     // key is invisible to every operator, permission or not.
     RESEND_PIN_ACTION,
+    // Gates the Material Review row action (status 16, sub-status 2 — Review
+    // Pending) and the modal it opens. Same key MaterialReviewModal checks
+    // internally, so a row that shouldn't be actionable never even shows the
+    // icon. Same key /my-orders requests.
+    'isJobMaterialReview',
   ]);
   /*
    * Audit entry point gate. `canManageJobCharges` is a STANDALONE boolean on
@@ -1218,6 +1229,11 @@ export default function JobsPage() {
   // (null = closed). Shown for "Pending App Ack" (status 0, assigned) and
   // "Pending to Close" (status 2/20) rows, which always carry a tech.
   const [locationJob, setLocationJob] = useState<JobRow | null>(null);
+  // Material Review modal state — the job whose Material Review row action
+  // was clicked (null = closed). Separate from the JobModal `view`/`edit`/…
+  // state on purpose: the Eye/View icon must keep opening the plain,
+  // unmodified job viewer.
+  const [materialReviewJobId, setMaterialReviewJobId] = useState<number | null>(null);
   // Instant client-side search filter over the current (server-sorted,
   // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
   // itself is now server-side (see below), so this only narrows what's already
@@ -2314,6 +2330,25 @@ export default function JobsPage() {
                         />
                       )}
                       {/*
+                        * Material Review (status 16, sub-status 2 — Review
+                        * Pending). Normalise with Number(): material_sub_status
+                        * is a TINYINT and can arrive as a boolean. A DIFFERENT
+                        * icon from Audit's ClipboardCheck above — same family,
+                        * but the two never overlap on a row and shouldn't read
+                        * as the same action. Opens MaterialReviewModal, a
+                        * SEPARATE workspace from the View/Eye icon, which now
+                        * opens the plain job viewer on this row like every
+                        * other status.
+                        */}
+                      {j.job_status === 16 && Number(j.material_sub_status) === 2 && canJob.isJobMaterialReview && (
+                        <IconButton
+                          icon={ClipboardList}
+                          intent="primary"
+                          label="Material Review"
+                          onClick={() => setMaterialReviewJobId(j.job_id)}
+                        />
+                      )}
+                      {/*
                         * Resend Customer PIN — last icon in the row, matching
                         * /my-orders and PendingToStartView.
                         *
@@ -2398,6 +2433,16 @@ export default function JobsPage() {
         title={locationJob
           ? `Job #${locationJob.job_id}${locationJob.easyfixer_name ? ` · ${formatEasyfixerName(locationJob.easyfixer_name)}` : ''}`
           : undefined}
+      />
+
+      {/* Material Review — Reject/Send moves the job off status 16 (Send →
+          15 Client Approval Pending), so refresh the list AND its tab
+          counts, same as ScheduleAssignModal's onAssigned above. */}
+      <MaterialReviewModal
+        open={materialReviewJobId != null}
+        jobId={materialReviewJobId}
+        onClose={() => setMaterialReviewJobId(null)}
+        onReviewed={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
       {canJob.isTransferJobOwnership && (

@@ -165,7 +165,7 @@ type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
   // Pending for Material (status 16) sub-state — 1 Quotation Pending, 2
   // Review Pending; null/absent at any other status. See
-  // MaterialReviewPanel + materialSubStatusLabel (lib/utils.ts). May arrive
+  // MaterialReviewModal + materialSubStatusLabel (lib/utils.ts). May arrive
   // as a boolean for a TINYINT(1) column — normalise with Number().
   material_sub_status?: number | boolean | null;
   services?: unknown[]; images?: unknown[];
@@ -1252,10 +1252,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             to the top of the Summary tab so ops action pending asks
             before anything else. Renders nothing when there are none. */}
         <JobCustomerRequests jobId={Number(job.job_id)} jobStatus={Number(job.job_status)} onJobChanged={onRefresh} />
-        {/* Material Review — PM approve/reject step for status 16 sub-state
-            2 (Review Pending). Self-gates on status/sub-status/permission;
-            renders nothing otherwise. */}
-        <MaterialReviewPanel job={job} onJobChanged={onRefresh} />
+        {/* Material Review moved OUT of this Summary tab (2026-09-21) into its
+            own MaterialReviewModal — a dedicated "Material Review" row action
+            opens it now, so the Eye/View icon here opens the plain, unmodified
+            job viewer on every list, same as every other status. */}
         {/* 3-column layout (2026-05-26 per ops): packs the four short
             DlCards (Customer / Client / Job meta / Audit & History) into
             a denser grid so the page doesn't read as half-empty. Address
@@ -1653,7 +1653,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
 // Columns observed: id, job_id, quotation_type ('product'|'material'),
 // product_name / material_name, quantity, unit_price, total_price,
 // status, insert_date. Schema varies — we render any subset gracefully.
-type QuotationRow = Record<string, unknown> & {
+export type QuotationRow = Record<string, unknown> & {
   id: number;
   job_id: number | null;
   quotation_type?: string | null;
@@ -1666,7 +1666,7 @@ type QuotationRow = Record<string, unknown> & {
   status?: string | null | number;
   insert_date?: string | null;
   // Real /admin/quotations columns (VERIFIED against
-  // routes/admin/quotations.js SELECT — see MaterialReviewPanel). `unit` is
+  // routes/admin/quotations.js SELECT — see MaterialReviewModal). `unit` is
   // the quantity, not a unit-of-measure label; `type` is 'product'|'material'.
   type?: string | null;
   name?: string | null;
@@ -2561,286 +2561,6 @@ function QuotationApproveDialog({ row, onClose, onSubmit }: {
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/*
- * MaterialReviewPanel — the PM's review step for job_status 16 "Pending for
- * Material" once the technician has sent the quote in
- * (material_sub_status 2, "Review Pending"). Renders nothing outside that
- * exact state, or without the isJobMaterialReview grant, so it is inert on
- * every other job — same self-gating shape as JobQuotationsTab's
- * isQuotationApprove check just above.
- *
- * Reuses the SAME /admin/quotations rows the Quotations tab shows — one
- * source for the quoted lines, so this panel and that tab can never
- * disagree on what was quoted. "Price source" is quotation_type
- * (Product/Material), the same field the Quotations tab labels "Type".
- *
- * POST /admin/jobs/:id/material-review {decision, reason?, permission_required, lines?}
- *   approve → 15 Client Approval Pending, permission_required stored, per-line
- *             decisions applied (approved lines get approved_charge + status 1,
- *             rejected lines get status 2) in the same transaction.
- *   reject  → back to 16 sub-status 1 (Quotation Pending), reason to the tech;
- *             a whole-review reject sends no `lines` — every line stays at 0.
- * See EasyFix_Backend docs/superpowers/specs/2026-09-18-ops-material-approval-design.md
- * (sub-project E; follows the D design at *-pending-for-material-status-16-design.md).
- *
- * Real /admin/quotations columns are `type`, `name`, `unit` (= quantity),
- * `unit_price`, `status`, `approved_charge` — VERIFIED against
- * routes/admin/quotations.js. Only `type === 'material'` rows still at
- * lines still awaiting review (action_on NULL) belong in the review table.
- */
-type MaterialLineState = { rejected: boolean; amount: string };
-
-function quotedLineAmount(r: QuotationRow): number {
-  return (Number(r.unit) || 0) * (Number(r.unit_price) || 0);
-}
-
-// client_charge is the rate-card unit price snapshotted at quote time —
-// null/undefined means no rate existed and must render "—", never ₹0
-// (a genuine non-null 0 rate is distinct and does render as 0.00).
-function rateCardLineAmount(r: QuotationRow): number | null {
-  if (r.client_charge == null) return null;
-  return (Number(r.unit) || 0) * Number(r.client_charge);
-}
-
-function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: () => void }) {
-  const jobId = Number(job.job_id);
-  const { me } = useMe();
-  const can = actionFlags(me, ['isJobMaterialReview']);
-  const isReviewPending = Number(job.job_status) === ST.PENDING_FOR_MATERIAL
-    && Number(job.material_sub_status) === 2;
-
-  // Key is null (fetch disabled) unless the panel would actually render —
-  // no point round-tripping quotations for every job the operator opens.
-  const { data, refetch } = useFetch<QuotationRow[]>(
-    isReviewPending && can.isJobMaterialReview ? `/admin/quotations?jobId=${jobId}` : null,
-  );
-  const rows: QuotationRow[] = Array.isArray(data) ? data : [];
-  // Pending material lines only — status/type are TINYINT/varchar and may
-  // arrive as strings, so normalise both with Number()/String() before compare.
-  const materialRows = useMemo(
-    // Pending = not yet actioned (action_on NULL). A line the app just wrote
-    // carries status 1 already — see the status-scheme note in the Quotations
-    // tab — so filtering on status here would show an empty review table.
-    () => rows.filter((r) => String(r.type) === 'material' && r.action_on == null),
-    [rows],
-  );
-
-  const confirm = useConfirm();
-  const [permissionRequired, setPermissionRequired] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  // Per-line approve/reject + editable amount, keyed by quotation_details id
-  // (the `line_id` the backend contract wants). Prefilled with the quoted
-  // amount; seeded once per line so an operator's edits survive re-renders.
-  const [lineState, setLineState] = useState<Record<number, MaterialLineState>>({});
-  useEffect(() => {
-    setLineState((prev) => {
-      const missing = materialRows.filter((r) => !(Number(r.id) in prev));
-      if (missing.length === 0) return prev;
-      const next = { ...prev };
-      for (const r of missing) {
-        next[Number(r.id)] = { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
-      }
-      return next;
-    });
-  }, [materialRows]);
-
-  if (!isReviewPending || !can.isJobMaterialReview) return null;
-
-  const quotedTotal = materialRows.reduce((sum, r) => sum + quotedLineAmount(r), 0);
-  const rateCardTotal = materialRows.reduce((sum, r) => sum + (rateCardLineAmount(r) ?? 0), 0);
-  const approvedTotal = materialRows.reduce((sum, r) => {
-    const st = lineState[Number(r.id)];
-    if (!st || st.rejected) return sum;
-    const n = Number(st.amount);
-    return sum + (Number.isFinite(n) ? n : 0);
-  }, 0);
-  // Approve is blocked while any non-rejected row has a blank, non-numeric
-  // or negative amount — half-filled table can't go out.
-  const hasInvalidLine = materialRows.some((r) => {
-    const st = lineState[Number(r.id)];
-    if (!st || st.rejected) return false;
-    const n = Number(st.amount);
-    return st.amount.trim() === '' || !Number.isFinite(n) || n < 0;
-  });
-
-  function setLine(id: number, patch: Partial<MaterialLineState>) {
-    setLineState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-  }
-
-  async function submit(decision: 'approve' | 'reject') {
-    if (decision === 'reject' && !reason.trim()) {
-      showToast({ variant: 'error', message: 'A Reject Reason Is Required' });
-      return;
-    }
-    if (decision === 'approve' && hasInvalidLine) {
-      showToast({ variant: 'error', message: 'Enter A Valid Approved Amount For Every Line' });
-      return;
-    }
-    if (decision === 'approve') {
-      const ok = await confirm({
-        title: 'Approve Material Quote?',
-        description: 'The job moves to Client Approval Pending for the client to review.',
-        confirmLabel: 'Approve',
-      });
-      if (!ok) return;
-    }
-    setBusy(true);
-    try {
-      const lines = decision === 'approve'
-        ? materialRows.map((r) => {
-            const id = Number(r.id);
-            const st = lineState[id];
-            return st?.rejected
-              ? { line_id: id, decision: 'reject' as const }
-              : { line_id: id, decision: 'approve' as const, approved_amount: Number(st?.amount) };
-          })
-        : undefined;
-      await api.post(`/admin/jobs/${jobId}/material-review`, {
-        decision,
-        ...(decision === 'reject' ? { reason: reason.trim() } : {}),
-        permission_required: permissionRequired,
-        ...(lines ? { lines } : {}),
-      });
-      showToast({
-        variant: 'success',
-        message: decision === 'approve' ? 'Material Quote Approved' : 'Material Quote Rejected',
-      });
-      setRejecting(false);
-      setReason('');
-      setLineState({});
-      await refetch();
-      // Any surface listing this job (Manage Jobs, My Orders, dashboard
-      // counts) reads a status/sub-status that just changed.
-      invalidateFetch((k) => k.startsWith('/admin/jobs') || k.startsWith('/admin/quotations'));
-      onJobChanged?.();
-    } catch (e) {
-      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed To Submit Review' });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-warning bg-warning-tint/40 p-4 mb-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="font-medium text-sm text-warning-strong">Material Review</div>
-        <StatusChip tone="gold" size="sm">Review Pending</StatusChip>
-      </div>
-      {materialRows.length === 0 ? (
-        <div className="text-sm text-muted-foreground">No Material Lines Pending Review.</div>
-      ) : (
-        <div className="rounded-lg border bg-card overflow-hidden">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th className="!text-left">Item</th>
-                <th className="!text-right">Qty</th>
-                <th className="!text-right">Rate Card (₹)</th>
-                <th className="!text-right">Quoted (₹)</th>
-                <th className="!text-right">Approved (₹)</th>
-                <th className="!text-center">Reject</th>
-              </tr>
-            </thead>
-            <tbody>
-              {materialRows.map((r) => {
-                const id = Number(r.id);
-                const st = lineState[id] ?? { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
-                const amountInvalid = !st.rejected
-                  && (st.amount.trim() === '' || !Number.isFinite(Number(st.amount)) || Number(st.amount) < 0);
-                const rateCardAmt = rateCardLineAmount(r);
-                const quotedAmt = quotedLineAmount(r);
-                // Ops sees at a glance where the technician quoted above the
-                // rate card. No highlight when there is no rate card to compare.
-                const isOverRate = rateCardAmt != null && quotedAmt > rateCardAmt;
-                return (
-                  <tr key={id}>
-                    <td className="!text-left">{String(r.name ?? '—')}</td>
-                    <td className="!text-right font-mono text-xs">{String(r.unit ?? '')}</td>
-                    <td className="!text-right font-mono text-xs">{rateCardAmt != null ? rateCardAmt.toFixed(2) : '—'}</td>
-                    <td className={cn('!text-right font-mono text-xs', isOverRate && 'bg-urgent-tint text-urgent-strong rounded px-1')}>
-                      {quotedAmt.toFixed(2)}
-                      {isOverRate && <span className="ml-1 font-semibold">(+₹{(quotedAmt - (rateCardAmt as number)).toFixed(2)})</span>}
-                    </td>
-                    <td className="!text-right">
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={st.amount}
-                        onChange={(e) => setLine(id, { amount: e.target.value })}
-                        disabled={st.rejected}
-                        aria-invalid={amountInvalid}
-                        className={cn('font-mono text-xs h-8 w-28 ml-auto', amountInvalid && 'border-urgent')}
-                      />
-                    </td>
-                    <td className="!text-center">
-                      <Checkbox
-                        checked={st.rejected}
-                        onChange={(rejected) => setLine(id, { rejected })}
-                        label={`Reject ${String(r.name ?? 'line')}`}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="font-medium">
-                <td className="!text-left" colSpan={2}>Total</td>
-                <td className="!text-right font-mono text-xs">{rateCardTotal.toFixed(2)}</td>
-                <td className="!text-right font-mono text-xs">{quotedTotal.toFixed(2)}</td>
-                <td className="!text-right font-mono text-xs">{approvedTotal.toFixed(2)}</td>
-                <td />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      )}
-      <Checkbox
-        checked={permissionRequired}
-        onChange={setPermissionRequired}
-        label="Appointment / Permission Required"
-      />
-      {rejecting ? (
-        <div className="space-y-2">
-          <Label htmlFor="material-reject-reason">Reject Reason</Label>
-          <Input
-            id="material-reject-reason"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Reason for the technician"
-            autoFocus
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => { setRejecting(false); setReason(''); }} disabled={busy}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => submit('reject')} disabled={busy || !reason.trim()}>
-              {busy ? '…' : 'Confirm Reject'}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="outline"
-            className="border-urgent text-urgent-strong hover:bg-urgent/10"
-            onClick={() => setRejecting(true)}
-            disabled={busy}
-          >
-            Reject
-          </Button>
-          <Button onClick={() => submit('approve')} disabled={busy || hasInvalidLine}>
-            {busy ? '…' : 'Approve'}
-          </Button>
-        </div>
-      )}
-    </div>
   );
 }
 

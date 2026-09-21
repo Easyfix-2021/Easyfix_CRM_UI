@@ -29,16 +29,19 @@
  */
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, Upload, Building2, Layers, User, Package } from 'lucide-react';
+import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, FileSpreadsheet, FileText, Upload, Building2, Layers, User, Package } from 'lucide-react';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { IconButton } from '@/components/ui/icon-button';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
-import { SearchSelect } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { ImportDialog } from '@/components/ui/import-dialog';
+import { ImportDialog, outcomeTone } from '@/components/ui/import-dialog';
 import { GlidingTabs } from '@/components/ui/gliding-tabs';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
@@ -46,6 +49,7 @@ import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { cn } from '@/lib/utils';
 import { ClientMaterialRateDialog } from './ClientMaterialRateDialog';
+import { AddClientMaterialsDialog } from './AddClientMaterialsDialog';
 import type { ClientMaterialRateGroup, ClientMaterialRateItem, ClientMaterialRateOption } from './client-material-rate-types';
 
 type RateCardRow = {
@@ -84,6 +88,24 @@ type ServiceType = { service_type_id: number; service_type_name: string };
  * assuming one casing.
  */
 type RateCardImportSummary = { new: number; update: number; unchanged: number; blocked: number };
+
+/*
+ * Materials bulk-upload compiled plan — the preview response's `materials[]`
+ * field, additive to the `rows`/`summary` shape every ImportDialog caller
+ * gets. One entry per distinct material in the uploaded file; `lines` is the
+ * per-brand/per-state price breakdown the backend compiled from the sheet's
+ * Material/Brand/Price/State rows. `material_id` is null when the material
+ * name itself didn't resolve to a catalog row.
+ */
+type MaterialPlanLine = { brand?: string | null; state?: string | null; price: number };
+type MaterialPlanItem = {
+  material: string;
+  material_id: number | null;
+  outcome: string;
+  lines: MaterialPlanLine[];
+  errors?: string[];
+};
+type MaterialUploadPreviewExtra = { materials?: MaterialPlanItem[] };
 
 type Props = {
   clientId: number;
@@ -191,8 +213,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   // feedback_crm_ui_fetch_hooks, invalidateFetch alone doesn't re-trigger a
   // plain useFetch subscriber; only useFetchOnce listens for it.
   const { data: materialOptions } = useFetchOnce<ClientMaterialRateOption[]>(materialOptionsKey);
-  const [addMaterialPick, setAddMaterialPick] = useState<string | number | ''>('');
-  const [addMaterialDialogOpen, setAddMaterialDialogOpen] = useState(false);
+  const [addMaterialsDialogOpen, setAddMaterialsDialogOpen] = useState(false);
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
   const [materialDialogTarget, setMaterialDialogTarget] = useState<ClientMaterialRateOption | null>(null);
   const [materialDialogEditing, setMaterialDialogEditing] = useState<ClientMaterialRateItem | null>(null);
@@ -210,19 +231,6 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
     refetchMaterialRates();
     invalidateFetch((k) => k === materialOptionsKey);
   }
-  function openAddMaterial(v: string) {
-    const opt = (materialOptions ?? []).find((m) => String(m.material_id) === v);
-    setAddMaterialPick('');
-    if (!opt) return;
-    setMaterialDialogTarget(opt);
-    setMaterialDialogEditing(null);
-    setMaterialDialogOpen(true);
-  }
-  function pickMaterialToAdd(v: string) {
-    setAddMaterialDialogOpen(false);
-    openAddMaterial(v);
-  }
-  const guardedAddMaterialOpenChange = useFormDirtyGuard(() => setAddMaterialDialogOpen(false));
   function openEditMaterial(item: ClientMaterialRateItem) {
     setMaterialDialogTarget({ material_id: item.material_id, material_name: item.material_name });
     setMaterialDialogEditing(item);
@@ -418,19 +426,6 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                 </Button>
               </>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                downloadXlsx({
-                  url: `/admin/clients/${clientId}/rate-cards/download`,
-                  filename: `rate-cards-${clientId}.xlsx`,
-                }).catch((e) => showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed.' }));
-              }}
-              disabled={rows.length === 0}
-            >
-              <Download className="size-3.5 mr-1" /> Download
-            </Button>
             <Button size="sm" variant="outline" onClick={() => setServicesImportOpen(true)}>
               <Upload className="size-3.5 mr-1" /> Bulk Upload
             </Button>
@@ -581,24 +576,11 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           </div>
           {canEdit && (
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  downloadXlsx({
-                    url: `/admin/clients/${clientId}/material-rates/download`,
-                    filename: `material-rates-${clientId}.xlsx`,
-                  }).catch((e) => showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed.' }));
-                }}
-                disabled={(materialRates ?? []).length === 0}
-              >
-                <Download className="size-3.5 mr-1" /> Download
-              </Button>
               <Button size="sm" variant="outline" onClick={() => setMaterialsImportOpen(true)}>
                 <Upload className="size-3.5 mr-1" /> Bulk Upload
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => setAddMaterialDialogOpen(true)}>
-                <Plus className="size-3.5 mr-1" /> Add Material
+              <Button size="sm" variant="secondary" onClick={() => setAddMaterialsDialogOpen(true)}>
+                <Plus className="size-3.5 mr-1" /> Add Materials
               </Button>
             </div>
           )}
@@ -619,7 +601,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
 
         {!materialsLoading && (materialRates ?? []).length === 0 && (
           <div className="text-sm text-muted-foreground italic">
-            No client material prices set. {canEdit ? 'Click "Add Material" to start.' : ''}
+            No client material prices set. {canEdit ? 'Click "Add Materials" to start.' : ''}
           </div>
         )}
 
@@ -707,23 +689,17 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
         )}
       </div>
 
-      {addMaterialDialogOpen && (
-        <Dialog open onOpenChange={guardedAddMaterialOpenChange}>
-          <DialogContent className="!max-w-md">
-            <DialogHeader>
-              <DialogTitle>Add Material</DialogTitle>
-            </DialogHeader>
-            <div className="pt-1">
-              <SearchSelect
-                value={addMaterialPick}
-                onChange={pickMaterialToAdd}
-                options={(materialOptions ?? []).map((m) => ({ value: m.material_id, label: m.material_name }))}
-                placeholder="Pick a material…"
-                emptyText="No materials available"
-              />
-            </div>
-          </DialogContent>
-        </Dialog>
+      {addMaterialsDialogOpen && (
+        <AddClientMaterialsDialog
+          open={addMaterialsDialogOpen}
+          onClose={() => setAddMaterialsDialogOpen(false)}
+          clientId={clientId}
+          materialOptions={materialOptions ?? []}
+          onAdded={() => {
+            setAddMaterialsDialogOpen(false);
+            afterMaterialMutation();
+          }}
+        />
       )}
 
       {materialDialogOpen && materialDialogTarget && (
@@ -772,7 +748,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
         }}
       />
 
-      <ImportDialog<RateCardImportSummary>
+      <ImportDialog<RateCardImportSummary, MaterialUploadPreviewExtra>
         open={materialsImportOpen}
         onClose={() => setMaterialsImportOpen(false)}
         entityLabel="Material Rate"
@@ -787,10 +763,116 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           { label: 'Unchanged', value: s.unchanged },
           { label: 'Blocked', value: s.blocked, tone: 'err' as const },
         ]}
+        commitLabel="Upload"
+        renderPreview={(extra) => <MaterialUploadPreview materials={extra?.materials ?? []} />}
         sortBlockedFirst
         blockCommitOnAnyBlocked
         onImported={afterMaterialMutation}
       />
+    </div>
+  );
+}
+
+/*
+ * RateCardsDownloadAction — the single combined Download control for the
+ * "Rate Cards · Brand-Level" title row (rendered by SectionShell's `actions`
+ * slot in clients/[id]/page.tsx, a sibling of <RateCardsTab>, not a child —
+ * that row lives outside this component's own returned tree). Replaces the
+ * two per-tab Download buttons above.
+ *
+ * Own useFetch calls on the SAME cache keys the grids above use — the module
+ * cache in lib/hooks.ts dedupes concurrent/`recent` hits on an identical key,
+ * so this doesn't cost a second network round-trip, just a second read of the
+ * same cached/in-flight response. Basing "empty" on the server-fetched counts
+ * (rather than the grid's local unsaved draft) is also the more correct
+ * signal here: both export endpoints read committed DB rows, so an unsaved
+ * local edit doesn't change what they'd actually produce.
+ */
+export function RateCardsDownloadAction({ clientId, canEdit }: { clientId: number; canEdit: boolean }) {
+  const { data: serviceRows } = useFetch<RateCardRow[]>(`/admin/clients/${clientId}/rate-cards`);
+  const { data: materialRows } = useFetch<ClientMaterialRateItem[]>(`/admin/clients/${clientId}/material-rates`);
+  const isEmpty = (serviceRows ?? []).length === 0 && (materialRows ?? []).length === 0;
+
+  if (!canEdit) return null;
+
+  function runDownload(url: string, filename: string) {
+    downloadXlsx({ url, filename }).catch((e) =>
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed.' }));
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="outline" disabled={isEmpty}>
+          <Download className="size-3.5 mr-1" /> Download
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem
+          onClick={() => runDownload(
+            `/admin/clients/${clientId}/rate-cards/export.xlsx`,
+            `rate-cards-${clientId}.xlsx`,
+          )}
+        >
+          <FileSpreadsheet className="mr-2 h-4 w-4" /> Excel Workbook
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => runDownload(
+            `/admin/clients/${clientId}/rate-cards/export.pdf`,
+            `rate-card-${clientId}-${today}.pdf`,
+          )}
+        >
+          <FileText className="mr-2 h-4 w-4" /> PDF (Letterhead)
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/*
+ * Materials bulk-upload preview — replaces the ImportDialog default
+ * row table for this one caller (via `renderPreview`). Groups the sheet's
+ * Material/Brand/Price/State rows into the backend's compiled per-material
+ * plan: one block per material, an outcome chip, and its Brand · State ·
+ * Price lines. A material's own `errors` (e.g. "has state prices but no
+ * all-states price") show underneath it — no separate raw-row table, since
+ * every uploaded row folds into exactly one material entry here.
+ */
+function MaterialUploadPreview({ materials }: { materials: MaterialPlanItem[] }) {
+  if (materials.length === 0) {
+    return <div className="text-xs text-muted-foreground italic px-1">No materials found in this file.</div>;
+  }
+  return (
+    <div className="max-h-64 overflow-auto border rounded divide-y divide-border">
+      {materials.map((m, i) => (
+        <div key={`${m.material}-${i}`} className="p-2 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-sm">{m.material}</span>
+            <StatusChip tone={outcomeTone(m.outcome)} size="sm">{m.outcome}</StatusChip>
+          </div>
+          {m.lines.length > 0 && (
+            <table className="data-table w-full text-xs">
+              <thead>
+                <tr><th className="!text-left">Brand</th><th className="!text-left">State</th><th className="!text-right">Price</th></tr>
+              </thead>
+              <tbody>
+                {m.lines.map((l, li) => (
+                  <tr key={li}>
+                    <td className="!text-left">{l.brand?.trim() ? l.brand : 'No Brand'}</td>
+                    <td className="!text-left">{l.state?.trim() ? l.state : 'All States'}</td>
+                    <td className="!text-right font-mono">&#8377;{fmt2(Number(l.price) || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {m.errors && m.errors.length > 0 && (
+            <div className="text-xs text-urgent-strong">{m.errors.join('; ')}</div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

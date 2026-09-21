@@ -51,11 +51,11 @@ export type ImportRow = {
   [key: string]: unknown;
 };
 
-function isBlockedOutcome(outcome: string): boolean {
+export function isBlockedOutcome(outcome: string): boolean {
   return outcome.toUpperCase() === 'BLOCKED';
 }
 
-function outcomeTone(outcome: string): StatusChipTone {
+export function outcomeTone(outcome: string): StatusChipTone {
   switch (outcome.toUpperCase()) {
     case 'NEW': return 'success';
     case 'UPDATE': return 'info';
@@ -67,7 +67,7 @@ function outcomeTone(outcome: string): StatusChipTone {
   }
 }
 
-export function ImportDialog<S extends Record<string, unknown>>({
+export function ImportDialog<S extends Record<string, unknown>, P extends Record<string, unknown> = Record<string, never>>({
   open,
   onClose,
   entityLabel,
@@ -79,6 +79,8 @@ export function ImportDialog<S extends Record<string, unknown>>({
   renderRowLabel,
   summaryStats,
   extraNotice,
+  renderPreview,
+  commitLabel = 'Import',
   onImported,
   sortBlockedFirst = false,
   blockCommitOnAnyBlocked = false,
@@ -94,6 +96,22 @@ export function ImportDialog<S extends Record<string, unknown>>({
   renderRowLabel: (row: ImportRow) => string;
   summaryStats: (summary: S) => Array<{ label: string; value: number; tone?: 'ok' | 'warn' | 'err' }>;
   extraNotice?: (summary: S) => React.ReactNode;
+  /*
+   * Opt-in custom preview body. When provided, it REPLACES the default
+   * stats-grid + row table (the "Import Complete"/"Preview Results" header
+   * and the Download Error Report button still render as before around it).
+   * `extra` is every field the preview response carries beyond `rows` and
+   * `summary` — e.g. the rate-card contract's compiled `materials[]` plan.
+   * Omitted by both existing callers (Manage Materials, Manage Brands), so
+   * their rendering is byte-identical to before this prop existed.
+   */
+  renderPreview?: (extra: P, ctx: { rows: ImportRow[]; summary: S; hasBlocked: boolean }) => React.ReactNode;
+  /*
+   * Label for the commit button (idle state only — the busy state still
+   * shows the phase-specific "Importing…"). Defaults to "Import", matching
+   * this dialog's behaviour before this prop existed.
+   */
+  commitLabel?: string;
   onImported: () => void;
   /* Show blocked rows first in the preview table (rate-card contract; off by default). */
   sortBlockedFirst?: boolean;
@@ -103,6 +121,9 @@ export function ImportDialog<S extends Record<string, unknown>>({
   const [file, setFile] = useState<File | null>(null);
   const [rows, setRows] = useState<ImportRow[] | null>(null);
   const [summary, setSummary] = useState<S | null>(null);
+  // Whatever the preview response carries beyond `rows`/`summary` — only
+  // populated (and only meaningful) for callers that pass `renderPreview`.
+  const [previewExtra, setPreviewExtra] = useState<P | null>(null);
   const [phase, setPhase] = useState<'idle' | 'preview' | 'committed'>('idle');
   const [busy, setBusy] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
@@ -113,6 +134,7 @@ export function ImportDialog<S extends Record<string, unknown>>({
     setFile(null);
     setRows(null);
     setSummary(null);
+    setPreviewExtra(null);
     setPhase('idle');
     setError(null);
   }
@@ -141,9 +163,11 @@ export function ImportDialog<S extends Record<string, unknown>>({
     try {
       const fd = new FormData();
       fd.append('file', picked);
-      const res = await api.post<{ rows: ImportRow[]; summary: S }>(previewUrl, fd);
-      setRows(res.rows);
-      setSummary(res.summary);
+      const res = await api.post<{ rows: ImportRow[]; summary: S } & P>(previewUrl, fd);
+      const { rows: resRows, summary: resSummary, ...extra } = res;
+      setRows(resRows);
+      setSummary(resSummary);
+      setPreviewExtra(extra as unknown as P);
       setPhase('preview');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Preview failed');
@@ -156,6 +180,7 @@ export function ImportDialog<S extends Record<string, unknown>>({
     setFile(picked);
     setRows(null);
     setSummary(null);
+    setPreviewExtra(null);
     setError(null);
     setPhase('idle');
     if (picked) void runPreview(picked);
@@ -294,38 +319,44 @@ export function ImportDialog<S extends Record<string, unknown>>({
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-4 gap-2 text-center">
-                {summaryStats(summary).map((s) => (
-                  <div key={s.label} className="border rounded p-2 bg-background">
-                    <div className={`text-lg font-semibold ${s.tone === 'ok' ? 'text-success-strong' : s.tone === 'warn' ? 'text-warning-strong' : s.tone === 'err' ? 'text-urgent-strong' : ''}`}>
-                      {s.value}
-                    </div>
-                    <div className="text-xs text-muted-foreground">{s.label}</div>
+              {renderPreview ? (
+                renderPreview(previewExtra as P, { rows: displayRows, summary, hasBlocked })
+              ) : (
+                <>
+                  <div className="grid grid-cols-4 gap-2 text-center">
+                    {summaryStats(summary).map((s) => (
+                      <div key={s.label} className="border rounded p-2 bg-background">
+                        <div className={`text-lg font-semibold ${s.tone === 'ok' ? 'text-success-strong' : s.tone === 'warn' ? 'text-warning-strong' : s.tone === 'err' ? 'text-urgent-strong' : ''}`}>
+                          {s.value}
+                        </div>
+                        <div className="text-xs text-muted-foreground">{s.label}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              {extraNotice?.(summary)}
-              {displayRows.length > 0 && (
-                <div className="max-h-64 overflow-auto border rounded">
-                  <table className="data-table w-full text-xs">
-                    <thead><tr><th>Row</th><th>Name</th><th>Outcome</th><th>Errors</th></tr></thead>
-                    <tbody>
-                      {displayRows.slice(0, 200).map((r) => (
-                        <tr key={r.row_number}>
-                          <td className="!text-center">{r.row_number}</td>
-                          <td className="!text-left">{renderRowLabel(r)}</td>
-                          <td className="!text-center"><StatusChip tone={outcomeTone(r.outcome)} size="sm">{r.outcome}</StatusChip></td>
-                          <td className="!text-left text-muted-foreground">
-                            {r.errors?.join('; ') ?? ''}
-                            {r.warnings && r.warnings.length > 0 && (
-                              <span className="block text-warning-strong">{r.warnings.join('; ')}</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                  {extraNotice?.(summary)}
+                  {displayRows.length > 0 && (
+                    <div className="max-h-64 overflow-auto border rounded">
+                      <table className="data-table w-full text-xs">
+                        <thead><tr><th>Row</th><th>Name</th><th>Outcome</th><th>Errors</th></tr></thead>
+                        <tbody>
+                          {displayRows.slice(0, 200).map((r) => (
+                            <tr key={r.row_number}>
+                              <td className="!text-center">{r.row_number}</td>
+                              <td className="!text-left">{renderRowLabel(r)}</td>
+                              <td className="!text-center"><StatusChip tone={outcomeTone(r.outcome)} size="sm">{r.outcome}</StatusChip></td>
+                              <td className="!text-left text-muted-foreground">
+                                {r.errors?.join('; ') ?? ''}
+                                {r.warnings && r.warnings.length > 0 && (
+                                  <span className="block text-warning-strong">{r.warnings.join('; ')}</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -333,7 +364,7 @@ export function ImportDialog<S extends Record<string, unknown>>({
         <div className="flex justify-end gap-2 pt-3">
           <CancelButton onCancel={handleClose} disabled={busy} />
           <Button onClick={commitImport} disabled={!canCommit}>
-            {busy && phase === 'preview' ? 'Importing…' : 'Import'}
+            {busy && phase === 'preview' ? 'Importing…' : commitLabel}
           </Button>
         </div>
       </DialogContent>
