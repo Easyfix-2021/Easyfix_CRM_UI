@@ -37,11 +37,13 @@ import { IconButton } from '@/components/ui/icon-button';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { GlidingTabs } from '@/components/ui/gliding-tabs';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { cn } from '@/lib/utils';
 import { ClientMaterialRateDialog } from './ClientMaterialRateDialog';
 import type { ClientMaterialRateGroup, ClientMaterialRateItem, ClientMaterialRateOption } from './client-material-rate-types';
 
@@ -159,6 +161,11 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
   const [addingIds, setAddingIds] = useState(false);
   const confirm = useConfirm();
+
+  // Services / Materials gliding tabs — layout only, both sections still fetch
+  // on mount regardless of which is visible (their useFetch calls above are
+  // unconditional), so switching tabs never re-triggers a request.
+  const [section, setSection] = useState<'services' | 'materials'>('services');
 
   // ── Materials section (sub-project C) ──────────────────────────────────
   const materialRatesKey = `/admin/clients/${clientId}/material-rates`;
@@ -363,7 +370,18 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   }
 
   return (
-    <div className="pt-2 space-y-2">
+    <div className="pt-2 space-y-3">
+      <GlidingTabs
+        ariaLabel="Rate Cards section"
+        value={section}
+        onChange={(v) => setSection(v as 'services' | 'materials')}
+        tabs={[
+          { value: 'services', label: 'Services', count: rows.length },
+          { value: 'materials', label: 'Materials', count: (materialRates ?? []).length },
+        ]}
+      />
+
+    <div className={cn('space-y-2', section !== 'services' && 'hidden')}>
       {/* Sticky action bar */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-muted-foreground flex items-center gap-2">
@@ -530,9 +548,10 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           </table>
         </div>
       )}
+    </div>
 
       {/* ── Materials section (sub-project C) ──────────────────────────── */}
-      <div className="pt-4 space-y-2 border-t">
+      <div className={cn('space-y-2', section !== 'materials' && 'hidden')}>
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h3 className="text-sm font-semibold">Materials</h3>
