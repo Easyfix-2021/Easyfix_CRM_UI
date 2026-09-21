@@ -80,7 +80,7 @@ import { ReportsSection } from '@/components/client/ReportsSection';
 import { ServicesSection } from '@/components/client/ServicesSection';
 import { ContactsTab } from '@/components/client/ContactsTab';
 import { BillingTab } from '@/components/client/BillingTab';
-import { RateCardsTab } from '@/components/client/RateCardsTab';
+import { RateCardsTab, RateCardsDownloadAction } from '@/components/client/RateCardsTab';
 import { CustomPropsTab } from '@/components/client/CustomPropsTab';
 
 /* Compact Indian-locale integer for the KPI tiles (₹1,23,456 / 1,234). */
@@ -483,7 +483,7 @@ function ClientSection({
     case 'billing':       return <SectionShell title="Billing & Estimates" note="Billing addresses invoices are raised against."><BillingTab clientId={clientId} canEdit={canEdit} /></SectionShell>;
     case 'account':       return <AccountPaymentSection client={client} canEdit={canEdit} onSaved={onSaved} />;
     case 'services':      return <ServicesSection clientId={clientId} canEdit={canEdit} />;
-    case 'rate-cards':    return <SectionShell title="Rate Cards" note="Per-service pricing applied to this client's jobs."><RateCardsTab clientId={clientId} canEdit={canEdit} /></SectionShell>;
+    case 'rate-cards':    return <SectionShell title="Rate Cards" note="Per-service pricing applied to this client's jobs." actions={<RateCardsDownloadAction clientId={clientId} canEdit={canEdit} />}><RateCardsTab clientId={clientId} canEdit={canEdit} /></SectionShell>;
     case 'sla':           return <SlaTargetsSection clientId={clientId} canEdit={canEdit} />;
     case 'notifications': return <NotificationsSection client={client} clientId={clientId} />;
     case 'reports':       return <ReportsSection clientId={clientId} clientName={String(client.client_name ?? '')} />;
