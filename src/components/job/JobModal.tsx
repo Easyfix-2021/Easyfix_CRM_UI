@@ -2898,7 +2898,21 @@ function invalidateBreakdownCache(jobId: number) {
  * onMutated(); that callback is the host's only signal that the services
  * (and so the technician ranking) changed.
  */
-export function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutated?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
+export function ServicesTabBody({ job, onMutated, onDirtyChange, lockCategory }: {
+  job: Job;
+  onMutated?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  /*
+   * Pin Add Service to the job's OWN category, as the legacy CRM's Edit
+   * Service did (it printed the category as text; only the type was a
+   * control). A job has one category — it drives the technician's deep skill
+   * and the Top-10 ranking — so adding a service from another category from
+   * inside Schedule & Assign silently turns it into a different job. Opt-in:
+   * the View modal keeps its picker. Ignored when the job has no category yet,
+   * because a lock with nothing to lock to would make services unaddable.
+   */
+  lockCategory?: boolean;
+}) {
   const services = Array.isArray(job.services) ? job.services : [];
   // Active vs. inactive split — operators get a "Show Inactive" toggle
   // so the soft-deleted rows can be inspected (and restored when we
@@ -3279,12 +3293,24 @@ export function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; o
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
             <div>
               <Label className="text-xs">Service Category</Label>
-              <SearchSelect
-                value={addCatgId}
-                onChange={(v) => setAddCatgId(String(v))}
-                options={addCategories}
-                placeholder={addCategories.length ? '— Select a Category —' : 'No Categories on Rate Card'}
-              />
+              {lockCategory && job.fk_service_catg_id != null ? (
+                /* Read-only on purpose — see `lockCategory`. Same height as the
+                   picker it replaces so the three-column row stays aligned. */
+                <div
+                  className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm"
+                  title="A job keeps its service category. Change it from the job itself, not here."
+                >
+                  {addCategories.find((c) => String(c.value) === String(job.fk_service_catg_id))?.label
+                    ?? String((job as Record<string, unknown>).service_category ?? 'This job’s category')}
+                </div>
+              ) : (
+                <SearchSelect
+                  value={addCatgId}
+                  onChange={(v) => setAddCatgId(String(v))}
+                  options={addCategories}
+                  placeholder={addCategories.length ? '— Select a Category —' : 'No Categories on Rate Card'}
+                />
+              )}
             </div>
             <div>
               <Label className="text-xs">Service Type(s)</Label>

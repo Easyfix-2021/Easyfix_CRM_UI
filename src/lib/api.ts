@@ -409,6 +409,15 @@ export type JobOffer = {
   offer_count?: number | null;
   /** Where the offer was made from: Top-10 list, Search, or auto-assign. */
   offer_source?: 'top10' | 'search' | 'auto' | null;
+  /*
+   * WHY a closed offer closed — tbl_job_offer.closed_reason and its label.
+   * "Expired" reads as "nobody answered", but an offer also closes when the job
+   * is rescheduled, reoffered, or taken by a sibling, and an operator deciding
+   * whether to chase that technician needs to know which. Optional: the column
+   * post-dates some rows, and NULL there means "closed before it existed".
+   */
+  closed_reason?: string | null;
+  closed_reason_label?: string | null;
   /**
    * Technician's mobile, masked in transit by the BE middleware. Display only —
    * click-to-call re-resolves the real number server-side from `efr_id`, so the

@@ -25,8 +25,8 @@ import {
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
-import { PendingToStartView } from '@/components/job/PendingToStartView';
-import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
+import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
+import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import {
@@ -34,6 +34,7 @@ import {
   psFilterKey, psAnyFilterSet, psQueryParams, type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
+import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -97,7 +98,7 @@ type JobRow = JobAgeFields & {
   fk_client_id: number; client_name: string | null;
   fk_easyfixter_id: number | null; easyfixer_name: string | null;
   job_owner: number | null; owner_name: string | null;
-  fk_address_id: number; city_name: string | null;
+  fk_address_id: number; city_name: string | null; pin_code?: string | null;
   // service_category surfaced on the LIST projection for the
   // Pending-for-Scheduling custom column set (BE list now returns it).
   service_category?: string | null;
@@ -348,6 +349,13 @@ export default function MyOrdersPage() {
    * "N matching orders" header — bumped wherever a JobModal save lands.
    */
   const [sectionsReload, setSectionsReload] = useState(0);
+  /*
+   * Bumped after any action that can move a job between scheduling buckets
+   * (offering one sends it Not offered → Offered-waiting). The tab counts are a
+   * separate request from the rows, so they need their own recount signal —
+   * without it the strip keeps last minute's numbers over a fresh table.
+   */
+  const [countsReload, setCountsReload] = useState(0);
 
   async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
@@ -543,6 +551,9 @@ export default function MyOrdersPage() {
     // own ps* filters go with it.
     const p = new URLSearchParams(searchParams);
     p.delete('tab');
+    // …and the Pending to Start sub-tab, or "Show All Orders" would leave a
+    // ptsTab behind that reopens the bucket's tab on the next visit.
+    p.delete(PTS_TAB_PARAM);
     writePsFilterParams(p, EMPTY_PS_FILTERS);
     const next = p.toString();
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
@@ -578,12 +589,20 @@ export default function MyOrdersPage() {
     return { open: true, mode: urlAction, id: urlJobId };
   }, [urlAction, urlJobId]);
 
-  // AssignTechDialog state — derived from `?action=assign|reassign`.
-  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
-    if ((urlAction === 'assign' || urlAction === 'reassign') && urlJobId != null) {
-      return { open: true, jobId: urlJobId, mode: urlAction === 'reassign' ? 'reassign' : 'assign' };
+  // AssignTechDialog state — derived from `?action=assign|reassign|console`.
+  // `console` is the Pending to Start row's console icon: the SAME Reassign
+  // Technician popup, opened on its Uplifted tab (the job console); the row's
+  // reassign icon opens it on Current.
+  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode; view: AssignView }>(() => {
+    if ((urlAction === 'assign' || urlAction === 'reassign' || urlAction === 'console') && urlJobId != null) {
+      return {
+        open: true,
+        jobId: urlJobId,
+        mode: urlAction === 'assign' ? 'assign' : 'reassign',
+        view: urlAction === 'console' ? 'uplifted' : 'current',
+      };
     }
-    return { open: false, jobId: null, mode: 'assign' };
+    return { open: false, jobId: null, mode: 'assign', view: 'current' };
   }, [urlAction, urlJobId]);
 
   // ScheduleAssignModal state — derived from `?action=schedule`. This is
@@ -616,6 +635,7 @@ export default function MyOrdersPage() {
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
   function openReassign(id: number)    { openJobAction('reassign', id); }
+  function openConsole(id: number)     { openJobAction('console',  id); }
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
   function openSchedule(id: number)    { openJobAction('schedule', id); }
 
@@ -719,6 +739,21 @@ export default function MyOrdersPage() {
    * session-cached + request-deduped, so hosting the bar costs nothing extra.
    */
 
+  /*
+   * The bucket counts request — every param the list sends EXCEPT offerState
+   * (the tabs ARE the offer state, so the counts endpoint returns one total per
+   * state) and except paging/sort, which cannot change a count. Same filters as
+   * the table, so the numbers on the tabs and the rows below always agree.
+   */
+  const psCountParams = useMemo(() => {
+    const p: Record<string, string | number | undefined> = { ...psQueryParams(psFilters) };
+    delete p.offerState;
+    p.ownerId = scopedOwnerId;
+    p.q = serverQ || undefined;
+    return p;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [psKey, scopedOwnerId, serverQ]);
+
   return (
     <div className="space-y-5">
       <div className="flex items-end justify-between">
@@ -751,7 +786,24 @@ export default function MyOrdersPage() {
         * nothing on the page said which bucket was showing or offered a way
         * back to all of them.
         */}
-      <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
+      {/*
+        * Pending-for-Scheduling gets the four-bucket tab strip INSTEAD of the
+        * scope bar (2026-09-16). The bar stated the bucket and offered the way
+        * out; the strip does both — it names the bucket by which tab is lit,
+        * keeps "Show All Orders" on the right, and adds the three sub-buckets
+        * ops actually triage by, with counts. Every other tab keeps the bar.
+        */}
+      {isPendingScheduling ? (
+        <PendingSchedulingTabs
+          value={psFilters.offerState}
+          onChange={(offerState) => setPsFilters({ ...psFilters, offerState })}
+          params={psCountParams}
+          reloadKey={countsReload}
+          clamped={scopeIsClamped}
+        />
+      ) : isPendingStart ? null : (
+        <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
+      )}
 
       {/* Search bar — hidden on the retired Pending App Ack page and on
           Pending to Start (which renders its own filter bar). */}
@@ -784,7 +836,7 @@ export default function MyOrdersPage() {
             * selection is mirrored into the URL so the view is shareable.
             */}
           {isPendingScheduling && (
-            <PendingSchedulingFilters value={psFilters} onChange={setPsFilters} />
+            <PendingSchedulingFilters value={psFilters} onChange={setPsFilters} hideOfferState />
           )}
         </CardContent>
       </Card>
@@ -800,6 +852,10 @@ export default function MyOrdersPage() {
           openView={openView}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
+          /* The six-tab strip carries the stage-access clamp, so the scope bar
+             above is suppressed for it. */
+          scopeClamped={scopeIsClamped}
+          onOpenConsole={openConsole}
         />
       ) : (
       <Card>
@@ -879,7 +935,8 @@ export default function MyOrdersPage() {
                     accruing at the terminal event while the created timestamp
                     never moves. JOB_AGE_SORT_KEY orders by precise seconds. */}
                 <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
-                <SortHeader<string> col="job_reference_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
+                {/* Job Ref rides UNDER the Job ID (ops, 2026-09-18) — the same
+                    shape Manage Jobs uses — so the table is one column shorter. */}
                 <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date</SortHeader>
                 <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
                 {/* client_spoc_name is already on the LIST projection (LIST_COLUMNS
@@ -918,9 +975,9 @@ export default function MyOrdersPage() {
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                    <div className="text-xs font-normal text-muted-foreground">{j.job_reference_id ?? '—'}</div>
                   </td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-                  <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
                   <td className="whitespace-nowrap">
                     <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
                   </td>
@@ -938,7 +995,12 @@ export default function MyOrdersPage() {
                       </div>
                     )}
                   </td>
-                  <td>{j.city_name ?? '—'}</td>
+                  {/* City with its PIN underneath — the pair ops reads to judge
+                      distance, and already on the list payload (ad.pin_code). */}
+                  <td className="whitespace-nowrap">
+                    <div>{j.city_name ?? '—'}</div>
+                    {j.pin_code && <div className="text-xs text-muted-foreground tabular-nums">{j.pin_code}</div>}
+                  </td>
                   <td>{j.service_category ?? '—'}</td>
                   {/* Appointment. The sub-line stays a BAND — ops quotes the
                       window, not the minute — but it is the band derived from
@@ -1317,6 +1379,7 @@ export default function MyOrdersPage() {
         open={assignModal.open}
         jobId={assignModal.jobId}
         mode={assignModal.mode}
+        initialView={assignModal.view}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
         // Cancel Job from inside Reassign also mutates the list — same in-place
@@ -1334,10 +1397,10 @@ export default function MyOrdersPage() {
         open={scheduleModal.open}
         jobId={scheduleModal.jobId}
         onClose={() => closeJobAction()}
-        onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); setCountsReload((n) => n + 1); }}
         // Cancel Job (non-assign) also mutates the list — same in-place refresh
         // as onAssigned so the cancelled row drops out without a skeleton flash.
-        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
+        onChanged={() => { cacheRef.current.clear(); load(false, true); setCountsReload((n) => n + 1); }}
       />
 
       {/*
