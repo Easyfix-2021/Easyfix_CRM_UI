@@ -176,6 +176,44 @@ Weighed against a single self-describing file and kept as-is deliberately —
 
 ---
 
+## Not a secret either: the shared-job web bundle
+
+WhatsApp share-delegation links (`/public/share/<code>` → `/public/shared-job/
+?t=<token>`) are served from a static web export the technician app produces,
+the same hand-off as the mirror bundle above: a **committed tarball** at
+`mirror-app/shared-job-<version>.tar.gz`, no secret, no cross-repo access.
+
+Two deliberate differences from the mirror bundle:
+
+- **Unversioned at rest.** It unpacks to the fixed `public/public/shared-job/`
+  (no `<version>` segment) because a WhatsApp link is texted once and can sit
+  unopened for days — it must keep resolving across redeploys, so every deploy
+  overwrites the same path rather than adding a versioned sibling. `/public/*`
+  specifically (double `public`: the outer one is Next's static folder, the
+  inner one is the literal path segment) because that's the one prefix the
+  production ALB lets through without VPN.
+- **Optional today.** No tarball is committed yet, and unlike the mirror bundle
+  `deploy.yml` does **not** assert one is present — the Dockerfile's
+  `shared-job` stage is fail-soft the same way the `mirror` stage is (ships a
+  placeholder page rather than failing the build) and nothing in CI escalates
+  that to a hard error. Add the assert-and-derive-version step from the mirror
+  bundle above once this ships for real and a silent drop becomes worth
+  catching.
+
+Refresh the same way once it exists:
+
+```bash
+cd ../Easyfix_Technician_Mobile_Application && npm run export:shared-job   # or whatever that export script ends up named
+tar -czf ../Easyfix_CRM_UI/mirror-app/shared-job-<version>.tar.gz -C dist-shared-job .
+```
+
+Both tarballs live in the same `mirror-app/` directory — the Dockerfile's
+`mirror` and `shared-job` stages each glob their OWN prefix
+(`technician-mirror-*` / `shared-job-*`), so they can't pick up each other's
+file.
+
+---
+
 ## Not GitHub secrets at all
 
 | Value | Where it lives |
