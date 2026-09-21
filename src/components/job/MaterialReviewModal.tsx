@@ -26,6 +26,17 @@
  * Real /admin/quotations columns are `type`, `name`, `unit` (= quantity),
  * `unit_price`, `status`, `approved_charge`, `client_charge` — see JobModal's
  * QuotationRow (exported from there so this file doesn't redeclare it).
+ *
+ * Material request flow v2 (2026-09-21): `materialRows` now filters on the
+ * BACKEND-derived `state` field (review_pending), not `action_on == null` —
+ * a draft line (technician still building the estimate, sent_on IS NULL) has
+ * action_on NULL too, and the spec is explicit that "drafts are ignored by
+ * the review". This modal also gets its own Add Material entry point (CRM
+ * may add lines at 16 per the lock table), sharing AddQuotationLineDialog
+ * with the Quotations tab rather than a second dialog. A 409 from Send means
+ * a new review_pending line arrived after this modal opened — the backend's
+ * message says so; this just surfaces it and reloads the rows so the
+ * operator reviews the current set rather than resubmitting blind.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -37,14 +48,14 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { cn, formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
-import type { QuotationRow } from './JobModal';
+import { AddQuotationLineDialog, type QuotationRow } from './JobModal';
 
 type JobDetails = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -82,13 +93,14 @@ export function MaterialReviewModal({
   const enabled = open && jobId != null && can.isJobMaterialReview;
 
   const { data: job } = useFetch<JobDetails>(enabled ? `/admin/jobs/${jobId}` : null);
-  const { data: quoteData } = useFetch<QuotationRow[]>(
+  const { data: quoteData, refetch: refetchQuotes } = useFetch<QuotationRow[]>(
     enabled ? `/admin/quotations?jobId=${jobId}` : null,
   );
   const rows: QuotationRow[] = Array.isArray(quoteData) ? quoteData : [];
   const materialRows = useMemo(
-    // Pending = not yet actioned (action_on NULL) — see JobModal's original note.
-    () => rows.filter((r) => String(r.type) === 'material' && r.action_on == null),
+    // review_pending only — a draft (not yet sent) and a CRM-added line
+    // (born reviewed, already approval_pending) are both excluded.
+    () => rows.filter((r) => String(r.type) === 'material' && r.state === 'review_pending'),
     [rows],
   );
 
@@ -98,6 +110,7 @@ export function MaterialReviewModal({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [lineState, setLineState] = useState<Record<number, MaterialLineState>>({});
+  const [addOpen, setAddOpen] = useState(false);
 
   // Fresh state whenever a different job's review opens.
   useEffect(() => {
@@ -189,13 +202,21 @@ export function MaterialReviewModal({
       onReviewed?.();
       onClose();
     } catch (e) {
-      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed To Submit Review' });
+      const msg = e instanceof Error ? e.message : 'Failed To Submit Review';
+      showToast({ variant: 'error', message: msg });
+      // 409 = a new review_pending line arrived (or one dropped) since this
+      // modal's rows were loaded — the server's own message says so. Reload
+      // rather than let the operator resubmit against a stale line set.
+      if (e instanceof ApiError && e.status === 409) {
+        refetchQuotes();
+      }
     } finally {
       setBusy(false);
     }
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
@@ -224,6 +245,13 @@ export function MaterialReviewModal({
               <div><div className="text-xs text-muted-foreground">Appointment</div><div className="font-medium truncate">{job.requested_date_time ? formatDate(job.requested_date_time) : '—'}</div></div>
             </div>
           )}
+
+          {/* Add Material — same dialog/component the Quotations tab uses.
+              The job is always 16 here, always inside MATERIAL_ADD_JOB_STATUSES,
+              so the only gate needed is the permission that opened this modal. */}
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>Add Material</Button>
+          </div>
 
           {materialRows.length === 0 ? (
             <div className="text-sm text-muted-foreground">No Material Lines Pending Review.</div>
@@ -353,5 +381,22 @@ export function MaterialReviewModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {/* Sibling, not nested inside the Dialog above — two independent Radix
+        Dialog.Roots stacked as descendants of one another is untested
+        territory (dismiss-layer / Escape-key interaction); a Fragment keeps
+        them independent while both still render (portaled) at open=true. */}
+    {jobId != null && (
+      <AddQuotationLineDialog
+        open={addOpen}
+        jobId={jobId}
+        onClose={() => setAddOpen(false)}
+        onAdded={() => {
+          setAddOpen(false);
+          refetchQuotes();
+          invalidateFetch((k) => k.startsWith('/admin/jobs') || k.startsWith('/admin/quotations'));
+        }}
+      />
+    )}
+    </>
   );
 }

@@ -71,6 +71,14 @@ export type StageDef = {
  * PM's approve/reject is still gated by the isJobMaterialReview action
  * permission; the stage governs VISIBILITY, which the permission does not.
  *
+ * 2026-09-21 (material request flow v2, owner-approved): 'pending-material'
+ * gained 15 alongside 16 — the CRM may add material and needs to SEE a job at
+ * either "Review Pending" (16) or "Approval Pending" (15) from the one stage,
+ * and 'estimate-pending' KEEPS 15 too ("existing tabs that already list 15
+ * keep it"). Status 15 is therefore now claimed by two stages on purpose —
+ * the one deliberate exception to "every status belongs to exactly one
+ * stage" (see the exception carved out in job-stages.test.js).
+ *
  * This map stays a byte-for-byte mirror of the backend's, enforced by
  * tests/job-stages-parity.test.js — never add a stage here without the
  * matching backend change, or that test goes red across ~346k triples.
@@ -93,7 +101,7 @@ export const STAGES: Record<StageKey, StageDef> = {
   'pending-feedback':   { key: 'pending-feedback',   label: 'Pending for Feedback',   visibleStatuses: [3],      transitionTargets: [5, 6] },
   'completed':          { key: 'completed',          label: 'Completed',              visibleStatuses: [5],      transitionTargets: [] },
   'onhold':             { key: 'onhold',             label: 'Orders in Followup',     visibleStatuses: [21],     transitionTargets: [1, 6] },
-  'pending-material':   { key: 'pending-material',   label: 'Pending for Material',   visibleStatuses: [16],     transitionTargets: [15, 2, 6] },
+  'pending-material':   { key: 'pending-material',   label: 'Pending for Material',   visibleStatuses: [16, 15], transitionTargets: [15, 2, 6] },
   'estimate-pending':   { key: 'estimate-pending',   label: 'Estimate Pending',       visibleStatuses: [15],     transitionTargets: [0, 1, 6] },
   'cancelled':          { key: 'cancelled',          label: 'Cancelled',              visibleStatuses: [6],      transitionTargets: [] },
 };

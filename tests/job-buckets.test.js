@@ -173,9 +173,13 @@ test('stage options are scoped to the chosen bucket', () => {
   assert.equal(B.jobStageOptionsFor('').length, 12);
 });
 
-test('the material stage resolves to status 16, alongside the numeric dropdown entry', () => {
-  assert.deepEqual(B.resolveStageFilter(['material']), { statuses: [16], assigned: undefined });
-  // 16 lives in the 'open' bucket, so it must survive that scoping too.
+test('the material stage resolves to status 16 AND 15 (2026-09-21, material request flow v2)', () => {
+  // Widened alongside job-stages.ts's 'pending-material' — CRM may add
+  // material at Review Pending (16) or Approval Pending (15) and needs both
+  // visible from this one stage. 'approval' still resolves to [15] alone.
+  assert.deepEqual(B.resolveStageFilter(['material']), { statuses: [16, 15], assigned: undefined });
+  assert.deepEqual(B.resolveStageFilter(['approval']), { statuses: [15], assigned: undefined });
+  // 16 and 15 both live in the 'open' bucket, so 'material' must survive that scoping.
   assert.ok(B.jobStageOptionsFor('open').map((o) => o.value).includes('material'));
 });
 

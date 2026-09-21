@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
-import { useFetch, useUiFlags, invalidateFetch } from '@/lib/hooks';
+import { useFetch, useUiFlags, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { collectedByCode, collectedByLabel, collectedByDisplay, collectedByText, COLLECTED_BY_JOB_OPTIONS } from '@/lib/collected-by';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -12,6 +12,7 @@ import { CancelButton } from '@/components/ui/cancel-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
+import { Select } from '@/components/ui/select';
 import { DateTimeSlotPicker, TimeSelect } from '@/components/ui/date-time-slot-picker';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
@@ -48,6 +49,10 @@ import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
+// Material-request-flow-v2 (2026-09-21) — Add Material dialog reuses the
+// same master-material search + brand-groups shape Settings > Manage
+// Materials already established, rather than a second material picker.
+import type { MaterialListResponse, MaterialDetail } from '@/app/(authed)/settings/manage-materials/types';
 
 /*
  * safeMobile(v) — defends against round-tripping a masked display value
@@ -1194,10 +1199,16 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
    * Anything not in this set falls back to 'summary'.
    */
   const KNOWN_TABS = new Set([
-    'summary', 'services', 'schedule', 'images', 'questionnaire', 'comments', 'materials', 'quotations',
+    'summary', 'services', 'schedule', 'images', 'questionnaire', 'comments', 'quotations',
     ...(canManageJobCharges ? ['billing'] : []),
   ]);
-  const startingTab = initialTab && KNOWN_TABS.has(initialTab) ? initialTab : 'summary';
+  // The Materials tab was folded into Quotations (2026-09-21, material
+  // request flow v2) — a material request is part of the quotation now.
+  // A stale `?tab=materials` deep link (bookmark, notification) falls back
+  // to Quotations rather than Summary.
+  const startingTab = initialTab === 'materials'
+    ? 'quotations'
+    : (initialTab && KNOWN_TABS.has(initialTab) ? initialTab : 'summary');
 
   const [layout, setLayout] = useState<JobViewLayout>('tabs');
   useEffect(() => {
@@ -1228,7 +1239,6 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <TabsTrigger value="images">Images ({images.length})</TabsTrigger>
         <TabsTrigger value="questionnaire">Questionnaire</TabsTrigger>
         <TabsTrigger value="comments">Comments</TabsTrigger>
-        <TabsTrigger value="materials">Materials</TabsTrigger>
         <TabsTrigger value="quotations">Quotations</TabsTrigger>
         {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
         {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
@@ -1603,18 +1613,21 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             clears pendings so they're replaced by the canonical rows. */}
       </Panel>
 
-      {/* Materials tab — legacy `material.vm` + MaterialAction.java.
-          Backend: GET /admin/aux/materials/job/:jobId, POST /admin/aux/materials,
-          DELETE /admin/aux/materials/:id (job_material table). */}
-      <Panel value="materials" label="Materials" layout={layout}>
-        <JobMaterialsTab jobId={job.job_id as number} jobStatus={Number(job.job_status)} />
-      </Panel>
-
-      {/* Quotations tab — read-only list of product+material quotations against
-          this job. Backend: GET /admin/quotations?jobId=… (quotation_details table).
-          Create/edit deferred — typical flow is technician submits via mobile app. */}
+      {/* Quotations tab — product+material quotations against this job
+          (quotation_details table), merged with the old Materials tab
+          (2026-09-21, material request flow v2: "a material request is
+          part of the quotation"). Backend: GET /admin/quotations?jobId=…
+          each row now carries `state` (services/quotation-line-state.js);
+          NEW POST /admin/jobs/:id/quotation-lines lets CRM add a line
+          directly. The read-only "Legacy Materials" block underneath is
+          the pre-quotation `job_material` list (GET /admin/aux/materials/
+          job/:jobId), unrelated to quotation_details, kept for history. */}
       <Panel value="quotations" label="Quotations" layout={layout}>
-        <JobQuotationsTab jobId={job.job_id as number} />
+        <JobQuotationsTab
+          jobId={job.job_id as number}
+          jobStatus={Number(job.job_status)}
+          onJobChanged={onRefresh}
+        />
       </Panel>
 
       {/* Billing & Charges tab — legacy CheckIn-detail right-column
@@ -1674,7 +1687,43 @@ export type QuotationRow = Record<string, unknown> & {
   action_on?: string | null;
   unit?: number | string | null;
   approved_charge?: number | string | null;
+  /*
+   * Material request flow v2 (2026-09-21) — derived line state, owned by the
+   * backend's services/quotation-line-state.js (one predicate table, SQL +
+   * JS): 'draft' | 'review_pending' | 'rejected' | 'approval_pending' |
+   * 'client_approved' | 'client_rejected'. Never re-derive this client-side
+   * from sent_on/action_on/status/client_status — that duplication is exactly
+   * how the two copies drift.
+   */
+  state?: string | null;
+  client_status?: number | string | null;
 };
+
+/*
+ * Job statuses at which CRM may add a quotation line (spec: "CRM may add
+ * lines while the job is 1, 2, 20, 16 or 15 (not closed / cancelled)").
+ * Shared by JobQuotationsTab's Add Material button and MaterialReviewModal's
+ * (which only ever renders at 16, always inside this set).
+ */
+export const MATERIAL_ADD_JOB_STATUSES: readonly number[] = [1, 2, 20, 16, 15];
+
+/*
+ * Quotation line state → { label, tone } for the state chip. `tone` reuses
+ * the same bg-*-tint/text-*-strong classes the table already painted status
+ * with, so the new 6-state model doesn't introduce a second colour system.
+ */
+const QUOTATION_LINE_STATE_META: Record<string, { label: string; toneCls: string }> = {
+  draft:             { label: 'Draft',             toneCls: 'bg-muted text-muted-foreground' },
+  review_pending:    { label: 'Review Pending',    toneCls: 'bg-warning-tint text-warning-strong' },
+  approval_pending:  { label: 'Approval Pending',  toneCls: 'bg-info-tint text-info-strong' },
+  client_approved:   { label: 'Approved',          toneCls: 'bg-success-tint text-success-strong' },
+  rejected:          { label: 'Rejected',          toneCls: 'bg-urgent-tint text-urgent-strong' },
+  client_rejected:   { label: 'Client Rejected',   toneCls: 'bg-urgent-tint text-urgent-strong' },
+};
+function quotationLineStateMeta(r: QuotationRow): { label: string; toneCls: string } {
+  const key = r.state != null ? String(r.state) : '';
+  return QUOTATION_LINE_STATE_META[key] ?? { label: key || '—', toneCls: 'bg-muted text-muted-foreground' };
+}
 
 /*
  * JobAddressCard — read-only Address summary + an Edit button gated
@@ -2340,7 +2389,13 @@ function JobCallHistory({ jobId }: { jobId: number }) {
   );
 }
 
-function JobQuotationsTab({ jobId }: { jobId: number }) {
+function JobQuotationsTab({ jobId, jobStatus, onJobChanged }: {
+  jobId: number;
+  jobStatus: number;
+  /* Refreshes the parent JobModal's `job` (header status chip, other tabs) —
+     an Add Material line can move the job 1/2/20 → 15 or keep it at 16/15. */
+  onJobChanged?: () => void;
+}) {
   // Migrated to the mandatory shared `useFetch` hook (per memory
   // `feedback_crm_ui_fetch_hooks`). The hook handles dedup, cleanup
   // and StrictMode double-fire. `refetch` is renamed to `reload` for
@@ -2352,9 +2407,13 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
   const confirm = useConfirm();
   // RBAC — Approve/Reject is a new admin write surface (legacy CRM had
   // only the client-side approval flow). Gated by `isQuotationApprove`,
-  // seeded by 2026-05-26-add-finance-quotation-write-actions.sql.
+  // seeded by 2026-05-26-add-finance-quotation-write-actions.sql. Add
+  // Material reuses the SAME permission the Material Review row action and
+  // modal already gate on (isJobMaterialReview) — see MATERIAL_ADD_JOB_STATUSES.
   const { me } = useMe();
-  const can = actionFlags(me, ['isQuotationApprove']);
+  const can = actionFlags(me, ['isQuotationApprove', 'isJobMaterialReview']);
+  const canAddMaterial = can.isJobMaterialReview && MATERIAL_ADD_JOB_STATUSES.includes(jobStatus);
+  const [addOpen, setAddOpen] = useState(false);
 
   // Approve flow — BE expects { approvedCharge: number }. We surface
   // the proposed amount in the QuotationApproveDialog so ops can edit
@@ -2399,16 +2458,6 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
     } finally { setBusyId(null); }
   }
 
-  if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
-  if (error)   return <div className="text-sm text-urgent-strong py-3">{error}</div>;
-  if (rows.length === 0) {
-    return (
-      <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
-        No quotations recorded for this job. Quotations are typically submitted by the technician via the mobile app.
-      </div>
-    );
-  }
-
   /*
    * The API returns type / name / unit / unit_price (VERIFIED against
    * routes/admin/quotations.js). The older field names this tab used —
@@ -2421,100 +2470,118 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
 
   return (
     <div className="space-y-3">
-      <div className="text-sm text-muted-foreground">
-        {rows.length} quotation row{rows.length === 1 ? '' : 's'} · Total: ₹{total.toFixed(2)}
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm text-muted-foreground">
+          {loading ? 'Loading…' : `${rows.length} quotation row${rows.length === 1 ? '' : 's'} · Total: ₹${total.toFixed(2)}`}
+        </div>
+        {canAddMaterial && <Button size="sm" onClick={() => setAddOpen(true)}>Add Material</Button>}
       </div>
-      <div className="rounded-lg border bg-card overflow-hidden">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th className="!text-center w-12">#</th>
-              <th className="!text-left">Type</th>
-              <th className="!text-left">Item</th>
-              <th className="!text-right">Qty</th>
-              <th className="!text-right">Unit ₹</th>
-              <th className="!text-right">Rate Card ₹</th>
-              <th className="!text-right">Total ₹</th>
-              <th className="!text-center">Status</th>
-              <th className="!text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const type = String(r.type ?? r.quotation_type ?? '—');
-              const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
-              // BE status code map (legacy):
-              //   0 = Pending Approval, 1 = Approved, 2 = Rejected.
-              // Buttons only show on pending rows.
-              /*
-               * REAL status scheme, verified 2026-09-18 against the writers and
-               * readers, NOT the 0/1/2 legend this file used to carry:
-               *   inserted by the app  → status 1, action_on NULL  = PENDING
-               *   approved             → status 1, action_on set   = APPROVED
-               *   rejected             → status 0, action_on set   = REJECTED
-               * (services/mobile-job-estimate.service.js INSERT;
-               *  routes/admin/quotations.js approve/reject; and the EXISTS
-               *  filters in job.service.js / job-export.service.js, which all
-               *  pair the status with action_on IS NOT NULL.)
-               * Reading status alone showed every freshly quoted line as
-               * "Approved" — action_on is what separates reviewed from not.
-               */
-              const status = Number(r.status ?? 0);
-              const reviewed = r.action_on != null;
-              const isPending = !reviewed;
-              const isApproved = reviewed && status === 1;
-              const isRejected = reviewed && status === 0;
-              const busy = busyId === Number(r.id);
-              return (
-                <tr key={r.id}>
-                  <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
-                  <td className="!text-left text-xs">
-                    <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
-                  </td>
-                  <td className="!text-left">{name}</td>
-                  <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
-                  <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
-                  <td className="!text-right font-mono text-xs">
-                    {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
-                  </td>
-                  <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
-                  <td className="!text-center text-xs">
-                    {isApproved && <span className="inline-block bg-success-tint text-success-strong rounded px-1.5 py-0.5">Approved</span>}
-                    {isRejected && <span className="inline-block bg-urgent-tint text-urgent-strong rounded px-1.5 py-0.5">Rejected</span>}
-                    {isPending  && <span className="inline-block bg-warning-tint text-warning-strong rounded px-1.5 py-0.5">Pending</span>}
-                  </td>
-                  <td className="!text-right">
-                    {isPending && can.isQuotationApprove ? (
-                      <div className="inline-flex gap-1 justify-end">
-                        <button
-                          type="button"
-                          className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
-                          onClick={() => approveRow(r)}
-                          disabled={busy}
-                        >
-                          {busy ? '…' : 'Approve'}
-                        </button>
-                        <button
-                          type="button"
-                          className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
-                          onClick={() => rejectRow(r)}
-                          disabled={busy}
-                        >
-                          {busy ? '…' : 'Reject'}
-                        </button>
-                      </div>
-                    ) : <span className="text-xs text-muted-foreground">—</span>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+
+      {error && <div className="text-sm text-urgent-strong py-1">{error}</div>}
+
+      {!loading && rows.length === 0 && !error && (
+        <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
+          No quotations recorded for this job. Quotations are typically submitted by the technician via the mobile app.
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-center w-12">#</th>
+                <th className="!text-left">Type</th>
+                <th className="!text-left">Item</th>
+                <th className="!text-right">Qty</th>
+                <th className="!text-right">Unit ₹</th>
+                <th className="!text-right">Rate Card ₹</th>
+                <th className="!text-right">Total ₹</th>
+                <th className="!text-center">Status</th>
+                <th className="!text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const type = String(r.type ?? r.quotation_type ?? '—');
+                const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
+                const stateMeta = quotationLineStateMeta(r);
+                // Approve/Reject only on review_pending — a draft hasn't been
+                // sent yet, and every other state is already actioned (spec:
+                // "PATCH /admin/quotations/:id/approve|reject — only on
+                // review_pending lines, else 409").
+                const isReviewPending = r.state === 'review_pending';
+                const busy = busyId === Number(r.id);
+                return (
+                  <tr key={r.id}>
+                    <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
+                    <td className="!text-left text-xs">
+                      <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
+                    </td>
+                    <td className="!text-left">{name}</td>
+                    <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
+                    <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
+                    <td className="!text-right font-mono text-xs">
+                      {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
+                    </td>
+                    <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
+                    <td className="!text-center text-xs">
+                      <span className={cn('inline-block rounded px-1.5 py-0.5', stateMeta.toneCls)}>{stateMeta.label}</span>
+                    </td>
+                    <td className="!text-right">
+                      {isReviewPending && can.isQuotationApprove ? (
+                        <div className="inline-flex gap-1 justify-end">
+                          <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
+                            onClick={() => approveRow(r)}
+                            disabled={busy}
+                          >
+                            {busy ? '…' : 'Approve'}
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
+                            onClick={() => rejectRow(r)}
+                            disabled={busy}
+                          >
+                            {busy ? '…' : 'Reject'}
+                          </button>
+                        </div>
+                      ) : <span className="text-xs text-muted-foreground">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Read-only pre-quotation `job_material` rows — hidden entirely when
+          there are none, so a job with no legacy history shows no empty
+          section beneath the quotation table. */}
+      <LegacyMaterialsBlock jobId={jobId} />
+
       <QuotationApproveDialog
         row={approvingRow}
         onClose={() => setApprovingRow(null)}
         onSubmit={submitApproval}
+      />
+      <AddQuotationLineDialog
+        open={addOpen}
+        jobId={jobId}
+        onClose={() => setAddOpen(false)}
+        onAdded={() => {
+          setAddOpen(false);
+          reload();
+          // A line born reviewed can move the job 1/2/20 → 15 or bump
+          // material_count at the current status — always refresh the
+          // parent's job (header chip, other tabs) rather than compare
+          // job_status ourselves and risk missing the material_count-only case.
+          invalidateFetch((k) => k.startsWith('/admin/jobs') || k.startsWith('/admin/quotations'));
+          onJobChanged?.();
+        }}
       />
     </div>
   );
@@ -3530,201 +3597,181 @@ function Stat({ label, value, highlight }: { label: string; value: number; highl
   );
 }
 
-function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: number }) {
-  // Until-closed gate (2026-05-25 per ops): once the job is in a
-  // terminal completed state (3 or 5), no more material edits.
-  const canEdit = !isJobClosed(jobStatus);
-  const [addOpen, setAddOpen] = useState(false);
-  const confirmDialog = useConfirm();
-
-  /*
-   * useFetch (feedback_crm_ui_fetch_hooks). `refetch()` EVICTS this key from
-   * the module cache before re-firing, so a refresh straight after a mutation
-   * is a real round-trip and not the 30s-cached pre-mutation snapshot — that
-   * is the reason it is safe to replace `await load()` with a fire-and-forget
-   * refetch here. It also swaps silently (`refreshing`, not `loading`), so the
-   * list no longer blanks to "Loading…" after every add or delete.
-   */
-  const { data, loading, error: loadError, refetch } = useFetch<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
+/*
+ * LegacyMaterialsBlock — the pre-quotation `job_material` rows (GET
+ * /admin/aux/materials/job/:jobId), READ ONLY (2026-09-21, material request
+ * flow v2: the Materials tab's add/delete UI is retired — a material request
+ * now flows entirely through quotation_details via Add Material above). Kept
+ * only so the history already on a job stays visible. Renders nothing while
+ * loading, on error (supporting history, matching JobCallHistory's "hidden on
+ * failure" convention) or when there are no rows — the section simply isn't
+ * there for a job with none, rather than showing an empty card under the
+ * quotation table.
+ */
+function LegacyMaterialsBlock({ jobId }: { jobId: number }) {
+  const { data, loading, error } = useFetch<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
   const items = useMemo(() => (Array.isArray(data) ? data : []), [data]);
-  // Mutation failures are this component's own; the hook owns load errors only.
-  const [mutError, setMutError] = useState<string | null>(null);
-  const error = mutError ?? loadError;
-
-  async function deleteItem(id: number) {
-    // Migrated from native window.confirm to the shared useConfirm()
-    // dialog (per modal-header convention + UX consistency rule).
-    const ok = await confirmDialog({
-      title: 'Remove Material Line Item?',
-      description: 'The line item will be deleted from this job. This cannot be undone.',
-      confirmLabel: 'Remove',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      await api.delete(`/admin/aux/materials/${id}`);
-      setMutError(null);
-      refetch();
-      showToast({ variant: 'success', message: 'Material Removed' });
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : 'Delete failed';
-      setMutError(msg);
-      showToast({ variant: 'error', message: msg });
-    }
-  }
-
+  if (loading || error || items.length === 0) return null;
   const totalCost = items.reduce((sum, it) => sum + (Number(it.total_price) || 0), 0);
-
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-muted-foreground">
+    <div className="space-y-2 pt-2">
+      <div className="text-sm font-medium">
+        Legacy Materials
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
           {items.length} line item{items.length === 1 ? '' : 's'} · Total: ₹{totalCost.toFixed(2)}
-        </div>
-        {canEdit && <Button size="sm" onClick={() => setAddOpen(true)}>Add Material</Button>}
+        </span>
       </div>
-      {error && <div className="text-sm text-urgent-strong">{error}</div>}
-      {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
-      {!loading && items.length === 0 && (
-        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
-          No materials recorded for this job.
-        </div>
-      )}
-      {!loading && items.length > 0 && (
-        <div className="rounded-lg border bg-card overflow-hidden">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th className="!text-center w-12">#</th>
-                <th className="!text-left">Material</th>
-                <th className="!text-left">SKU</th>
-                <th className="!text-left">Unit</th>
-                <th className="!text-right">Unit ₹</th>
-                <th className="!text-right">Total ₹</th>
-                <th className="!text-right w-16">Action</th>
+      <div className="rounded-lg border bg-card overflow-hidden">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th className="!text-center w-12">#</th>
+              <th className="!text-left">Material</th>
+              <th className="!text-left">SKU</th>
+              <th className="!text-left">Unit</th>
+              <th className="!text-right">Unit ₹</th>
+              <th className="!text-right">Total ₹</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((m, i) => (
+              <tr key={m.id}>
+                <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
+                <td className="!text-left">
+                  <div className="font-medium">{m.material_name}</div>
+                  {m.description && <div className="text-xs text-muted-foreground">{m.description}</div>}
+                </td>
+                <td className="!text-left font-mono text-xs">{m.sku ?? <span className="text-muted-foreground">—</span>}</td>
+                <td className="!text-left text-xs">{m.unit ?? <span className="text-muted-foreground">—</span>}</td>
+                <td className="!text-right font-mono text-xs">{m.unit_price != null ? Number(m.unit_price).toFixed(2) : '—'}</td>
+                <td className="!text-right font-mono">{m.total_price != null ? Number(m.total_price).toFixed(2) : '—'}</td>
               </tr>
-            </thead>
-            <tbody>
-              {items.map((m, i) => (
-                <tr key={m.id}>
-                  <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
-                  <td className="!text-left">
-                    <div className="font-medium">{m.material_name}</div>
-                    {m.description && <div className="text-xs text-muted-foreground">{m.description}</div>}
-                  </td>
-                  <td className="!text-left font-mono text-xs">{m.sku ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left text-xs">{m.unit ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-right font-mono text-xs">{m.unit_price != null ? Number(m.unit_price).toFixed(2) : '—'}</td>
-                  <td className="!text-right font-mono">{m.total_price != null ? Number(m.total_price).toFixed(2) : '—'}</td>
-                  <td className="!text-right">
-                    {canEdit && (
-                      <button onClick={() => deleteItem(m.id)} className="text-xs text-urgent-strong hover:underline">Delete</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <AddMaterialDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        onSubmit={async (payload) => {
-          await api.post('/admin/aux/materials', { jobId, ...payload });
-          setAddOpen(false);
-          refetch();
-        }}
-      />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-function AddMaterialDialog({ open, onClose, onSubmit }: {
-  open: boolean; onClose: () => void;
-  onSubmit: (payload: { materialName: string; description?: string; sku?: string; unit?: string; unitPrice?: number; quantity?: number; totalPrice?: number }) => Promise<void>;
+/*
+ * AddQuotationLineDialog — the ONE "Add Material" dialog shared by
+ * JobQuotationsTab (Quotations tab, job in MATERIAL_ADD_JOB_STATUSES) and
+ * MaterialReviewModal (always at 16, always inside that set). Material
+ * search reuses `/admin/materials` — the same master-material list Settings
+ * > Manage Materials already searches — rather than a second endpoint or a
+ * second picker component; the brand cascade reuses the same MaterialDetail
+ * shape ClientMaterialPriceEditor consumes.
+ *
+ * POST /admin/jobs/:id/quotation-lines {materialId, brandId?, quantity,
+ * approvedAmount} → {lineId, job_status} (2026-09-21 material request flow
+ * v2). "approvedAmount" is a manual entry (CRM already knows what it agreed
+ * with the client/technician) — this dialog never looks up a rate-card price.
+ *
+ * KNOWN GAP (flagged, not fixed here — backend-owned RBAC data): `/admin/
+ * materials` and `/admin/materials/:id` are gated on `isMaterialView`
+ * (migrations/2026-09-17-manage-materials.sql), granted only to Admin
+ * (role_id 2). `isJobMaterialReview` — the permission that gates THIS dialog
+ * — is also granted to Project Manager (role_id 13), per migrations/2026-09-
+ * 18-pending-for-material.sql. A PM-only user can open this dialog but the
+ * material search will 403. Needs a backend RBAC seed (grant isMaterialView
+ * to role 13, or move the search under isJobMaterialReview) — out of scope
+ * for the CRM half of this change.
+ */
+export function AddQuotationLineDialog({ open, jobId, onClose, onAdded }: {
+  open: boolean;
+  jobId: number;
+  onClose: () => void;
+  onAdded: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [sku, setSku] = useState('');
-  const [unit, setUnit] = useState('');
-  const [unitPrice, setUnitPrice] = useState('');
-  const [qty, setQty] = useState('1');
-  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
+  const dq = useDebouncedValue(query, 300);
+  const [materialId, setMaterialId] = useState<number | ''>('');
+  const [pickedLabel, setPickedLabel] = useState('');
+  const [brandId, setBrandId] = useState<number | ''>('');
+  const [quantity, setQuantity] = useState('1');
+  const [approvedAmount, setApprovedAmount] = useState('');
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Field-level invalid markers — set by the submit guard and cleared as
-  // the operator types. Drives the red border on each input so they can
-  // see WHICH field needs attention instead of just reading a single
-  // top-of-modal error message.
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (open) {
-      setName(''); setDescription(''); setSku(''); setUnit('');
-      setUnitPrice(''); setQty('1'); setErr(null);
-      setInvalid(new Set());
+      setQuery(''); setMaterialId(''); setPickedLabel(''); setBrandId('');
+      setQuantity('1'); setApprovedAmount(''); setErr(null); setInvalid(new Set());
     }
   }, [open]);
 
-  // Total ₹ auto-computes from Unit ₹ × Qty and is shown read-only. We
-  // also POST this server-side, but the backend recomputes from
-  // unitPrice × quantity so the stored value can't drift if the client
-  // ever sent something inconsistent.
-  const totalPrice = (Number(unitPrice) || 0) * (Number(qty) || 0);
+  const searchKey = open
+    ? `/admin/materials?status=active&limit=20${dq.trim() ? `&search=${encodeURIComponent(dq.trim())}` : ''}`
+    : null;
+  const search = useFetch<MaterialListResponse>(searchKey);
+  const materials = useMemo(() => search.data?.items ?? [], [search.data]);
+  const materialOptions = useMemo(() => {
+    const out = materials.map((m) => ({ value: m.material_id, label: m.material_name }));
+    // Pinned-option trick (same as ClientPicker/TechnicianPicker): the picked
+    // material may not be on the CURRENT search page once the operator types
+    // a new query, so the selected label would otherwise disappear.
+    if (materialId && !out.some((o) => o.value === materialId)) {
+      out.unshift({ value: materialId, label: pickedLabel });
+    }
+    return out;
+  }, [materials, materialId, pickedLabel]);
 
-  // Mark a field valid as soon as the operator types into it. Cheap UX
-  // win — the red border disappears the moment they engage with it.
+  const detailKey = materialId ? `/admin/materials/${materialId}` : null;
+  const { data: detail } = useFetch<MaterialDetail>(detailKey);
+  const brandOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const g of detail?.groups ?? []) {
+      for (const b of g.brands) if (!b.is_system) map.set(b.brand_id, b.brand_name);
+    }
+    return [...map.entries()].map(([value, label]) => ({ value, label }));
+  }, [detail]);
+  // A different material invalidates whatever brand was picked for the last one.
+  useEffect(() => { setBrandId(''); }, [materialId]);
+
   function clearInvalid(field: string) {
     setInvalid((prev) => {
       if (!prev.has(field)) return prev;
       const next = new Set(prev); next.delete(field); return next;
     });
   }
-  // Tailwind doesn't compose `aria-invalid` styles by default — we
-  // toggle a red border class explicitly so the visual cue is obvious.
   const errCls = (f: string) => invalid.has(f) ? 'border-urgent focus-visible:ring-urgent' : '';
 
+  function pickMaterial(v: string) {
+    const opt = materialOptions.find((o) => String(o.value) === v);
+    setMaterialId(opt ? Number(opt.value) : '');
+    setPickedLabel(opt?.label ?? '');
+    clearInvalid('material');
+  }
+
   async function go() {
-    // Collect EVERY missing/invalid field in one pass so the operator
-    // sees them all highlighted at once, not one-at-a-time on each click.
     const next = new Set<string>();
-    if (!name.trim())                                  next.add('materialName');
-    if (!sku.trim())                                   next.add('sku');
-    if (!unit.trim())                                  next.add('unit');
-    const upn = Number(unitPrice);
-    if (!unitPrice || !Number.isFinite(upn) || upn <= 0) next.add('unitPrice');
-    const qn = Number(qty);
-    if (!qty || !Number.isFinite(qn) || qn <= 0)       next.add('quantity');
+    if (!materialId) next.add('material');
+    if (brandOptions.length > 0 && !brandId) next.add('brand');
+    const qn = Number(quantity);
+    if (!quantity || !Number.isFinite(qn) || qn <= 0) next.add('quantity');
+    const an = Number(approvedAmount);
+    if (approvedAmount.trim() === '' || !Number.isFinite(an) || an < 0) next.add('amount');
     if (next.size > 0) {
       setInvalid(next);
       setErr('Please fill the highlighted fields.');
       return;
     }
-    setLoading(true); setErr(null);
+    setBusy(true); setErr(null);
     try {
-      await onSubmit({
-        materialName: name.trim(),
-        description: description.trim() || undefined,
-        sku: sku.trim(),
-        unit: unit.trim(),
-        unitPrice: upn,
+      await api.post(`/admin/jobs/${jobId}/quotation-lines`, {
+        materialId: Number(materialId),
+        ...(brandId ? { brandId: Number(brandId) } : {}),
         quantity: qn,
-        totalPrice,
+        approvedAmount: an,
       });
+      showToast({ variant: 'success', message: 'Material Added' });
+      onAdded();
     } catch (e) {
-      // Backend returns `details.missing: [...]` on its own validation
-      // failure — translate that into the same red borders for parity
-      // (defence in depth: covers the case where the client validator
-      // is lenient but the backend rejects).
-      if (e instanceof ApiError) {
-        type Details = { missing?: string[] };
-        const d = (e.details as Details | undefined);
-        if (Array.isArray(d?.missing)) setInvalid(new Set(d.missing));
-        setErr(e.message);
-      } else {
-        setErr('Save failed');
-      }
-    } finally { setLoading(false); }
+      setErr(e instanceof ApiError ? e.message : 'Failed to add material');
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed to add material' });
+    } finally { setBusy(false); }
   }
 
   return (
@@ -3733,70 +3780,53 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
         <DialogHeader><DialogTitle>Add Material</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label className="text-sm font-medium block mb-1">Material Name *</Label>
-            <Input
-              value={name}
-              onChange={(e) => { setName(e.target.value); clearInvalid('materialName'); }}
-              placeholder='e.g. "Copper wire — 2.5 sqmm"'
-              className={errCls('materialName')}
+            <Label className="text-sm font-medium block mb-1">Material *</Label>
+            <SearchSelect
+              value={materialId}
+              onChange={pickMaterial}
+              onQueryChange={setQuery}
+              options={materialOptions}
+              placeholder={search.loading ? 'Loading Materials…' : 'Search master materials…'}
+              emptyText={search.error ? 'Material Lookup Failed' : 'No Materials Match'}
+              className={errCls('material')}
             />
           </div>
-          <div>
-            <Label className="text-sm font-medium block mb-1">Description</Label>
-            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional spec / brand" />
-          </div>
+          {brandOptions.length > 0 && (
+            <div>
+              <Label className="text-sm font-medium block mb-1">Brand *</Label>
+              <Select
+                value={brandId}
+                onChange={(e) => { setBrandId(Number(e.target.value) || ''); clearInvalid('brand'); }}
+                options={brandOptions}
+                placeholder="Select a brand…"
+                className={errCls('brand')}
+              />
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <Label className="text-sm font-medium block mb-1">SKU *</Label>
+              <Label className="text-sm font-medium block mb-1">Quantity *</Label>
               <Input
-                value={sku}
-                onChange={(e) => { setSku(e.target.value); clearInvalid('sku'); }}
-                className={`font-mono ${errCls('sku')}`}
-              />
-            </div>
-            <div>
-              <Label className="text-sm font-medium block mb-1">Unit *</Label>
-              <Input
-                value={unit}
-                onChange={(e) => { setUnit(e.target.value); clearInvalid('unit'); }}
-                placeholder='e.g. "m", "pcs"'
-                className={errCls('unit')}
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div>
-              <Label className="text-sm font-medium block mb-1">Unit ₹ *</Label>
-              <Input
-                value={unitPrice}
-                onChange={(e) => { setUnitPrice(e.target.value.replace(/[^\d.]/g, '')); clearInvalid('unitPrice'); }}
-                className={`font-mono ${errCls('unitPrice')}`}
-                inputMode="decimal"
-              />
-            </div>
-            <div>
-              <Label className="text-sm font-medium block mb-1">Qty *</Label>
-              <Input
-                value={qty}
-                onChange={(e) => { setQty(e.target.value.replace(/[^\d.]/g, '')); clearInvalid('quantity'); }}
+                value={quantity}
+                onChange={(e) => { setQuantity(e.target.value.replace(/[^\d.]/g, '')); clearInvalid('quantity'); }}
                 className={`font-mono ${errCls('quantity')}`}
                 inputMode="decimal"
               />
             </div>
             <div>
-              <Label className="text-sm font-medium block mb-1">Total ₹</Label>
+              <Label className="text-sm font-medium block mb-1">Approved Amount ₹ *</Label>
               <Input
-                value={totalPrice ? totalPrice.toFixed(2) : ''}
-                readOnly
-                className="font-mono bg-muted/30"
-                title="Auto-calculated as Unit ₹ × Qty"
+                value={approvedAmount}
+                onChange={(e) => { setApprovedAmount(e.target.value.replace(/[^\d.]/g, '')); clearInvalid('amount'); }}
+                className={`font-mono ${errCls('amount')}`}
+                inputMode="decimal"
               />
             </div>
           </div>
           {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <CancelButton onCancel={onClose} disabled={loading} />
-            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Add'}</Button>
+            <CancelButton onCancel={onClose} disabled={busy} />
+            <Button onClick={go} disabled={busy}>{busy ? 'Saving…' : 'Add'}</Button>
           </div>
         </div>
       </DialogContent>

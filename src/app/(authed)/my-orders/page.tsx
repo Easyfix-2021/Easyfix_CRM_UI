@@ -12,7 +12,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { formatDate, formatEasyfixerName, statusLabel, statusTone, materialSubStatusLabel } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, statusLabel, statusTone, materialSubStatusLabel, materialStageStatusLabel } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -1180,12 +1180,23 @@ export default function MyOrdersPage() {
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td className="text-xs whitespace-nowrap">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</td>
                   <td>
+                    {/* Pending for Material stage (2026-09-21, material request
+                        flow v2): while ON that tab, 16 reads "Review Pending"
+                        and 15 reads "Approval Pending" — the stage now spans
+                        both statuses (job-stages.ts). Every other tab keeps
+                        the ordinary statusLabel() ("Pending for Material" /
+                        "Estimate Pending"). */}
                     <StatusChip tone={statusTone(j.job_status)}>
-                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
+                      {(tab === 'pending-material' && materialStageStatusLabel(j.job_status, j.material_sub_status))
+                        || statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
                     {/* Material sub-state — only meaningful at status 16, see
-                        materialSubStatusLabel in lib/utils.ts. */}
-                    {j.job_status === 16 && materialSubStatusLabel(j.material_sub_status) && (
+                        materialSubStatusLabel in lib/utils.ts. Suppressed on
+                        the Pending for Material tab when the primary chip
+                        above already says the same thing ("Review Pending"). */}
+                    {j.job_status === 16 && materialSubStatusLabel(j.material_sub_status) && !(
+                      tab === 'pending-material' && materialStageStatusLabel(j.job_status, j.material_sub_status)
+                    ) && (
                       <StatusChip tone="neutral" size="sm" className="ml-1">
                         {materialSubStatusLabel(j.material_sub_status)}
                       </StatusChip>
