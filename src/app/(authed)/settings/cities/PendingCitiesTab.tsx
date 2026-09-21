@@ -89,7 +89,7 @@ function istStamp(v: string | null): string {
 export function PendingCitiesTab({
   items, total, loading, error,
   page, pageSize, onPageChange, onPageSizeChange,
-  onDecided,
+  onDecided, managerByState,
 }: {
   items: PendingCity[];
   total: number;
@@ -101,6 +101,12 @@ export function PendingCitiesTab({
   onPageSizeChange: (next: TablePageSize) => void;
   /* Refreshes BOTH lists — the queue AND the All Cities tab behind it. */
   onDecided: () => void;
+  /*
+   * state_id → zonal manager name. Shown under the state so the approver can
+   * see who the city will belong to; approval copies it server-side, so there
+   * is nothing to fill in.
+   */
+  managerByState: Map<number, string | null>;
 }) {
   const confirm = useConfirm();
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -119,6 +125,9 @@ export function PendingCitiesTab({
           <span className="font-medium text-foreground">{c.city_name}</span>
           {c.state_name ? `, ${c.state_name}` : ''} becomes an Active city and starts
           appearing in every city picker across the CRM.
+          {c.state_id != null && managerByState.get(c.state_id)
+            ? ` Its zonal manager will be ${managerByState.get(c.state_id)}, from the state.`
+            : ''}
           {c.pincode_count > 0
             ? ` ${c.pincode_count} pincode(s) already point at it.`
             : ' No pincodes point at it yet.'}
@@ -216,7 +225,14 @@ export function PendingCitiesTab({
                 <tr key={c.city_id}>
                   <td className="!text-center font-mono text-xs">{c.city_id}</td>
                   <td className="!text-left font-medium">{c.city_name}</td>
-                  <td className="!text-left">{c.state_name ?? <span className="text-muted-foreground">—</span>}</td>
+                  <td className="!text-left">
+                    {c.state_name ?? <span className="text-muted-foreground">—</span>}
+                    {c.state_id != null && managerByState.has(c.state_id) && (
+                      <div className="text-xs text-muted-foreground">
+                        ZM: {managerByState.get(c.state_id) ?? <span className="text-urgent">none yet</span>}
+                      </div>
+                    )}
+                  </td>
                   <td className="!text-left">{c.district ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-center font-mono text-xs">
                     {c.reference_pincode ?? <span className="text-muted-foreground font-sans">—</span>}
