@@ -205,7 +205,7 @@ export type PendingToStartViewProps = {
   /* Job Stage Access keeps this user inside the bucket — the strip then says so. */
   scopeClamped?: boolean;
   /* Opens the job console for a row. The row icon renders only when provided. */
-  onOpenConsole?: (jobId: number) => void;
+  onOpenConsole?: (jobId: number, jobStatus: number) => void;
 };
 
 export function PendingToStartView({
@@ -394,7 +394,7 @@ type PendingStartTableProps = {
    * refetch(): an approved cancellation leaves the tab entirely and the tab
    * counts move with it, so the signal has to be the view's. */
   onRequestActioned: () => void;
-  onOpenConsole?: (jobId: number) => void;
+  onOpenConsole?: (jobId: number, jobStatus: number) => void;
 };
 
 // The selected tab's rows — ONE /admin/jobs?status=1 call + pagination.
@@ -689,7 +689,7 @@ function PendingStartTable({
                       {onOpenConsole && (
                         <button
                           type="button"
-                          onClick={() => onOpenConsole(j.job_id)}
+                          onClick={() => onOpenConsole(j.job_id, j.job_status)}
                           className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Open job console"
                           aria-label="Open job console"

@@ -3,8 +3,6 @@
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useFetch } from './hooks';
-import { statusLabel } from './utils';
-import { showToast } from '@/components/ui/toast';
 
 /*
  * URL-driven Job action state — shared by /jobs and /my-orders.
@@ -282,44 +280,74 @@ export function useJobActionNav() {
 }
 
 /**
- * Keep the open modal honest about the job it was opened for.
+ * The URL's action, but only once it is safe to honour — and the job id with it.
  *
- * Mount once per list page that can open a write console from the URL. It
- * probes the job, and if the action in the URL is not one that status may open,
- * it re-routes to the screen that status belongs on and says why.
+ * Call this INSTEAD of reading `useJobActionParams().action` when deciding which
+ * modal to open, and derive every modal memo from what comes back. `action` is:
+ *   - the URL's action, immediately, for anything unguarded (view / checkin /
+ *     audit / edit / create) — no probe, no delay, nothing changes for them;
+ *   - the URL's action for a guarded console the job's status permits;
+ *   - `null` while a guarded console's status is still unknown, and while the
+ *     re-route to the right screen is in flight.
  *
- * WHY A PROBE AND NOT THE ROW: a pasted link need not be for a job on this page
- * at all, so the row may not exist. `/admin/jobs/:id` is the same key both
- * consoles already read, so useFetch dedupes it — this costs no extra round
- * trip. `dataKey` is what makes it safe: useFetch KEEPS the previous key's
- * payload while the next loads (a key change sets `refreshing`, not `loading`),
- * and re-routing on that would send the operator to a screen chosen from a
- * different job's status.
+ * WHY IT RETURNS THE ACTION INSTEAD OF JUST RE-ROUTING (ops, 2026-09-21). The
+ * first version let the page open the console the URL asked for and re-routed
+ * afterwards, so a completed job under `?action=schedule` gave the operator:
+ * wrong console mounts, spinner, toast, unmount, right screen mounts, spinner.
+ * Two loads and a flash of a screen they should never have seen. Deciding
+ * BEFORE anything mounts makes it one open and no close.
  *
- * Re-routes once per (job, action). Without the latch, an action the target
- * screen is itself not allowed to hold would ping-pong between two URLs.
+ * `knownStatus` is what keeps that from costing a round trip. A row the page has
+ * already loaded carries its own job_status, so a CLICK resolves in the same
+ * render — no probe, no wait, no flash. Only a pasted link for a job that is not
+ * on the page falls back to the probe, and that probe is `/admin/jobs/:id`: the
+ * very read the console would do on mount anyway, so nothing waits longer than
+ * it already did. The spinner just moves outside the modal instead of inside it.
+ *
+ * A stale row is safe to trust here. If it says 0 and the job has since moved to
+ * 1, Schedule & Assign opens, sees the truth on its own probe, goes read-only
+ * and tells the list to refetch — the behaviour it already had. The server is
+ * the authority either way.
  */
-export function useJobActionStatusGuard(): void {
+export function useGuardedJobAction(knownStatus?: number | null): JobActionParams {
   const { jobId, action } = useJobActionParams();
   const { openJobAction } = useJobActionNav();
 
-  const key = jobId != null && isGuardedJobAction(action) ? `/admin/jobs/${jobId}` : null;
-  const probe = useFetch<{ job_id?: number; job_status?: number }>(key, { enabled: !!key });
-  const status = key && probe.dataKey === key ? probe.data?.job_status : undefined;
+  const guarded = action != null && isGuardedJobAction(action) && jobId != null;
 
+  /*
+   * No probe at all unless a guarded action's status is genuinely unknown. The
+   * key is the same one both consoles read, so when it IS needed useFetch
+   * dedupes it with the console's own request.
+   */
+  const key = guarded && knownStatus == null ? `/admin/jobs/${jobId}` : null;
+  const probe = useFetch<{ job_id?: number; job_status?: number }>(key, { enabled: !!key });
+  /*
+   * `dataKey` is the whole safety of the fallback: useFetch RETAINS the previous
+   * key's payload while the next loads (a key change sets `refreshing`, not
+   * `loading`), so reading `.data` directly would decide this job's screen from
+   * another job's status.
+   */
+  const probed = key && probe.dataKey === key ? probe.data?.job_status : undefined;
+
+  const status = knownStatus ?? probed;
+  const allowed = !guarded || (status != null && action != null && isActionAllowedForStatus(action, Number(status)));
+
+  /*
+   * Re-route once per (job, action). Without the latch an action the target
+   * screen is itself not allowed to hold would ping-pong between two URLs.
+   * `replace`, via openJobAction on an already-open action, so Back still
+   * returns to the list rather than to the screen we refused to show.
+   */
   const reroutedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (action == null || jobId == null || status == null) return;
-    const code = Number(status);
-    if (!Number.isFinite(code)) return;
-    if (isActionAllowedForStatus(action, code)) return;
+    if (!guarded || allowed || action == null || jobId == null || status == null) return;
     const once = `${jobId}:${action}`;
     if (reroutedRef.current === once) return;
     reroutedRef.current = once;
-    showToast({
-      variant: 'warning',
-      message: `Job #${jobId} is ${statusLabel(code)} — opening the screen for that stage instead.`,
-    });
-    openJobAction(actionForJobStatus(code), jobId);
-  }, [action, jobId, status, openJobAction]);
+    openJobAction(actionForJobStatus(Number(status)), jobId);
+  }, [guarded, allowed, action, jobId, status, openJobAction]);
+
+  // Nothing mounts until the answer is known, and never the refused screen.
+  return allowed ? { action, jobId } : { action: null, jobId: null };
 }

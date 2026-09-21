@@ -107,14 +107,18 @@ test('point 2 — the JOBMODAL_ACTIONS allow-list carries audit, and every consu
 
 /*
  * TEMPERED, not lazy (2026-09-09). my-orders/page.tsx has THREE blocks ending
- * in the exact terminator `}, [urlAction, urlJobId]);` — modal, assignModal and
+ * in the exact terminator `}, [openAction, openJobId]);` — modal, assignModal and
  * scheduleModal — so a plain [\s\S]*? that failed to stop at the first would
  * silently swallow the next memo and satisfy every assertion below against the
  * WRONG one. A memo body never contains the word `useMemo`, so tempering on it
  * makes the run unable to cross into a sibling: the guard then fails loudly
  * with "the memo must be found" instead of quietly widening.
+ *
+ * openAction / openJobId since 2026-09-21: the memos read the status guard's
+ * answer (useGuardedJobAction) rather than the raw URL, so a console the job's
+ * status refuses never mounts. The narrowing rule pinned below is unchanged.
  */
-const MEMO = /const modal = useMemo<\{ open: boolean; mode: JobModalMode; id\?: number \}>\(\(\) => \{(?:(?!useMemo)[\s\S])*?\}, \[urlAction, urlJobId\]\);/;
+const MEMO = /const modal = useMemo<\{ open: boolean; mode: JobModalMode; id\?: number \}>\(\(\) => \{(?:(?!useMemo)[\s\S])*?\}, \[openAction, openJobId\]\);/;
 
 test('point 3 — both page memos narrow through the allow-list, with no cast', () => {
   /*
@@ -128,12 +132,12 @@ test('point 3 — both page memos narrow through the allow-list, with no cast', 
     assert.ok(memo, `the ${name} \`modal\` memo must be found`);
     assert.match(
       memo[0],
-      /if \(!isJobModalAction\(urlAction\)\) return \{ open: false, mode: 'create' \};/,
+      /if \(!isJobModalAction\(openAction\)\) return \{ open: false, mode: 'create' \};/,
       `${name} must gate on the shared allow-list`,
     );
     assert.match(
       memo[0],
-      /return \{ open: true, mode: urlAction, id: urlJobId \};/,
+      /return \{ open: true, mode: openAction, id: openJobId \};/,
       `${name} must pass the NARROWED action through — an \`as JobModalMode\` here is the bug`,
     );
     assert.ok(
@@ -312,7 +316,7 @@ test('F1 — the page that owns ?action=schedule still derives its real modal fr
     page,
     // Tempered for the same reason as MEMO above — three memos share this
     // terminator, and BOTH runs here could cross into a sibling.
-    /const scheduleModal = useMemo<\{ open: boolean; jobId: number \| null \}>\(\(\) => \{(?:(?!useMemo)[\s\S])*?urlAction === 'schedule'(?:(?!useMemo)[\s\S])*?\}, \[urlAction, urlJobId\]\);/,
+    /const scheduleModal = useMemo<\{ open: boolean; jobId: number \| null \}>\(\(\) => \{(?:(?!useMemo)[\s\S])*?openAction === 'schedule'(?:(?!useMemo)[\s\S])*?\}, \[openAction, openJobId\]\);/,
     'my-orders must still derive ScheduleAssignModal from ?action=schedule',
   );
   assert.match(page, /<ScheduleAssignModal\n\s*open=\{scheduleModal\.open\}/);
@@ -398,8 +402,8 @@ test('differential control — each guard fails on a source with its subject del
     ],
     [
       'the allow-list gate in the my-orders memo',
-      page.replace(/if \(!isJobModalAction\(urlAction\)\) return \{ open: false, mode: 'create' \};/, ''),
-      /if \(!isJobModalAction\(urlAction\)\) return \{ open: false, mode: 'create' \};/,
+      page.replace(/if \(!isJobModalAction\(openAction\)\) return \{ open: false, mode: 'create' \};/, ''),
+      /if \(!isJobModalAction\(openAction\)\) return \{ open: false, mode: 'create' \};/,
       page,
     ],
     [

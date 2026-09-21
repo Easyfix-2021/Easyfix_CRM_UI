@@ -92,7 +92,9 @@ test('View Job and the job console are NOT fenced — they are on every row', ()
   const cell = VIEW.slice(cellAt, VIEW.indexOf('</td>', cellAt));
 
   const viewAt = cell.indexOf('onClick={() => onView(j.job_id)}');
-  const consoleAt = cell.indexOf('onClick={() => onOpenConsole(j.job_id)}');
+  /* Two arguments since 2026-09-21: the row hands up the status it already
+     has, so the host's status guard answers this click without a request. */
+  const consoleAt = cell.indexOf('onClick={() => onOpenConsole(j.job_id, j.job_status)}');
   assert.ok(viewAt > -1, 'View Job must still render on this row');
   assert.ok(consoleAt > -1, 'the job console button must render on this row');
 
