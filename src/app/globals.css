@@ -342,6 +342,24 @@
 }
 
 /*
+ * Data tables scroll sideways without a visible horizontal scrollbar.
+ *
+ * On macOS the system scrollbar is an OVERLAY: it is drawn ON TOP of the
+ * content rather than beside it, so on a short table it sat across the only
+ * row and hid part of the job ref and the status chip ("Pending for Materia").
+ * Owner asked for it gone (2026-09-21). Scrolling still works — trackpad,
+ * Shift + wheel, keyboard — only the bar covering the rows is hidden.
+ * `:has()` matches any horizontal scroller holding a .data-table, so every
+ * list gets this from one rule instead of a class on each of ~50 wrappers.
+ */
+.overflow-x-auto:has(table.data-table) {
+  scrollbar-width: none; /* Firefox */
+}
+.overflow-x-auto:has(table.data-table)::-webkit-scrollbar {
+  display: none; /* Chrome, Safari */
+}
+
+/*
  * Dialogs scroll without a visible scrollbar.
  *
  * Every modal here is built to hold exactly ONE scroller — the panel itself

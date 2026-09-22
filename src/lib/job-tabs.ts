@@ -65,6 +65,13 @@ export const TABS: TabDef[] = [
   { value: 'pending-feedback',    label: 'Pending for Feedback',    status: 3 },
   { value: 'completed',           label: 'Completed',               status: 5 },
   { value: 'onhold',              label: 'Orders in Followup',      status: 21 },
+  // 2026-09-18 — sub-project D (status-16 design doc). Sits beside Estimate
+  // Pending: 16 is the PM-review step that precedes 15 in the material flow.
+  // 2026-09-21 (material request flow v2) — widened to [16, 15]: the CRM may
+  // add material at either "Review Pending" (16) or "Approval Pending" (15),
+  // so the tab now shows both. 'estimate-pending' below is UNCHANGED and
+  // still lists 15 on its own ("existing tabs that already list 15 keep it").
+  { value: 'pending-material',    label: 'Pending for Material',    statuses: [16, 15] },
   { value: 'estimate-pending',    label: 'Estimate Pending',        status: 15 },
   // Dashboard AttentionSummary drill-downs (2026-05-22). These tabs are
   // reachable via URL deep-link (?tab=…) from the dashboard tiles.

@@ -177,6 +177,13 @@ export const URL_MAP: Record<string, string> = {
   'vertical':              '/settings/verticals',
   'clientratecard':        '/settings/rate-cards-b2b',
   'retailratecard':        '/settings/rate-cards-b2c',
+  // Manage Materials (Settings): Material master (Fixed/Dynamic pricing,
+  // per-brand + per-state overrides) + Brand master. tbl_menu row seeded
+  // with legacy-style slug url='managematerials' by
+  // EasyFix_Backend 2026-09-17-manage-materials.sql; page lives at
+  // /settings/manage-materials. Without this entry the sidebar link falls
+  // through to /coming-soon whatever the SQL says.
+  'managematerials':       '/settings/manage-materials',
   // Call Analytics (Settings): call-history table + Transcribe metrics + LLM
   // coaching. tbl_menu row seeded with url='callAnalytics' by
   // 2026-07-06-add-call-analysis.sql; page lives at /settings/call-analytics.
@@ -303,6 +310,10 @@ export const URL_MAP: Record<string, string> = {
   'dashboardChecking?enumDesc=PendingFeedback':           '/my-orders?tab=pending-feedback',
   'dashboardChecking?enumDesc=PendingForApproval':        '/my-orders?tab=estimate-pending',
   'dashboardChecking?enumDesc=PendingForCheckout':        '/my-orders?tab=audit-complete',
+  // 2026-09-18 — status 16 "Pending for Material" (sub-project D). The tbl_menu
+  // row is seeded by migrations/2026-09-18-pending-for-material-menu.sql; this
+  // entry is what turns its legacy url into the tab.
+  'dashboardChecking?enumDesc=PendingForMaterial':        '/my-orders?tab=pending-material',
   /*
    * Completed (status 5) has no legacy dashboardChecking bucket — the old CRM
    * never surfaced one. This entry exists so a NEW tbl_menu row for it can

@@ -19,12 +19,12 @@ import { isUnrestricted, stageVisibleStatuses, type AllowedStages } from './job-
  * The mapping (rule verified 2026-05-19):
  *   closed    → 3 (COMPLETED), 5 (COMPLETED_ALT)
  *   cancelled → 6 (CANCELLED), 7 (ENQUIRY)
- *   open      → everything else valid (0,1,2,9,10,15,20,21)
+ *   open      → everything else valid (0,1,2,9,10,15,16,20,21)
  * `open` is the complement, so adding a new active status only requires
  * adding it here.
  */
 export const BUCKET_STATUS_MAP: Record<string, number[]> = {
-  open:      [0, 1, 2, 9, 10, 15, 20, 21],
+  open:      [0, 1, 2, 9, 10, 15, 16, 20, 21],
   closed:    [3, 5],
   cancelled: [6, 7],
 };
@@ -42,6 +42,7 @@ export const JOB_STATUS_OPTIONS: StatusOption[] = [
   { value: '9',  label: 'Unconfirmed' },
   { value: '10', label: 'Revisit' },
   { value: '15', label: 'Estimate Pending' },
+  { value: '16', label: 'Pending for Material' },
   { value: '20', label: 'Pending to Close' },
   { value: '21', label: 'Followup' },
 ];
@@ -124,6 +125,7 @@ export const JOB_STAGE_OPTIONS: StatusOption[] = [
   { value: 'enquiry',      label: 'Enquiry' },
   { value: 'fulfillment',  label: 'Fulfillment on hold' },
   { value: 'acknowledge',  label: 'Pending app acknowledgement' },
+  { value: 'material',     label: 'Pending for Material' },
   { value: 'approval',     label: 'Pending for approval' },
   { value: 'scheduling',   label: 'Pending for scheduling' },
   { value: 'close',        label: 'Pending to close on app' },
@@ -131,13 +133,21 @@ export const JOB_STAGE_OPTIONS: StatusOption[] = [
   { value: 'unconfirmed',  label: 'Unconfirmed' },
 ];
 
-/* Stage → job_status ids. `scheduling`/`acknowledge` are handled separately. */
+/*
+ * Stage → job_status ids. `scheduling`/`acknowledge` are handled separately.
+ *
+ * `material` gained 15 alongside 16 (2026-09-21, material request flow v2 —
+ * mirrors job-stages.ts's 'pending-material' stage). `approval` KEEPS 15 on
+ * its own too, so selecting either stage alone still resolves correctly;
+ * `resolveStageFilter` dedupes when both are picked together.
+ */
 const STAGE_STATUS_IDS: Record<string, number[]> = {
   unconfirmed: [9],
   start:       [1],
   close:       [2, 20],
   audit:       [10],
   approval:    [15],
+  material:    [16, 15],
   fulfillment: [21],
   completed:   [3, 5],
   enquiry:     [7],

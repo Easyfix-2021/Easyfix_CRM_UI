@@ -36,6 +36,7 @@ export type StageKey =
   | 'pending-feedback'
   | 'completed'
   | 'onhold'
+  | 'pending-material'
   | 'estimate-pending'
   | 'cancelled';
 
@@ -59,14 +60,34 @@ export type StageDef = {
  *   pending-feedback     [3]               [5,6]               Pending for Feedback
  *   completed            [5]               []                  Completed
  *   onhold               [21]              [1,6]               Orders in Followup
+ *   pending-material     [16]              [15,2,6]            Pending for Material
  *   estimate-pending     [15]              [0,1,6]             Estimate Pending
  *   cancelled            [6]               []                  Cancelled
+ *
+ * Status 16 (Pending for Material) HAS a stage as of 2026-09-18, added to the
+ * backend's lib/job-stages.js in the same change: a stage-restricted user
+ * (mode 'list') can only see statuses belonging to a stage they hold, so
+ * without one the PM who reviews these quotes could never see a 16 job. The
+ * PM's approve/reject is still gated by the isJobMaterialReview action
+ * permission; the stage governs VISIBILITY, which the permission does not.
+ *
+ * 2026-09-21 (material request flow v2, owner-approved): 'pending-material'
+ * gained 15 alongside 16 — the CRM may add material and needs to SEE a job at
+ * either "Review Pending" (16) or "Approval Pending" (15) from the one stage,
+ * and 'estimate-pending' KEEPS 15 too ("existing tabs that already list 15
+ * keep it"). Status 15 is therefore now claimed by two stages on purpose —
+ * the one deliberate exception to "every status belongs to exactly one
+ * stage" (see the exception carved out in job-stages.test.js).
+ *
+ * This map stays a byte-for-byte mirror of the backend's, enforced by
+ * tests/job-stages-parity.test.js — never add a stage here without the
+ * matching backend change, or that test goes red across ~346k triples.
  */
 export const STAGES: Record<StageKey, StageDef> = {
   'unconfirmed':        { key: 'unconfirmed',        label: 'Unconfirmed Orders',     visibleStatuses: [9],      transitionTargets: [0, 6] },
   'pending-scheduling': { key: 'pending-scheduling', label: 'Pending for Scheduling', visibleStatuses: [0],      transitionTargets: [1, 6, 9] },
   'pending-start':      { key: 'pending-start',      label: 'Pending to Start',       visibleStatuses: [1],      transitionTargets: [2, 20, 21, 6] },
-  'pending-close':      { key: 'pending-close',      label: 'Pending to Close',       visibleStatuses: [2, 20],  transitionTargets: [10, 21, 6] },
+  'pending-close':      { key: 'pending-close',      label: 'Pending to Close',       visibleStatuses: [2, 20],  transitionTargets: [10, 21, 6, 16] },
   /*
    * 2026-09-10 — 3 and 10 were the wrong way round here. Full note in the BE
    * mirror (lib/job-stages.js). In short: 10 is Under Audit and 3 is Pending
@@ -80,6 +101,7 @@ export const STAGES: Record<StageKey, StageDef> = {
   'pending-feedback':   { key: 'pending-feedback',   label: 'Pending for Feedback',   visibleStatuses: [3],      transitionTargets: [5, 6] },
   'completed':          { key: 'completed',          label: 'Completed',              visibleStatuses: [5],      transitionTargets: [] },
   'onhold':             { key: 'onhold',             label: 'Orders in Followup',     visibleStatuses: [21],     transitionTargets: [1, 6] },
+  'pending-material':   { key: 'pending-material',   label: 'Pending for Material',   visibleStatuses: [16, 15], transitionTargets: [15, 2, 6] },
   'estimate-pending':   { key: 'estimate-pending',   label: 'Estimate Pending',       visibleStatuses: [15],     transitionTargets: [0, 1, 6] },
   'cancelled':          { key: 'cancelled',          label: 'Cancelled',              visibleStatuses: [6],      transitionTargets: [] },
 };

@@ -52,16 +52,30 @@ const only = (...stages) => ({ mode: 'list', stages });
  * src/lib/job-stages.ts and the backend already agree on all ten stages: this
  * pin was the only stale copy, which is exactly the cross-repo break it exists
  * to catch. Labels are UI text and come from the frontend.
+ *
+ * REPINNED 2026-09-18: 'pending-material' [16] added in BOTH repos in one
+ * change (see the note in src/lib/job-stages.ts — a stage-restricted PM could
+ * otherwise never see the jobs they review), and 'pending-close' gained 16 as
+ * a target because that is where a 16 job comes FROM.
+ *
+ * REPINNED 2026-09-21 (material request flow v2, owner-approved): 'pending-
+ * material' widened to [16, 15] — CRM may add material at either Review
+ * Pending (16) or Approval Pending (15) and needs to see both from that one
+ * stage. 'estimate-pending' is UNCHANGED and still owns [15] on its own —
+ * status 15 is now the ONE deliberate exception to "every status belongs to
+ * exactly one stage", carved out explicitly in the overlap test below rather
+ * than silently breaking it.
  */
 const EXPECTED = {
   'unconfirmed':        { visible: [9],     targets: [0, 6],           label: 'Unconfirmed Orders' },
   'pending-scheduling': { visible: [0],     targets: [1, 6, 9],        label: 'Pending for Scheduling' },
   'pending-start':      { visible: [1],     targets: [2, 20, 21, 6],   label: 'Pending to Start' },
-  'pending-close':      { visible: [2, 20], targets: [10, 21, 6],      label: 'Pending to Close' },
+  'pending-close':      { visible: [2, 20], targets: [10, 21, 6, 16], label: 'Pending to Close' },
   'audit-complete':     { visible: [10],    targets: [3, 5, 6],        label: 'Under Audit' },
   'pending-feedback':   { visible: [3],     targets: [5, 6],           label: 'Pending for Feedback' },
   'completed':          { visible: [5],     targets: [],               label: 'Completed' },
   'onhold':             { visible: [21],    targets: [1, 6],           label: 'Orders in Followup' },
+  'pending-material':   { visible: [16, 15], targets: [15, 2, 6],      label: 'Pending for Material' },
   'estimate-pending':   { visible: [15],    targets: [0, 1, 6],        label: 'Estimate Pending' },
   'cancelled':          { visible: [6],     targets: [],               label: 'Cancelled' },
 };
@@ -77,19 +91,34 @@ test('the stage map matches the pinned backend contract', () => {
   }
 });
 
-test('every status belongs to exactly one stage — no overlap, no orphan', () => {
+test('every status belongs to exactly one stage — no overlap, no orphan — EXCEPT the one documented status 15 exception', () => {
   /*
    * Overlap would make stageVisible ambiguous and let a user reach a status
    * through a stage they were not granted. This is the invariant that makes
-   * "which stage owns this job?" a well-formed question.
+   * "which stage owns this job?" a well-formed question — for every status
+   * except the one the owner explicitly asked for (2026-09-21): 15 lives in
+   * BOTH 'pending-material' and 'estimate-pending' on purpose. A second status
+   * showing up in two stages is still a bug; only 15, and only these two
+   * stages, is not.
    */
-  const owner = new Map();
+  const ALLOWED_OVERLAP = { 15: new Set(['pending-material', 'estimate-pending']) };
+  const owners = new Map();
   for (const [key, def] of Object.entries(S.STAGES)) {
     for (const code of def.visibleStatuses) {
-      assert.equal(owner.has(code), false, `status ${code} claimed by both ${owner.get(code)} and ${key}`);
-      owner.set(code, key);
+      if (!owners.has(code)) owners.set(code, new Set());
+      owners.get(code).add(key);
     }
   }
+  for (const [code, stages] of owners) {
+    if (stages.size <= 1) continue;
+    const allowed = ALLOWED_OVERLAP[code];
+    assert.ok(allowed, `status ${code} is claimed by multiple stages (${[...stages].join(', ')}) with no documented exception`);
+    assert.deepEqual(stages, allowed, `status ${code}'s claimants must be EXACTLY the documented set, got ${[...stages].join(', ')}`);
+  }
+  // Positive control: the exception itself must actually be exercised, or a
+  // future stage edit that silently drops the overlap leaves this test
+  // asserting nothing about the case it exists to guard.
+  assert.equal(owners.get(15)?.size, 2, 'positive control: status 15 must still be shared by two stages');
 });
 
 test('every transition target is a status some stage can actually show', () => {
