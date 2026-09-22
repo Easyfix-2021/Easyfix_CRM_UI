@@ -135,14 +135,6 @@ type JobRow = JobAgeFields & {
    * Optional: absent on a BE deploy predating the share feature → no chip.
    */
   share?: JobShare | null;
-  /*
-   * Set by POST /admin/jobs/:id/client-approval-on-behalf when its
-   * auto-reschedule found no free slot in the next 7 days — the job still
-   * moves to job_status 1 (Scheduled) but needs a human to pick a slot.
-   * TINYINT(1) — may arrive as boolean, so render sites Number() it like
-   * every other flag column on this projection.
-   */
-  needs_scheduling?: number | boolean | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -1219,19 +1211,6 @@ export default function MyOrdersPage() {
                         Renders nothing unless a share is LIVE. */}
                     <ShareChip share={j.share} className="ml-1" />
                     {/*
-                     * Needs Scheduling — set by the Approve on Client's
-                     * Behalf endpoint when its auto-reschedule found no free
-                     * slot in the next 7 days. The job already moved to
-                     * job_status 1 (Scheduled) so nothing else on the row
-                     * flags it; ops needs this to know it still wants a
-                     * manual Schedule & Assign.
-                     */}
-                    {Number(j.needs_scheduling) === 1 && (
-                      <StatusChip tone="warning" size="sm" className="ml-1" title="Approved with no free slot in the next 7 days — needs a manual Schedule & Assign">
-                        Needs Scheduling
-                      </StatusChip>
-                    )}
-                    {/*
                      * "No Services" pill — shared anomaly indicator for
                      * BOOKED jobs with zero active services (counts only
                      * job_service_status=1 server-side). Same chip
@@ -1539,9 +1518,8 @@ export default function MyOrdersPage() {
       />
 
       {/* Approve on Client's Behalf — moves the job off status 15 to
-          job_status 1 (Scheduled, possibly needing manual scheduling — see
-          the Needs Scheduling chip above), so refresh the list AND its tab
-          count the same way. */}
+          job_status 1 (Scheduled, with the visit the operator just picked),
+          so refresh the list AND its tab count the same way. */}
       <ClientApprovalOnBehalfModal
         open={clientApprovalJobId != null}
         jobId={clientApprovalJobId}

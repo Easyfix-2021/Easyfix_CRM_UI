@@ -204,15 +204,34 @@ export const api = {
    * quote at status 15 (Approval Pending) when the client confirmed by
    * phone/WhatsApp rather than through their own portal. Multipart: a
    * required comment (10..1000 chars, validated client-side too — see
-   * lib/client-approval.ts) plus 1..5 proof files (audio/image/pdf, <=10MB
-   * each), stored as job documents under category 'ClientApprovalProof'.
-   * 409 "This job is not waiting for client approval" when job_status != 15
-   * or isJobMaterialReview is missing. See ClientApprovalOnBehalfModal.
+   * lib/client-approval.ts), 1..5 proof files (audio/image/pdf, <=10MB
+   * each) stored as job documents under category 'ClientApprovalProof',
+   * PLUS (owner change, 2026-09-22) the operator's own picks — there is no
+   * auto-computed next visit any more:
+   *   visit_date_time  'YYYY-MM-DD HH:00:00' IST wall clock, one of the free
+   *                    hours GET /admin/jobs/:id/visit-slots offered.
+   *   permission       'now' | 'later' | 'not_required'.
+   *   permission_file  required iff permission === 'now'; pdf/jpeg/png/webp/
+   *                    heic, <=10MB.
+   * 409 "That slot was just booked — pick another" when the chosen hour lost
+   * the race; 409 "This job is not waiting for client approval" when
+   * job_status != 15 or isJobMaterialReview is missing. See
+   * ClientApprovalOnBehalfModal.
    */
-  approveJobOnClientBehalf: (jobId: number, comment: string, files: File[]) => {
+  approveJobOnClientBehalf: (
+    jobId: number,
+    comment: string,
+    files: File[],
+    visitDateTime: string,
+    permission: 'now' | 'later' | 'not_required',
+    permissionFile: File | null,
+  ) => {
     const fd = new FormData();
     fd.append('comment', comment);
     for (const f of files) fd.append('files', f);
+    fd.append('visit_date_time', visitDateTime);
+    fd.append('permission', permission);
+    if (permissionFile) fd.append('permission_file', permissionFile);
     return request<ClientApprovalOnBehalfResult>(`/admin/jobs/${jobId}/client-approval-on-behalf`, {
       method: 'POST',
       body: fd,
@@ -308,19 +327,17 @@ export const JOB_DOCUMENT_CATEGORY_LABEL: Record<JobDocumentCategory, string> = 
 
 /*
  * Response shape for approveJobOnClientBehalf — see its doc comment above.
- * `schedule` reports what the auto-reschedule attempt did: `rescheduled`
- * true means `requested_date_time` is the new appointment; otherwise
- * `needs_scheduling` true means no free slot was found in the next 7 days
- * and the job (already moved to job_status 1) needs a manual Schedule &
- * Assign. Both false is the third, quieter case: approved with no schedule
- * change needed at all.
+ * The operator's own picks come straight back: `visit_date_time` is the
+ * booked slot verbatim, and `permission.choice` echoes what was submitted.
+ * `permission.request_id` is set only for 'later' (the client-facing upload
+ * request the Client Dashboard will show); null for 'now' / 'not_required'.
  */
 export type ClientApprovalOnBehalfResult = {
   job_status: number;
-  schedule: {
-    rescheduled: boolean;
-    requested_date_time: string | null;
-    needs_scheduling: boolean;
+  visit_date_time: string;
+  permission: {
+    choice: 'now' | 'later' | 'not_required';
+    request_id: number | string | null;
   };
 };
 

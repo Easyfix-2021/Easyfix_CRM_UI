@@ -1,33 +1,37 @@
 'use strict';
 
 /*
- * Approve on Client's Behalf — owner-approved design 2026-09-22.
- * ClientApprovalOnBehalfModal.tsx (status 15, isJobMaterialReview-gated)
- * mirrors MaterialReviewModal's shape; POST
- * /admin/jobs/:id/client-approval-on-behalf is being built in parallel
- * against the contract in src/lib/api.ts's approveJobOnClientBehalf.
+ * Approve on Client's Behalf — owner-approved design 2026-09-22, REVISED
+ * same day: the next visit is never auto-computed any more. Ops picks the
+ * day + free 1-hour slot off GET /admin/jobs/:id/visit-slots, plus an entry-
+ * permission choice ('now' | 'later' | 'not_required'), alongside the
+ * existing comment + proof documents. ClientApprovalOnBehalfModal.tsx
+ * (status 15, isJobMaterialReview-gated) mirrors MaterialReviewModal's
+ * shape; POST /admin/jobs/:id/client-approval-on-behalf is being built in
+ * parallel against the contract in src/lib/api.ts's approveJobOnClientBehalf.
  *
  * ─── WHAT IS AT STAKE ─────────────────────────────────────────────────────
  *
- *   1. The pure client-side gates (comment length, file count/size/type,
- *      the status-15 row-action predicate, the reschedule/needs-scheduling
- *      toast choice) drift from the backend contract silently — no compile
- *      error, just a wrong message or a request the server 400s.
+ *   1. The pure client-side gates (comment length, file count/size/type, the
+ *      visit-slot pick, the permission-file requirement, the status-15
+ *      row-action predicate, the success-toast wording) drift from the
+ *      backend contract silently — no compile error, just a wrong message
+ *      or a request the server 400s.
  *   2. The "Approve on Client's Behalf" row action's visibility rule
  *      (isJobMaterialReview AND job_status 15) drifts loose on one of the
  *      three lists it was added to (my-orders, jobs, PendingToStartView),
  *      showing the action on a job that isn't Approval Pending, or hiding
  *      it from an operator who holds the permission.
- *   3. The "Needs Scheduling" chip goes missing from one of the three
- *      surfaces it was added to, and ops silently stops seeing jobs that
- *      need a manual Schedule & Assign.
- *   4. 'ClientApprovalProof' stops being a recognised job-document category,
+ *   3. 'ClientApprovalProof' stops being a recognised job-document category,
  *      or its label drifts from "Client Approval Proof".
+ *   4. The retired "Needs Scheduling" chip / needs_scheduling field creeps
+ *      back onto one of the three list surfaces it was removed from — the
+ *      backend contract no longer returns it at all.
  *
  * Pure bits are exercised directly (imported from the tsc-compiled
  * .test-build, same convention as job-stages.test.js / quotation-groups).
- * The gating/chip invariants are source-scanned like material-review.test.js
- * — these are JSX/gating invariants with no pure function to import for #2/#3
+ * The gating invariant is source-scanned like material-review.test.js —
+ * these are JSX/gating invariants with no pure function to import for #2
  * beyond the shared predicate itself.
  */
 
@@ -41,7 +45,8 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 
 const {
   APPROVAL_COMMENT_MIN, APPROVAL_COMMENT_MAX, APPROVAL_MAX_FILES, APPROVAL_MAX_FILE_SIZE,
-  validateApprovalComment, validateApprovalFiles, canApproveOnClientsBehalf, approvalSuccessToast,
+  validateApprovalComment, validateApprovalFiles, canApproveOnClientsBehalf,
+  validateVisitSlot, validatePermissionFile, buildVisitDateTime, approvalSuccessToast,
 } = require('../.test-build/client-approval.js');
 
 const apiSrc = read('src/lib/api.ts');
@@ -104,6 +109,38 @@ test('validateApprovalFiles accepts one of each contract-listed type', () => {
   assert.equal(validateApprovalFiles(oneEach), null);
 });
 
+// ─── buildVisitDateTime (pure string concat — no Date object, ever) ───────
+
+test('buildVisitDateTime produces the exact wire format, zero-padding the hour', () => {
+  assert.equal(buildVisitDateTime('2026-09-25', 9), '2026-09-25 09:00:00');
+  assert.equal(buildVisitDateTime('2026-09-25', 18), '2026-09-25 18:00:00');
+});
+
+// ─── validateVisitSlot (required — no auto-computed fallback any more) ────
+
+test('validateVisitSlot requires a picked slot', () => {
+  assert.match(validateVisitSlot(null), /Pick A Visit Date And Time Slot/);
+  assert.match(validateVisitSlot(''), /Pick A Visit Date And Time Slot/);
+  assert.equal(validateVisitSlot('2026-09-25 09:00:00'), null);
+});
+
+// ─── validatePermissionFile (required iff 'now', no audio) ────────────────
+
+test('validatePermissionFile requires a file only when choice is "now"', () => {
+  assert.equal(validatePermissionFile('later', null), null, '"later" needs no file');
+  assert.equal(validatePermissionFile('not_required', null), null, '"not_required" needs no file');
+  assert.match(validatePermissionFile('now', null), /Attach The Entry Permission File/);
+});
+
+test('validatePermissionFile enforces size and rejects audio (a document field, not proof-of-call)', () => {
+  const pdf = { name: 'permission.pdf', size: 100, type: 'application/pdf' };
+  assert.equal(validatePermissionFile('now', pdf), null);
+  const tooBig = { name: 'permission.pdf', size: APPROVAL_MAX_FILE_SIZE + 1, type: 'application/pdf' };
+  assert.match(validatePermissionFile('now', tooBig), /Larger Than 10 MB/);
+  const audio = { name: 'call.mp3', size: 100, type: 'audio/mpeg' };
+  assert.match(validatePermissionFile('now', audio), /Not An Accepted PDF Or Image File/);
+});
+
 // ─── canApproveOnClientsBehalf (status 15 AND isJobMaterialReview) ─────────
 
 test('canApproveOnClientsBehalf gates on BOTH job_status === 15 and the permission', () => {
@@ -113,41 +150,26 @@ test('canApproveOnClientsBehalf gates on BOTH job_status === 15 and the permissi
   assert.equal(canApproveOnClientsBehalf(1, true), false);
 });
 
-// ─── approvalSuccessToast (rescheduled / needs_scheduling / neither) ───────
+// ─── approvalSuccessToast (always success — the visit is always known) ────
 
-test('approvalSuccessToast: rescheduled true names the new date/slot and is a success toast', () => {
-  const t = approvalSuccessToast({ rescheduled: true, requested_date_time: '2026-09-25 10:00:00', needs_scheduling: false }, '25 Sep 2026, 10:00 AM (Morning)');
+test('approvalSuccessToast names the picked date and slot and is always a success toast', () => {
+  const t = approvalSuccessToast('25 Sep 2026', '10 AM - 11 AM');
   assert.equal(t.variant, 'success');
-  assert.match(t.message, /Rescheduled To 25 Sep 2026, 10:00 AM \(Morning\)/);
-});
-
-test('approvalSuccessToast: needs_scheduling true (no reschedule) is a warning toast naming the 7-day window', () => {
-  const t = approvalSuccessToast({ rescheduled: false, requested_date_time: null, needs_scheduling: true }, '');
-  assert.equal(t.variant, 'warning');
-  assert.match(t.message, /No Free Slot In The Next 7 Days/);
-  assert.match(t.message, /Flagged For Scheduling/);
-});
-
-test('approvalSuccessToast: neither flag set is a plain success toast', () => {
-  const t = approvalSuccessToast({ rescheduled: false, requested_date_time: null, needs_scheduling: false }, '');
-  assert.equal(t.variant, 'success');
-  assert.equal(t.message, 'Approved.');
-});
-
-test('approvalSuccessToast: rescheduled wins over needs_scheduling if a future backend ever sets both', () => {
-  const t = approvalSuccessToast({ rescheduled: true, requested_date_time: '2026-09-25 10:00:00', needs_scheduling: true }, 'X');
-  assert.match(t.message, /Rescheduled To X/);
+  assert.match(t.message, /Approved.*25 Sep 2026.*10 AM - 11 AM/);
 });
 
 // ─── wire contract: api.ts ──────────────────────────────────────────────
 
-test('api.ts posts to the exact contract endpoint with comment + files multipart fields', () => {
+test('api.ts posts to the exact contract endpoint with comment + files + visit/permission multipart fields', () => {
   assert.match(apiSrc, /\/admin\/jobs\/\$\{jobId\}\/client-approval-on-behalf/);
   const fnStart = apiSrc.indexOf('approveJobOnClientBehalf:');
   assert.ok(fnStart > -1, 'approveJobOnClientBehalf must be exported from api');
-  const fnSrc = apiSrc.slice(fnStart, fnStart + 500);
+  const fnSrc = apiSrc.slice(fnStart, fnStart + 800);
   assert.match(fnSrc, /fd\.append\('comment', comment\)/);
   assert.match(fnSrc, /fd\.append\('files', f\)/);
+  assert.match(fnSrc, /fd\.append\('visit_date_time', visitDateTime\)/);
+  assert.match(fnSrc, /fd\.append\('permission', permission\)/);
+  assert.match(fnSrc, /fd\.append\('permission_file', permissionFile\)/);
 });
 
 test("api.ts recognises 'ClientApprovalProof' as a job-document category and labels it", () => {
@@ -155,7 +177,12 @@ test("api.ts recognises 'ClientApprovalProof' as a job-document category and lab
   assert.match(apiSrc, /ClientApprovalProof: 'Client Approval Proof'/);
 });
 
-// ─── ClientApprovalOnBehalfModal — self-gate + shared header ───────────────
+test('the retired schedule/needs_scheduling response shape is gone from the api.ts contract', () => {
+  assert.ok(!/needs_scheduling/.test(apiSrc), 'needs_scheduling must not remain anywhere in api.ts');
+  assert.ok(!/schedule:\s*{/.test(apiSrc), 'the old schedule: {...} response block must be removed');
+});
+
+// ─── ClientApprovalOnBehalfModal — self-gate + shared header + new fields ──
 
 test('ClientApprovalOnBehalfModal self-gates on isJobMaterialReview, independent of the row action that opens it', () => {
   assert.ok(/export function ClientApprovalOnBehalfModal/.test(modalSrc));
@@ -171,6 +198,31 @@ test('ClientApprovalOnBehalfModal groups lines by quotation_no via the shared he
   assert.ok(/r\.state === 'approval_pending'/.test(modalSrc));
 });
 
+test('ClientApprovalOnBehalfModal fetches visit-slots and renders a Next Visit section', () => {
+  assert.match(modalSrc, /\/admin\/jobs\/\$\{jobId\}\/visit-slots/);
+  assert.match(modalSrc, /Next Visit/);
+});
+
+test('ClientApprovalOnBehalfModal renders all three Entry Permission choices', () => {
+  assert.match(modalSrc, /Upload Now/);
+  assert.match(modalSrc, /Upload Later/);
+  assert.match(modalSrc, /Not Required/);
+  assert.match(modalSrc, /The Client Can Upload It From The Client Dashboard/);
+});
+
+test('ClientApprovalOnBehalfModal clears the chosen slot and refetches on a 409', () => {
+  const idx = modalSrc.indexOf('e.status === 409');
+  assert.ok(idx > -1, 'must handle a 409 from the submit call');
+  const after = modalSrc.slice(idx, idx + 200);
+  assert.match(after, /setVisitHour\(null\)/);
+  assert.match(after, /refetchSlots\(\)/);
+});
+
+test('ClientApprovalOnBehalfModal has no leftover needs_scheduling / rescheduled plumbing', () => {
+  assert.ok(!/needs_scheduling/.test(modalSrc));
+  assert.ok(!/\.rescheduled\b/.test(modalSrc));
+});
+
 // ─── Row-action gating — identical on both job lists ───────────────────────
 
 for (const [label, src] of [['my-orders', myOrdersSrc], ['jobs (Manage Jobs)', jobsSrc]]) {
@@ -183,18 +235,15 @@ for (const [label, src] of [['my-orders', myOrdersSrc], ['jobs (Manage Jobs)', j
   });
 }
 
-// ─── Needs Scheduling chip — my-orders (both surfaces) + jobs list ─────────
+// ─── "Needs Scheduling" chip fully retired — my-orders, jobs, PendingToStartView ───
 
 for (const [label, src] of [
   ['my-orders (generic table)', myOrdersSrc],
   ['my-orders Pending to Start (PendingToStartView)', pendingStartSrc],
   ['jobs (Manage Jobs)', jobsSrc],
 ]) {
-  test(`${label}: Needs Scheduling chip renders on needs_scheduling===1 (Number()-normalised), warning tone`, () => {
-    const idx = src.indexOf('Number(j.needs_scheduling) === 1');
-    assert.ok(idx > -1, `${label} must gate a chip on Number(j.needs_scheduling) === 1`);
-    const after = src.slice(idx, idx + 300);
-    assert.ok(/tone="warning"/.test(after), `${label}'s chip must use the warning tone`);
-    assert.ok(/Needs Scheduling/.test(after), `${label} must render the visible "Needs Scheduling" text`);
+  test(`${label}: no needs_scheduling field or "Needs Scheduling" chip remains`, () => {
+    assert.ok(!/needs_scheduling/.test(src), `${label} must not reference needs_scheduling any more`);
+    assert.ok(!/Needs Scheduling/.test(src), `${label} must not render a "Needs Scheduling" chip any more`);
   });
 }
