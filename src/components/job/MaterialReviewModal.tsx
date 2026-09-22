@@ -56,6 +56,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { cn, formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { AddQuotationLineDialog, type QuotationRow } from './JobModal';
+import { groupByQuotationNo } from '@/lib/quotation-groups';
 
 type JobDetails = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -103,6 +104,11 @@ export function MaterialReviewModal({
     () => rows.filter((r) => String(r.type) === 'material' && r.state === 'review_pending'),
     [rows],
   );
+  // Owner amendment 2026-09-22: each "Send for Approval" is its own
+  // quotation — group the same way the Quotations tab does (one place:
+  // src/lib/quotation-groups.ts). Submit still sends ALL materialRows
+  // regardless of grouping — the 409 stale guard is unchanged.
+  const materialGroups = useMemo(() => groupByQuotationNo(materialRows), [materialRows]);
 
   const confirm = useConfirm();
   const [permissionRequired, setPermissionRequired] = useState(false);
@@ -269,48 +275,55 @@ export function MaterialReviewModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {materialRows.map((r) => {
-                    const id = Number(r.id);
-                    const st = lineState[id] ?? { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
-                    const amountInvalid = !st.rejected
-                      && (st.amount.trim() === '' || !Number.isFinite(Number(st.amount)) || Number(st.amount) < 0);
-                    const rateCardAmt = rateCardLineAmount(r);
-                    const quotedAmt = quotedLineAmount(r);
-                    // Ops sees at a glance where the technician quoted above
-                    // the rate card. No highlight when there is no rate card
-                    // to compare.
-                    const isOverRate = rateCardAmt != null && quotedAmt > rateCardAmt;
-                    return (
-                      <tr key={id}>
-                        <td className="!text-left">{String(r.name ?? '—')}</td>
-                        <td className="!text-right font-mono text-xs">{String(r.unit ?? '')}</td>
-                        <td className="!text-right font-mono text-xs">{rateCardAmt != null ? rateCardAmt.toFixed(2) : '—'}</td>
-                        <td className={cn('!text-right font-mono text-xs', isOverRate && 'bg-urgent-tint text-urgent-strong rounded px-1')}>
-                          {quotedAmt.toFixed(2)}
-                          {isOverRate && <span className="ml-1 font-semibold">(+₹{(quotedAmt - (rateCardAmt as number)).toFixed(2)})</span>}
-                        </td>
-                        <td className="!text-right">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={st.amount}
-                            onChange={(e) => setLine(id, { amount: e.target.value })}
-                            disabled={st.rejected}
-                            aria-invalid={amountInvalid}
-                            className={cn('font-mono text-xs h-8 w-28 ml-auto', amountInvalid && 'border-urgent')}
-                          />
-                        </td>
-                        <td className="!text-center">
-                          <Checkbox
-                            checked={st.rejected}
-                            onChange={(rejected) => setLine(id, { rejected })}
-                            label={`Reject ${String(r.name ?? 'line')}`}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {materialGroups.flatMap((g) => [
+                    <tr key={`grp-${g.quotationNo ?? 'draft'}`} className="bg-muted/30">
+                      <td colSpan={6} className="!text-left text-xs font-medium text-muted-foreground px-2 py-1.5">
+                        {g.quotationNo != null ? `Quotation ${g.quotationNo}` : 'Draft (Not Sent)'}
+                      </td>
+                    </tr>,
+                    ...g.rows.map((r) => {
+                      const id = Number(r.id);
+                      const st = lineState[id] ?? { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
+                      const amountInvalid = !st.rejected
+                        && (st.amount.trim() === '' || !Number.isFinite(Number(st.amount)) || Number(st.amount) < 0);
+                      const rateCardAmt = rateCardLineAmount(r);
+                      const quotedAmt = quotedLineAmount(r);
+                      // Ops sees at a glance where the technician quoted
+                      // above the rate card. No highlight when there is no
+                      // rate card to compare.
+                      const isOverRate = rateCardAmt != null && quotedAmt > rateCardAmt;
+                      return (
+                        <tr key={id}>
+                          <td className="!text-left">{String(r.name ?? '—')}</td>
+                          <td className="!text-right font-mono text-xs">{String(r.unit ?? '')}</td>
+                          <td className="!text-right font-mono text-xs">{rateCardAmt != null ? rateCardAmt.toFixed(2) : '—'}</td>
+                          <td className={cn('!text-right font-mono text-xs', isOverRate && 'bg-urgent-tint text-urgent-strong rounded px-1')}>
+                            {quotedAmt.toFixed(2)}
+                            {isOverRate && <span className="ml-1 font-semibold">(+₹{(quotedAmt - (rateCardAmt as number)).toFixed(2)})</span>}
+                          </td>
+                          <td className="!text-right">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={st.amount}
+                              onChange={(e) => setLine(id, { amount: e.target.value })}
+                              disabled={st.rejected}
+                              aria-invalid={amountInvalid}
+                              className={cn('font-mono text-xs h-8 w-28 ml-auto', amountInvalid && 'border-urgent')}
+                            />
+                          </td>
+                          <td className="!text-center">
+                            <Checkbox
+                              checked={st.rejected}
+                              onChange={(rejected) => setLine(id, { rejected })}
+                              label={`Reject ${String(r.name ?? 'line')}`}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    }),
+                  ])}
                 </tbody>
                 <tfoot>
                   <tr className="font-medium">
