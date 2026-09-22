@@ -34,7 +34,7 @@ import { MaterialDialog } from './MaterialDialog';
 import { BrandDialog } from './BrandDialog';
 import { DeleteReferencesDialog } from './DeleteReferencesDialog';
 import { RejectMaterialRequestDialog } from './RejectMaterialRequestDialog';
-import { ImportDialog } from './ImportDialog';
+import { ImportDialog } from '@/components/ui/import-dialog';
 import {
   MATERIAL_ACTIONS, BRAND_ACTIONS,
   type MaterialListItem, type MaterialListResponse,

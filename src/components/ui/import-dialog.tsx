@@ -1,15 +1,35 @@
 'use client';
 
 /*
- * Shared bulk-import dialog for both Materials and Brands: Download
- * Template → pick a file (auto-fires a preview) → review outcomes →
- * Download Error Report (blocked rows) → Import (commits the same file).
- * Parameterized by the caller so the one component covers both entities'
- * endpoints and preview-row shapes (see the contract's Materials vs
- * Brands import tables).
+ * Generalised bulk-import dialog: Download Template → pick a file (auto-fires
+ * a preview) → review outcomes → [Download Error Report] → Import/Confirm
+ * (commits the same file). Originally built for Settings → Manage Materials
+ * (Materials + Brands) and generalised (moved out of
+ * app/(authed)/settings/manage-materials/ImportDialog.tsx, no behaviour change
+ * for those two callers) to also serve the client Rate Cards tab's Services
+ * and Materials bulk-upload flows — see
+ * EasyFix_Backend/docs/superpowers/specs/2026-09-21-rate-card-bulk-upload-design.md.
+ *
+ * Parameterized by the caller so one component covers every entity's
+ * endpoints and preview-row shapes. Two axes differ across callers and are
+ * opt-in props rather than assumptions baked into the component:
+ *
+ *  - Outcome vocabulary: Materials/Brands use uppercase outcomes (NEW,
+ *    UPDATE, EXISTS, PRICE_PENDING, BLOCKED); the rate-card contract uses
+ *    lowercase (new, update, unchanged, blocked). Tone lookup and the
+ *    blocked check are case-insensitive so both work unmodified.
+ *  - Commit gating: Materials/Brands import commits row-by-row, so a file
+ *    with SOME blocked rows can still commit the rest (canCommit only
+ *    requires one non-blocked row — existing behaviour, unchanged).
+ *    Rate-card upload commit is one all-or-nothing transaction per the
+ *    contract, so `blockCommitOnAnyBlocked` disables Confirm while ANY row
+ *    is blocked. Same for `sortBlockedFirst`, which the rate-card contract
+ *    asks for but Materials/Brands never requested — default off.
+ *  - `errorsUrl` is optional: the rate-card contract has no error-report
+ *    export, so that button/action simply doesn't render without it.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, FileSpreadsheet, UploadCloud } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -20,20 +40,34 @@ import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
-import type { ImportRow } from './types';
 
-function outcomeTone(outcome: string): StatusChipTone {
-  switch (outcome) {
+export type ImportRow = {
+  row_number: number;
+  outcome: string;
+  errors?: string[];
+  /* Non-blocking notes (e.g. a Service Type Name that disagrees with its ID —
+     the ID wins). Shown so the operator learns what the server decided. */
+  warnings?: string[];
+  [key: string]: unknown;
+};
+
+export function isBlockedOutcome(outcome: string): boolean {
+  return outcome.toUpperCase() === 'BLOCKED';
+}
+
+export function outcomeTone(outcome: string): StatusChipTone {
+  switch (outcome.toUpperCase()) {
     case 'NEW': return 'success';
     case 'UPDATE': return 'info';
     case 'EXISTS': return 'neutral';
+    case 'UNCHANGED': return 'neutral';
     case 'PRICE_PENDING': return 'warning';
     case 'BLOCKED': return 'urgent';
     default: return 'neutral';
   }
 }
 
-export function ImportDialog<S extends Record<string, unknown>>({
+export function ImportDialog<S extends Record<string, unknown>, P extends Record<string, unknown> = Record<string, never>>({
   open,
   onClose,
   entityLabel,
@@ -45,24 +79,51 @@ export function ImportDialog<S extends Record<string, unknown>>({
   renderRowLabel,
   summaryStats,
   extraNotice,
+  renderPreview,
+  commitLabel = 'Import',
   onImported,
+  sortBlockedFirst = false,
+  blockCommitOnAnyBlocked = false,
 }: {
   open: boolean;
   onClose: () => void;
-  entityLabel: string; // "Material" | "Brand"
+  entityLabel: string; // "Material" | "Brand" | "Service Rate" | "Material Rate"
   templateUrl: string;
   templateFilename: string;
   previewUrl: string;
   commitUrl: string;
-  errorsUrl: string;
+  errorsUrl?: string;
   renderRowLabel: (row: ImportRow) => string;
   summaryStats: (summary: S) => Array<{ label: string; value: number; tone?: 'ok' | 'warn' | 'err' }>;
   extraNotice?: (summary: S) => React.ReactNode;
+  /*
+   * Opt-in custom preview body. When provided, it REPLACES the default
+   * stats-grid + row table (the "Import Complete"/"Preview Results" header
+   * and the Download Error Report button still render as before around it).
+   * `extra` is every field the preview response carries beyond `rows` and
+   * `summary` — e.g. the rate-card contract's compiled `materials[]` plan.
+   * Omitted by both existing callers (Manage Materials, Manage Brands), so
+   * their rendering is byte-identical to before this prop existed.
+   */
+  renderPreview?: (extra: P, ctx: { rows: ImportRow[]; summary: S; hasBlocked: boolean }) => React.ReactNode;
+  /*
+   * Label for the commit button (idle state only — the busy state still
+   * shows the phase-specific "Importing…"). Defaults to "Import", matching
+   * this dialog's behaviour before this prop existed.
+   */
+  commitLabel?: string;
   onImported: () => void;
+  /* Show blocked rows first in the preview table (rate-card contract; off by default). */
+  sortBlockedFirst?: boolean;
+  /* Disable Confirm while ANY row is blocked, not just when every row is (rate-card contract: one all-or-nothing transaction). */
+  blockCommitOnAnyBlocked?: boolean;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [rows, setRows] = useState<ImportRow[] | null>(null);
   const [summary, setSummary] = useState<S | null>(null);
+  // Whatever the preview response carries beyond `rows`/`summary` — only
+  // populated (and only meaningful) for callers that pass `renderPreview`.
+  const [previewExtra, setPreviewExtra] = useState<P | null>(null);
   const [phase, setPhase] = useState<'idle' | 'preview' | 'committed'>('idle');
   const [busy, setBusy] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
@@ -73,6 +134,7 @@ export function ImportDialog<S extends Record<string, unknown>>({
     setFile(null);
     setRows(null);
     setSummary(null);
+    setPreviewExtra(null);
     setPhase('idle');
     setError(null);
   }
@@ -101,9 +163,11 @@ export function ImportDialog<S extends Record<string, unknown>>({
     try {
       const fd = new FormData();
       fd.append('file', picked);
-      const res = await api.post<{ rows: ImportRow[]; summary: S }>(previewUrl, fd);
-      setRows(res.rows);
-      setSummary(res.summary);
+      const res = await api.post<{ rows: ImportRow[]; summary: S } & P>(previewUrl, fd);
+      const { rows: resRows, summary: resSummary, ...extra } = res;
+      setRows(resRows);
+      setSummary(resSummary);
+      setPreviewExtra(extra as unknown as P);
       setPhase('preview');
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Preview failed');
@@ -116,13 +180,14 @@ export function ImportDialog<S extends Record<string, unknown>>({
     setFile(picked);
     setRows(null);
     setSummary(null);
+    setPreviewExtra(null);
     setError(null);
     setPhase('idle');
     if (picked) void runPreview(picked);
   }
 
   async function downloadErrors() {
-    if (!file) return;
+    if (!file || !errorsUrl) return;
     setDownloadingErrors(true);
     setError(null);
     try {
@@ -173,8 +238,18 @@ export function ImportDialog<S extends Record<string, unknown>>({
     }
   }
 
-  const hasBlocked = !!rows?.some((r) => r.outcome === 'BLOCKED');
-  const canCommit = !!file && phase === 'preview' && !busy && !!rows?.some((r) => r.outcome !== 'BLOCKED');
+  const hasBlocked = !!rows?.some((r) => isBlockedOutcome(r.outcome));
+  const canCommit = !!file && phase === 'preview' && !busy
+    && (blockCommitOnAnyBlocked
+      ? !hasBlocked && !!rows?.length
+      : !!rows?.some((r) => !isBlockedOutcome(r.outcome)));
+
+  // Blocked-first display only — never mutates preview/commit payloads (the
+  // same `file` is always what's re-posted, sorting is presentation-only).
+  const displayRows = useMemo(() => {
+    if (!rows || !sortBlockedFirst) return rows;
+    return [...rows].sort((a, b) => Number(isBlockedOutcome(b.outcome)) - Number(isBlockedOutcome(a.outcome)));
+  }, [rows, sortBlockedFirst]);
 
   // Not a form with free-text input — a picked file is easy to re-pick, so
   // this closes plainly (still respecting an in-flight request) rather than
@@ -234,43 +309,54 @@ export function ImportDialog<S extends Record<string, unknown>>({
             </div>
           )}
 
-          {summary && rows && (
+          {summary && displayRows && (
             <div className="border rounded p-3 bg-muted/40 space-y-2 text-sm">
               <div className="flex items-center justify-between">
                 <div className="font-medium">{phase === 'committed' ? 'Import Complete' : 'Preview Results'}</div>
-                {hasBlocked && (
+                {errorsUrl && hasBlocked && (
                   <Button variant="outline" size="sm" onClick={downloadErrors} disabled={downloadingErrors}>
                     {downloadingErrors ? 'Preparing…' : 'Download Error Report'}
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-4 gap-2 text-center">
-                {summaryStats(summary).map((s) => (
-                  <div key={s.label} className="border rounded p-2 bg-background">
-                    <div className={`text-lg font-semibold ${s.tone === 'ok' ? 'text-success-strong' : s.tone === 'warn' ? 'text-warning-strong' : s.tone === 'err' ? 'text-urgent-strong' : ''}`}>
-                      {s.value}
-                    </div>
-                    <div className="text-xs text-muted-foreground">{s.label}</div>
+              {renderPreview ? (
+                renderPreview(previewExtra as P, { rows: displayRows, summary, hasBlocked })
+              ) : (
+                <>
+                  <div className="grid grid-cols-4 gap-2 text-center">
+                    {summaryStats(summary).map((s) => (
+                      <div key={s.label} className="border rounded p-2 bg-background">
+                        <div className={`text-lg font-semibold ${s.tone === 'ok' ? 'text-success-strong' : s.tone === 'warn' ? 'text-warning-strong' : s.tone === 'err' ? 'text-urgent-strong' : ''}`}>
+                          {s.value}
+                        </div>
+                        <div className="text-xs text-muted-foreground">{s.label}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              {extraNotice?.(summary)}
-              {rows.length > 0 && (
-                <div className="max-h-64 overflow-auto border rounded">
-                  <table className="data-table w-full text-xs">
-                    <thead><tr><th>Row</th><th>Name</th><th>Outcome</th><th>Errors</th></tr></thead>
-                    <tbody>
-                      {rows.slice(0, 200).map((r) => (
-                        <tr key={r.row_number}>
-                          <td className="!text-center">{r.row_number}</td>
-                          <td className="!text-left">{renderRowLabel(r)}</td>
-                          <td className="!text-center"><StatusChip tone={outcomeTone(r.outcome)} size="sm">{r.outcome}</StatusChip></td>
-                          <td className="!text-left text-muted-foreground">{r.errors?.join('; ') ?? ''}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                  {extraNotice?.(summary)}
+                  {displayRows.length > 0 && (
+                    <div className="max-h-64 overflow-auto border rounded">
+                      <table className="data-table w-full text-xs">
+                        <thead><tr><th>Row</th><th>Name</th><th>Outcome</th><th>Errors</th></tr></thead>
+                        <tbody>
+                          {displayRows.slice(0, 200).map((r) => (
+                            <tr key={r.row_number}>
+                              <td className="!text-center">{r.row_number}</td>
+                              <td className="!text-left">{renderRowLabel(r)}</td>
+                              <td className="!text-center"><StatusChip tone={outcomeTone(r.outcome)} size="sm">{r.outcome}</StatusChip></td>
+                              <td className="!text-left text-muted-foreground">
+                                {r.errors?.join('; ') ?? ''}
+                                {r.warnings && r.warnings.length > 0 && (
+                                  <span className="block text-warning-strong">{r.warnings.join('; ')}</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -278,7 +364,7 @@ export function ImportDialog<S extends Record<string, unknown>>({
         <div className="flex justify-end gap-2 pt-3">
           <CancelButton onCancel={handleClose} disabled={busy} />
           <Button onClick={commitImport} disabled={!canCommit}>
-            {busy && phase === 'preview' ? 'Importing…' : 'Import'}
+            {busy && phase === 'preview' ? 'Importing…' : commitLabel}
           </Button>
         </div>
       </DialogContent>

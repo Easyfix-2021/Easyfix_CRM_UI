@@ -1,10 +1,14 @@
 # Easyfix_CRM_UI — multi-stage production image
 #
-# Stage 1 (deps):    Install ALL deps (incl. devDeps — Tailwind, TS, Next).
-# Stage 1b (mirror): Unpack the technician-app web export into a
-#                    version-pinned public/technician-mirror/<version>/.
-#                    Degrades to a placeholder page when the export is
-#                    not in the build context — never fails the build.
+# Stage 1 (deps):       Install ALL deps (incl. devDeps — Tailwind, TS, Next).
+# Stage 1b (mirror):    Unpack the technician-app web export into a
+#                       version-pinned public/technician-mirror/<version>/.
+#                       Degrades to a placeholder page when the export is
+#                       not in the build context — never fails the build.
+# Stage 1c (shared-job): Unpack the shared-job web export (WhatsApp
+#                        delegation links) into the UNVERSIONED
+#                        public/public/shared-job/ — see that stage's own
+#                        comment for why unversioned. Same fail-soft rule.
 # Stage 2 (builder): Run `next build` with NEXT_PUBLIC_API_URL baked in.
 #                    Produces .next/standalone/ thanks to output: 'standalone'
 #                    in next.config.mjs.
@@ -72,7 +76,7 @@ COPY package.json mirror-app*/ ./incoming/
 RUN set -eu; \
     dest="/mirror/technician-mirror/${MIRROR_APP_VERSION}"; \
     mkdir -p "$dest"; \
-    tarball="$(find /mirror/incoming -maxdepth 1 \( -name '*.tar.gz' -o -name '*.tgz' \) | head -n1)"; \
+    tarball="$(find /mirror/incoming -maxdepth 1 \( -name 'technician-mirror-*.tar.gz' -o -name 'technician-mirror-*.tgz' \) | head -n1)"; \
     if [ -n "$tarball" ]; then \
       echo "-> unpacking mirror bundle: $tarball"; \
       tar -xzf "$tarball" -C "$dest"; \
@@ -94,6 +98,57 @@ RUN set -eu; \
       printf '%s' '<!doctype html><meta charset="utf-8"><title>Mirror bundle not installed</title><body style="margin:0;display:grid;place-items:center;height:100vh;font:14px system-ui,sans-serif;text-align:center;padding:24px"><p>Mirror bundle not installed.<br><small>No technician-app web export was present when this image was built.</small></p></body>' > "$dest/index.html"; \
     fi; \
     rm -rf /mirror/incoming; \
+    ls -la "$dest" | head -n 20
+
+# ── Stage 1c: Shared-job web bundle ──────────────────────────────────
+# Unpacks the technician app's Expo static web export for a SHARED (delegated)
+# job into public/public/shared-job/ — served at /public/shared-job/... so the
+# production ALB's allowlist (/public/*, /_next/*, /api/public/* — everything
+# else needs VPN) lets a customer/technician open the WhatsApp link with no
+# tunnel. See src/app/public/share/[code]/page.tsx for the short-link resolver
+# that redirects here.
+#
+# UNVERSIONED on purpose, unlike the technician-mirror stage above: a share
+# link is texted once and can sit unopened for days, so it must keep resolving
+# across redeploys without the link itself encoding a version. Every deploy
+# overwrites the same public/public/shared-job/ path rather than adding a new
+# versioned sibling.
+#
+# Same optional-source / two-hand-over-shapes / fail-soft rules as the mirror
+# stage (a tarball at mirror-app/shared-job-<version>.tar.gz, OR an already-
+# unpacked export tree) — see that stage's comments for why. No bundle is
+# committed yet, so this MUST still succeed and ship a placeholder page rather
+# than fail the whole CRM-UI build over a feature that hasn't shipped.
+FROM node:20-alpine AS shared-job
+WORKDIR /sharedjob
+
+COPY package.json mirror-app*/ ./incoming/
+
+RUN set -eu; \
+    dest="/sharedjob/shared-job"; \
+    mkdir -p "$dest"; \
+    tarball="$(find /sharedjob/incoming -maxdepth 1 \( -name 'shared-job-*.tar.gz' -o -name 'shared-job-*.tgz' \) | head -n1)"; \
+    if [ -n "$tarball" ]; then \
+      echo "-> unpacking shared-job bundle: $tarball"; \
+      tar -xzf "$tarball" -C "$dest"; \
+    else \
+      src="$(find /sharedjob/incoming -maxdepth 3 -name index.html | head -n1)"; \
+      if [ -n "$src" ]; then \
+        echo "-> copying unpacked shared-job export: $(dirname "$src")"; \
+        cp -R "$(dirname "$src")"/. "$dest"/; \
+      fi; \
+    fi; \
+    idx="$(find "$dest" -maxdepth 3 -name index.html | head -n1)"; \
+    if [ -n "$idx" ] && [ "$(dirname "$idx")" != "$dest" ]; then \
+      wrapper="$(dirname "$idx")"; \
+      mv "$wrapper"/* "$dest"/; \
+      rm -rf "$wrapper"; \
+    fi; \
+    if [ ! -f "$dest/index.html" ]; then \
+      echo "!! no shared-job bundle in the build context - installing the placeholder"; \
+      printf '%s' '<!doctype html><meta charset="utf-8"><title>Shared job bundle not installed</title><body style="margin:0;display:grid;place-items:center;height:100vh;font:14px system-ui,sans-serif;text-align:center;padding:24px"><p>Shared job bundle not installed.<br><small>No shared-job web export was present when this image was built.</small></p></body>' > "$dest/index.html"; \
+    fi; \
+    rm -rf /sharedjob/incoming; \
     ls -la "$dest" | head -n 20
 
 # ── Stage 2: Builder ─────────────────────────────────────────────────
@@ -122,6 +177,9 @@ COPY . .
 # `COPY --from=builder /app/public ./public`, so anything landing here
 # ships without touching the runner stage.
 COPY --from=mirror /mirror/technician-mirror ./public/technician-mirror
+
+# Fold the shared-job bundle in the same way, at its fixed unversioned path.
+COPY --from=shared-job /sharedjob/shared-job ./public/public/shared-job
 
 # Drop every mirror directory that is not the pinned version. Two things
 # this catches: an older bundle left behind by a cached layer, and a

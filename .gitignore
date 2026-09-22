@@ -36,3 +36,11 @@ next-env.d.ts
 # committing it is what lets a deploy produce a working mirror with no
 # cross-repo token. See the `mirror` stage in Dockerfile.
 /public/technician-mirror/
+
+# Shared-job web bundle — the UNPACKED copy only, same reasoning as the
+# technician-mirror block above. UNVERSIONED (unlike the mirror), so there is
+# no per-version subdirectory to ignore: public/public/shared-job/ is always
+# the one working tree, produced locally by unpacking
+# mirror-app/shared-job-<version>.tar.gz. That tarball IS committed once it
+# exists — none is committed yet. See the `shared-job` stage in Dockerfile.
+/public/public/shared-job/

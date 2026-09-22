@@ -16,20 +16,29 @@
  */
 
 export function SectionShell({
-  title, note, children,
+  title, note, actions, children,
 }: {
   title: string;
   note?: string;
+  /*
+   * Optional right-aligned controls for the title row (e.g. Rate Cards'
+   * combined Download menu). Additive and opt-in — sections that don't
+   * pass it render exactly as before.
+   */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-3">
       <div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-base font-semibold">{title}</h3>
-          <span className="text-xs uppercase tracking-wide rounded bg-muted text-muted-foreground px-1.5 py-0.5">
-            Brand-Level
-          </span>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-base font-semibold">{title}</h3>
+            <span className="text-xs uppercase tracking-wide rounded bg-muted text-muted-foreground px-1.5 py-0.5">
+              Brand-Level
+            </span>
+          </div>
+          {actions}
         </div>
         {note && <p className="text-sm text-muted-foreground mt-0.5">{note}</p>}
       </div>

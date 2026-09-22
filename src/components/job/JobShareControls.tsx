@@ -37,6 +37,7 @@ import { formatApiError } from '@/lib/api-errors';
 import { shareChip, isShareLive, shareDelegateLabel, type JobShare } from '@/lib/job-share';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -76,31 +77,33 @@ export type ReleaseShareButtonProps = {
   onReleased?: () => void;
 };
 
-export function ReleaseShareButton({ jobId, share, allowed, onReleased }: ReleaseShareButtonProps) {
+/*
+ * useRevokeShare — the confirm→POST→toast sequence behind BOTH the JobModal
+ * footer button and the jobs-list row icon, so the route/copy/error-handling
+ * live in exactly one place. Self-gates on `isShareLive`; `revoke` is a no-op
+ * (and `live` is null) when the share isn't live, so a caller can wire the
+ * returned `busy`/`revoke` straight into a button without repeating the guard.
+ */
+function useRevokeShare(jobId: number, share: JobShare | null | undefined, onReleased?: () => void) {
   const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
+  const live = isShareLive(share) ? (share as JobShare) : null;
+  const who = live ? shareDelegateLabel(live) : '';
+  const owner = live ? ((live.sharedByName || '').trim() || 'the assigned technician') : '';
 
-  /* Self-gate on both the permission AND a live share: releasing a share that
-   * already ended is a no-op the operator would still have to think about. */
-  if (!allowed || !isShareLive(share)) return null;
-
-  const live = share as JobShare;
-  const who = shareDelegateLabel(live);
-  const owner = (live.sharedByName || '').trim() || 'the assigned technician';
-
-  async function onClick() {
-    if (busy) return;
+  async function revoke() {
+    if (!live || busy) return;
     /* Confirm FIRST — this yanks a job out from under a technician who may be
      * standing in the customer's hallway. The copy names both people and says
      * what happens to the work already done. */
     const ok = await confirm({
-      title: 'Release This Share?',
+      title: 'Revoke This Share?',
       description:
         `Order #${jobId} is currently being worked by ${who} on behalf of ${owner}. `
-        + `Releasing ends the delegation immediately: ${who} loses access and the job goes `
+        + `Revoking ends the delegation immediately: ${who} loses access and the job goes `
         + `back to ${owner}. Any work ${who} has not saved is lost. This cannot be undone — `
         + 'the technician would have to share the job again.',
-      confirmLabel: 'Release Share',
+      confirmLabel: 'Revoke Share',
       cancelLabel: 'Cancel',
       variant: 'destructive',
       icon: <Unlock className="h-4 w-4" />,
@@ -110,7 +113,7 @@ export function ReleaseShareButton({ jobId, share, allowed, onReleased }: Releas
     setBusy(true);
     try {
       await api.post(SHARE_RELEASE_PATH(jobId), {});
-      showToast({ variant: 'success', message: `Share released. Order #${jobId} is back with ${owner}.` });
+      showToast({ variant: 'success', message: `Share revoked. Order #${jobId} is back with ${owner}.` });
       onReleased?.();
     } catch (e) {
       /* A 409 here is INFORMATION ("already released", "no live share") that
@@ -118,16 +121,48 @@ export function ReleaseShareButton({ jobId, share, allowed, onReleased }: Releas
        * flattening every failure into a generic message. */
       showToast({
         variant: 'error',
-        message: formatApiError(e, { fallback: 'Could not release the share.' }),
+        message: formatApiError(e, { fallback: 'Could not revoke the share.' }),
       });
     } finally {
       setBusy(false);
     }
   }
 
+  return { live, who, busy, revoke };
+}
+
+export function ReleaseShareButton({ jobId, share, allowed, onReleased }: ReleaseShareButtonProps) {
+  const { live, who, busy, revoke } = useRevokeShare(jobId, share, onReleased);
+
+  /* Self-gate on both the permission AND a live share: revoking a share that
+   * already ended is a no-op the operator would still have to think about. */
+  if (!allowed || !live) return null;
+
   return (
-    <Button variant="destructive" disabled={busy} onClick={onClick} title={`Force-end the delegation to ${who}`}>
-      Release Share
+    <Button variant="destructive" disabled={busy} onClick={revoke} title={`Force-end the delegation to ${who}`}>
+      Revoke Share
     </Button>
+  );
+}
+
+/*
+ * RevokeShareIconButton — the same escape hatch as ReleaseShareButton above,
+ * rendered as a row-action icon (see icon-button.tsx) for the Pending to
+ * Close list. Same self-gate, same confirm/toast copy, same route — only the
+ * trigger control differs, via the shared useRevokeShare hook.
+ */
+export function RevokeShareIconButton({ jobId, share, allowed, onReleased }: ReleaseShareButtonProps) {
+  const { live, who, busy, revoke } = useRevokeShare(jobId, share, onReleased);
+
+  if (!allowed || !live) return null;
+
+  return (
+    <IconButton
+      icon={Unlock}
+      intent="danger"
+      busy={busy}
+      label={`Revoke Share — force-end the delegation to ${who}`}
+      onClick={revoke}
+    />
   );
 }

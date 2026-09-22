@@ -158,8 +158,8 @@ test('ids are deduped and combined across stages', () => {
   assert.deepEqual(combo.statuses.slice().sort((a, b) => a - b), [2, 3, 5, 9, 20]);
 });
 
-test('the stage list matches legacy: 11 stages, ordered by label', () => {
-  assert.equal(B.JOB_STAGE_OPTIONS.length, 11);
+test('the stage list matches legacy: 12 stages, ordered by label', () => {
+  assert.equal(B.JOB_STAGE_OPTIONS.length, 12);
   const labels = B.JOB_STAGE_OPTIONS.map((o) => o.label);
   assert.deepEqual(labels, labels.slice().sort(), 'legacy sorts by display name');
 });
@@ -170,7 +170,17 @@ test('stage options are scoped to the chosen bucket', () => {
   // Cancelled = [6,7] → Cancelled + Enquiry.
   assert.deepEqual(values(B.jobStageOptionsFor('cancelled')).sort(), ['cancel', 'enquiry']);
   // No bucket → everything.
-  assert.equal(B.jobStageOptionsFor('').length, 11);
+  assert.equal(B.jobStageOptionsFor('').length, 12);
+});
+
+test('the material stage resolves to status 16 AND 15 (2026-09-21, material request flow v2)', () => {
+  // Widened alongside job-stages.ts's 'pending-material' — CRM may add
+  // material at Review Pending (16) or Approval Pending (15) and needs both
+  // visible from this one stage. 'approval' still resolves to [15] alone.
+  assert.deepEqual(B.resolveStageFilter(['material']), { statuses: [16, 15], assigned: undefined });
+  assert.deepEqual(B.resolveStageFilter(['approval']), { statuses: [15], assigned: undefined });
+  // 16 and 15 both live in the 'open' bucket, so 'material' must survive that scoping.
+  assert.ok(B.jobStageOptionsFor('open').map((o) => o.value).includes('material'));
 });
 
 /*
