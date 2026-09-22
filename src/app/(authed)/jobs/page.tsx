@@ -11,7 +11,7 @@ import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, CalendarCheck, MapPin, RefreshCw,
-  ClipboardCheck, ClipboardList,
+  ClipboardCheck, ClipboardList, CheckCircle2,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -44,6 +44,8 @@ import {
 import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
+import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
+import { canApproveOnClientsBehalf } from '@/lib/client-approval';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PS_OFFER_STATE_OPTIONS } from '@/components/job/PendingSchedulingFilters';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
@@ -1239,6 +1241,10 @@ export default function JobsPage() {
   // state on purpose: the Eye/View icon must keep opening the plain,
   // unmodified job viewer.
   const [materialReviewJobId, setMaterialReviewJobId] = useState<number | null>(null);
+  // Approve on Client's Behalf modal state — same pattern as
+  // materialReviewJobId above, a separate workspace from the plain
+  // View/Eye icon.
+  const [clientApprovalJobId, setClientApprovalJobId] = useState<number | null>(null);
   // Instant client-side search filter over the current (server-sorted,
   // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
   // itself is now server-side (see below), so this only narrows what's already
@@ -2365,6 +2371,20 @@ export default function JobsPage() {
                         />
                       )}
                       {/*
+                        * Approve on Client's Behalf (status 15 — Approval
+                        * Pending). Gated like Material Review above but on
+                        * job_status 15, not 16/sub-status 2 — see
+                        * canApproveOnClientsBehalf in lib/client-approval.ts.
+                        */}
+                      {canApproveOnClientsBehalf(j.job_status, canJob.isJobMaterialReview) && (
+                        <IconButton
+                          icon={CheckCircle2}
+                          intent="primary"
+                          label="Approve on Client's Behalf"
+                          onClick={() => setClientApprovalJobId(j.job_id)}
+                        />
+                      )}
+                      {/*
                         * Resend Customer PIN — last icon in the row, matching
                         * /my-orders and PendingToStartView.
                         *
@@ -2477,6 +2497,16 @@ export default function JobsPage() {
         jobId={materialReviewJobId}
         onClose={() => setMaterialReviewJobId(null)}
         onReviewed={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
+      />
+
+      {/* Approve on Client's Behalf — moves the job off status 15 to
+          job_status 1 (Scheduled, with the visit the operator just picked),
+          so refresh the list AND its tab counts the same way. */}
+      <ClientApprovalOnBehalfModal
+        open={clientApprovalJobId != null}
+        jobId={clientApprovalJobId}
+        onClose={() => setClientApprovalJobId(null)}
+        onApproved={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
       {canJob.isTransferJobOwnership && (

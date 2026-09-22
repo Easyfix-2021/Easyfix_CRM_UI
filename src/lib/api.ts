@@ -199,6 +199,45 @@ export const api = {
   deleteJobDocument: (jobId: number, imageId: number) =>
     request<{ image_id: number }>(`/admin/jobs/${jobId}/documents/${imageId}`, { method: 'DELETE' }),
 
+  /*
+   * Approve on Client's Behalf — ops-initiated approval of the material
+   * quote at status 15 (Approval Pending) when the client confirmed by
+   * phone/WhatsApp rather than through their own portal. Multipart: a
+   * required comment (10..1000 chars, validated client-side too — see
+   * lib/client-approval.ts), 1..5 proof files (audio/image/pdf, <=10MB
+   * each) stored as job documents under category 'ClientApprovalProof',
+   * PLUS (owner change, 2026-09-22) the operator's own picks — there is no
+   * auto-computed next visit any more:
+   *   visit_date_time  'YYYY-MM-DD HH:00:00' IST wall clock, one of the free
+   *                    hours GET /admin/jobs/:id/visit-slots offered.
+   *   permission       'now' | 'later' | 'not_required'.
+   *   permission_file  required iff permission === 'now'; pdf/jpeg/png/webp/
+   *                    heic, <=10MB.
+   * 409 "That slot was just booked — pick another" when the chosen hour lost
+   * the race; 409 "This job is not waiting for client approval" when
+   * job_status != 15 or isJobMaterialReview is missing. See
+   * ClientApprovalOnBehalfModal.
+   */
+  approveJobOnClientBehalf: (
+    jobId: number,
+    comment: string,
+    files: File[],
+    visitDateTime: string,
+    permission: 'now' | 'later' | 'not_required',
+    permissionFile: File | null,
+  ) => {
+    const fd = new FormData();
+    fd.append('comment', comment);
+    for (const f of files) fd.append('files', f);
+    fd.append('visit_date_time', visitDateTime);
+    fd.append('permission', permission);
+    if (permissionFile) fd.append('permission_file', permissionFile);
+    return request<ClientApprovalOnBehalfResult>(`/admin/jobs/${jobId}/client-approval-on-behalf`, {
+      method: 'POST',
+      body: fd,
+    });
+  },
+
   // Per-service client-billing approval ("Approve Tx" data action).
   setJobServiceApproval: (jobId: number, jobServiceId: number, approvalByClient: 0 | 1) =>
     request<{ job_service_id: number }>(
@@ -269,7 +308,41 @@ export type JobChargeService = {
 
 /** A Job Sheet / Purchase Order attachment. `url` is the (authenticated) fetch source. */
 export type JobDocument = { image_id: number; url: string };
-export type JobDocumentCategory = 'JobSheet' | 'PurchaseOrder';
+export type JobDocumentCategory = 'JobSheet' | 'PurchaseOrder' | 'ClientApprovalProof';
+
+/*
+ * Single source of truth for job-document category labels — wherever a
+ * category code is shown to an operator, read it from here rather than
+ * re-typing the string (JobDocumentsCard's two widget titles included).
+ * 'ClientApprovalProof' is written by POST
+ * /admin/jobs/:id/client-approval-on-behalf (see approveJobOnClientBehalf
+ * below); nothing currently LISTS that category back, but the label lives
+ * here so the first surface that does never has to invent one.
+ */
+export const JOB_DOCUMENT_CATEGORY_LABEL: Record<JobDocumentCategory, string> = {
+  JobSheet: 'Job Sheet',
+  PurchaseOrder: 'Purchase Order',
+  ClientApprovalProof: 'Client Approval Proof',
+};
+
+/*
+ * Response shape for approveJobOnClientBehalf — see its doc comment above.
+ * The operator's own picks come straight back: `visit_date_time` is the
+ * booked slot verbatim, and `permission.choice` echoes what was submitted.
+ * `permission.request_id` is set only for 'later' (the client-facing upload
+ * request the Client Dashboard will show); null for 'now' / 'not_required'.
+ */
+export type ClientApprovalOnBehalfResult = {
+  job_status: number;
+  visit_date_time: string;
+  permission: {
+    choice: 'now' | 'later' | 'not_required';
+    request_id: number | string | null;
+  };
+  /** Post-commit step failures — the approval itself succeeded. */
+  schedule_error?: string | null;
+  permission_error?: string | null;
+};
 
 export type JobChargesResponse = {
   materials: JobCharge[];

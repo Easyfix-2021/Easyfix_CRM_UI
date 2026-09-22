@@ -7,7 +7,7 @@ import {
 import {
   Search, Eye,
   CalendarClock, CalendarCheck,
-  RefreshCw, MapPin, ClipboardCheck, ClipboardList,
+  RefreshCw, MapPin, ClipboardCheck, ClipboardList, CheckCircle2,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -27,6 +27,8 @@ import {
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
+import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
+import { canApproveOnClientsBehalf } from '@/lib/client-approval';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
@@ -705,6 +707,10 @@ export default function MyOrdersPage() {
   // was clicked (null = closed). Separate from `modal`/JobModal on purpose:
   // the Eye/View icon must keep opening the plain, unmodified job viewer.
   const [materialReviewJobId, setMaterialReviewJobId] = useState<number | null>(null);
+  // Approve on Client's Behalf modal state — same pattern as
+  // materialReviewJobId above, a separate workspace from the plain
+  // View/Eye icon.
+  const [clientApprovalJobId, setClientApprovalJobId] = useState<number | null>(null);
   // Client-side search over the currently-loaded page (shared filterJobRows
   // in lib/job-tabs.ts — see there for the column/label/date matching rationale).
   //
@@ -1342,6 +1348,23 @@ export default function MyOrdersPage() {
                         </button>
                       )}
                       {/*
+                        * Approve on Client's Behalf (status 15 — Approval
+                        * Pending). Gated like Material Review above but on
+                        * job_status 15, not 16/sub-status 2 — see
+                        * canApproveOnClientsBehalf in lib/client-approval.ts.
+                        */}
+                      {canApproveOnClientsBehalf(j.job_status, canJob.isJobMaterialReview) && (
+                        <button
+                          type="button"
+                          onClick={() => setClientApprovalJobId(j.job_id)}
+                          className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline"
+                          title="Approve on Client's Behalf"
+                          aria-label="Approve on Client's Behalf"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {/*
                         * Live Technician Location (📍). Shown for the two
                         * buckets where a technician is already assigned and
                         * actively heading to / on the job:
@@ -1539,6 +1562,20 @@ export default function MyOrdersPage() {
         jobId={materialReviewJobId}
         onClose={() => setMaterialReviewJobId(null)}
         onReviewed={() => {
+          cacheRef.current.clear();
+          load(false, true);
+          setCountsReload((n) => n + 1);
+        }}
+      />
+
+      {/* Approve on Client's Behalf — moves the job off status 15 to
+          job_status 1 (Scheduled, with the visit the operator just picked),
+          so refresh the list AND its tab count the same way. */}
+      <ClientApprovalOnBehalfModal
+        open={clientApprovalJobId != null}
+        jobId={clientApprovalJobId}
+        onClose={() => setClientApprovalJobId(null)}
+        onApproved={() => {
           cacheRef.current.clear();
           load(false, true);
           setCountsReload((n) => n + 1);
