@@ -339,6 +339,9 @@ export type ClientApprovalOnBehalfResult = {
     choice: 'now' | 'later' | 'not_required';
     request_id: number | string | null;
   };
+  /** Post-commit step failures — the approval itself succeeded. */
+  schedule_error?: string | null;
+  permission_error?: string | null;
 };
 
 export type JobChargesResponse = {

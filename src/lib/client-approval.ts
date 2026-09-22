@@ -149,6 +149,15 @@ export function buildVisitDateTime(date: string, hour: number): string {
 export function approvalSuccessToast(
   formattedDate: string,
   slotLabel: string,
-): { variant: 'success'; message: string } {
+  result?: { schedule_error?: string | null; permission_error?: string | null } | null,
+): { variant: 'success' | 'warning'; message: string } {
+  // The approval commits first; the reschedule and the permission request run
+  // AFTER it and report failures here instead of failing the approval. Never
+  // show plain success over one of them — that is a silent partial failure.
+  const problems = [
+    result?.schedule_error ? `the visit could not be scheduled (${result.schedule_error}) — reschedule it from Schedule & Assign` : null,
+    result?.permission_error ? `the entry permission could not be saved (${result.permission_error})` : null,
+  ].filter(Boolean);
+  if (problems.length) return { variant: 'warning', message: `Approved, but ${problems.join('; and ')}.` };
   return { variant: 'success', message: `Approved — Visit On ${formattedDate}, ${slotLabel}.` };
 }

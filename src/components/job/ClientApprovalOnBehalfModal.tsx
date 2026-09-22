@@ -220,14 +220,14 @@ export function ClientApprovalOnBehalfModal({
     if (!ok) return;
     setBusy(true);
     try {
-      // Response just echoes back what was submitted (job_status,
-      // visit_date_time, permission) — nothing further to read; the toast
-      // below is built from the operator's own picks already in hand.
-      await api.approveJobOnClientBehalf(
+      // The toast is built from the operator's own picks, but the RESULT still
+      // matters: schedule_error / permission_error report a post-commit step
+      // that failed after the approval itself succeeded.
+      const result = await api.approveJobOnClientBehalf(
         jobId, comment.trim(), files, visitDateTime, permission,
         permission === 'now' ? permissionFile : null,
       );
-      const toast = approvalSuccessToast(fullDateLabel(visitDate), hourLabel(visitHour));
+      const toast = approvalSuccessToast(fullDateLabel(visitDate), hourLabel(visitHour), result);
       showToast({ variant: toast.variant, message: toast.message });
       // Any surface listing this job (Manage Jobs, My Orders, dashboard
       // counts) reads a status/schedule that just changed.

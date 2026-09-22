@@ -152,6 +152,16 @@ test('canApproveOnClientsBehalf gates on BOTH job_status === 15 and the permissi
 
 // ─── approvalSuccessToast (always success — the visit is always known) ────
 
+test('approvalSuccessToast turns a post-commit schedule/permission failure into a WARNING naming it', () => {
+  const s = approvalSuccessToast('25 Sep 2026', '10 AM - 11 AM', { schedule_error: 'slot taken', permission_error: null });
+  assert.equal(s.variant, 'warning');
+  assert.match(s.message, /could not be scheduled \(slot taken\)/);
+  const p = approvalSuccessToast('25 Sep 2026', '10 AM - 11 AM', { schedule_error: null, permission_error: 'S3 down' });
+  assert.equal(p.variant, 'warning');
+  assert.match(p.message, /entry permission could not be saved \(S3 down\)/);
+  assert.equal(approvalSuccessToast('25 Sep 2026', '10 AM - 11 AM', { schedule_error: null, permission_error: null }).variant, 'success');
+});
+
 test('approvalSuccessToast names the picked date and slot and is always a success toast', () => {
   const t = approvalSuccessToast('25 Sep 2026', '10 AM - 11 AM');
   assert.equal(t.variant, 'success');
