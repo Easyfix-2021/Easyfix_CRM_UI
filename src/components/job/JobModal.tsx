@@ -49,6 +49,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
+import { groupByQuotationNo } from '@/lib/quotation-groups';
 // Material-request-flow-v2 (2026-09-21) — Add Material dialog reuses the
 // same master-material search + brand-groups shape Settings > Manage
 // Materials already established, rather than a second material picker.
@@ -1697,6 +1698,13 @@ export type QuotationRow = Record<string, unknown> & {
    */
   state?: string | null;
   client_status?: number | string | null;
+  /*
+   * Owner amendment 2026-09-22: each technician "Send for Approval" creates
+   * a separate quotation (lines sharing one sent_on). 1..n ascending, null
+   * for drafts (sent_on IS NULL). Absent entirely on an older backend —
+   * `groupByQuotationNo` treats that the same as null.
+   */
+  quotation_no?: number | string | null;
 };
 
 /*
@@ -2467,6 +2475,9 @@ function JobQuotationsTab({ jobId, jobStatus, onJobChanged }: {
    */
   const lineTotal = (r: QuotationRow) => (Number(r.unit_price) || 0) * (Number(r.unit ?? r.quantity) || 0);
   const total = rows.reduce((sum, r) => sum + lineTotal(r), 0);
+  // Owner amendment 2026-09-22: one quotation per "Send for Approval" — group
+  // rows by quotation_no (ascending), drafts (null/undefined) last.
+  const groups = useMemo(() => groupByQuotationNo(rows), [rows]);
 
   return (
     <div className="space-y-3">
@@ -2502,57 +2513,69 @@ function JobQuotationsTab({ jobId, jobStatus, onJobChanged }: {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
-                const type = String(r.type ?? r.quotation_type ?? '—');
-                const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
-                const stateMeta = quotationLineStateMeta(r);
-                // Approve/Reject only on review_pending — a draft hasn't been
-                // sent yet, and every other state is already actioned (spec:
-                // "PATCH /admin/quotations/:id/approve|reject — only on
-                // review_pending lines, else 409").
-                const isReviewPending = r.state === 'review_pending';
-                const busy = busyId === Number(r.id);
-                return (
-                  <tr key={r.id}>
-                    <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
-                    <td className="!text-left text-xs">
-                      <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
+              {(() => {
+                let counter = 0;
+                return groups.flatMap((g) => [
+                  <tr key={`grp-${g.quotationNo ?? 'draft'}`} className="bg-muted/30">
+                    <td colSpan={9} className="!text-left text-xs font-medium text-muted-foreground px-2 py-1.5">
+                      {g.quotationNo != null ? `Quotation ${g.quotationNo}` : 'Draft (Not Sent)'}
                     </td>
-                    <td className="!text-left">{name}</td>
-                    <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
-                    <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
-                    <td className="!text-right font-mono text-xs">
-                      {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
-                    </td>
-                    <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
-                    <td className="!text-center text-xs">
-                      <span className={cn('inline-block rounded px-1.5 py-0.5', stateMeta.toneCls)}>{stateMeta.label}</span>
-                    </td>
-                    <td className="!text-right">
-                      {isReviewPending && can.isQuotationApprove ? (
-                        <div className="inline-flex gap-1 justify-end">
-                          <button
-                            type="button"
-                            className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
-                            onClick={() => approveRow(r)}
-                            disabled={busy}
-                          >
-                            {busy ? '…' : 'Approve'}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
-                            onClick={() => rejectRow(r)}
-                            disabled={busy}
-                          >
-                            {busy ? '…' : 'Reject'}
-                          </button>
-                        </div>
-                      ) : <span className="text-xs text-muted-foreground">—</span>}
-                    </td>
-                  </tr>
-                );
-              })}
+                  </tr>,
+                  ...g.rows.map((r) => {
+                    counter += 1;
+                    const i = counter;
+                    const type = String(r.type ?? r.quotation_type ?? '—');
+                    const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
+                    const stateMeta = quotationLineStateMeta(r);
+                    // Approve/Reject only on review_pending — a draft hasn't
+                    // been sent yet, and every other state is already
+                    // actioned (spec: "PATCH /admin/quotations/:id/approve|
+                    // reject — only on review_pending lines, else 409").
+                    const isReviewPending = r.state === 'review_pending';
+                    const busy = busyId === Number(r.id);
+                    return (
+                      <tr key={r.id}>
+                        <td className="!text-center text-xs text-muted-foreground">{i}</td>
+                        <td className="!text-left text-xs">
+                          <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
+                        </td>
+                        <td className="!text-left">{name}</td>
+                        <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
+                        <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
+                        <td className="!text-right font-mono text-xs">
+                          {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
+                        </td>
+                        <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
+                        <td className="!text-center text-xs">
+                          <span className={cn('inline-block rounded px-1.5 py-0.5', stateMeta.toneCls)}>{stateMeta.label}</span>
+                        </td>
+                        <td className="!text-right">
+                          {isReviewPending && can.isQuotationApprove ? (
+                            <div className="inline-flex gap-1 justify-end">
+                              <button
+                                type="button"
+                                className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
+                                onClick={() => approveRow(r)}
+                                disabled={busy}
+                              >
+                                {busy ? '…' : 'Approve'}
+                              </button>
+                              <button
+                                type="button"
+                                className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
+                                onClick={() => rejectRow(r)}
+                                disabled={busy}
+                              >
+                                {busy ? '…' : 'Reject'}
+                              </button>
+                            </div>
+                          ) : <span className="text-xs text-muted-foreground">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  }),
+                ]);
+              })()}
             </tbody>
           </table>
         </div>
