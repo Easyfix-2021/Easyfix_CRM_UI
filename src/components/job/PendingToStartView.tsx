@@ -160,6 +160,13 @@ type PendingJobRow = JobAgeFields & AppRequestFields & {
    * /jobs and JobModal.
    */
   share?: JobShare | null;
+  /*
+   * Set by POST /admin/jobs/:id/client-approval-on-behalf when its
+   * auto-reschedule found no free slot in the next 7 days — the job still
+   * moves to job_status 1 (Scheduled, this view's whole bucket) but needs a
+   * human to pick a slot. TINYINT(1) — may arrive as boolean.
+   */
+  needs_scheduling?: number | boolean | null;
   // Family reference shared across sibling jobs of a multi-category booking —
   // already on the shared /admin/jobs LIST projection; surfaced so ops can spot
   // linked orders. Optional so older API responses don't break the type narrow.
@@ -667,6 +674,19 @@ function PendingStartTable({
                         /my-orders, /jobs and JobModal. Renders nothing unless a
                         share is LIVE, so no surrounding guard. */}
                     <ShareChip share={j.share} className="ml-1" />
+                    {/*
+                     * Needs Scheduling — set by the Approve on Client's
+                     * Behalf endpoint (status 15) when its auto-reschedule
+                     * found no free slot in the next 7 days. Every row in
+                     * this bucket is already job_status 1, so nothing else
+                     * here flags it; ops needs this to know it still wants a
+                     * manual Schedule & Assign.
+                     */}
+                    {Number(j.needs_scheduling) === 1 && (
+                      <StatusChip tone="warning" size="sm" className="ml-1" title="Approved with no free slot in the next 7 days — needs a manual Schedule & Assign">
+                        Needs Scheduling
+                      </StatusChip>
+                    )}
                   </td>
                   {/*
                    * Client SPOC — client_spoc IS the SPOC's mobile (a raw string

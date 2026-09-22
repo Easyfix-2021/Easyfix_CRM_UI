@@ -5,7 +5,7 @@ import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job
 import {
   Search, Eye,
   CalendarClock, CalendarCheck,
-  RefreshCw, MapPin, ClipboardCheck, ClipboardList,
+  RefreshCw, MapPin, ClipboardCheck, ClipboardList, CheckCircle2,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -25,6 +25,8 @@ import {
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
+import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
+import { canApproveOnClientsBehalf } from '@/lib/client-approval';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
@@ -133,6 +135,14 @@ type JobRow = JobAgeFields & {
    * Optional: absent on a BE deploy predating the share feature → no chip.
    */
   share?: JobShare | null;
+  /*
+   * Set by POST /admin/jobs/:id/client-approval-on-behalf when its
+   * auto-reschedule found no free slot in the next 7 days — the job still
+   * moves to job_status 1 (Scheduled) but needs a human to pick a slot.
+   * TINYINT(1) — may arrive as boolean, so render sites Number() it like
+   * every other flag column on this projection.
+   */
+  needs_scheduling?: number | boolean | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -657,6 +667,10 @@ export default function MyOrdersPage() {
   // was clicked (null = closed). Separate from `modal`/JobModal on purpose:
   // the Eye/View icon must keep opening the plain, unmodified job viewer.
   const [materialReviewJobId, setMaterialReviewJobId] = useState<number | null>(null);
+  // Approve on Client's Behalf modal state — same pattern as
+  // materialReviewJobId above, a separate workspace from the plain
+  // View/Eye icon.
+  const [clientApprovalJobId, setClientApprovalJobId] = useState<number | null>(null);
   // Client-side search over the currently-loaded page (shared filterJobRows
   // in lib/job-tabs.ts — see there for the column/label/date matching rationale).
   //
@@ -1205,6 +1219,19 @@ export default function MyOrdersPage() {
                         Renders nothing unless a share is LIVE. */}
                     <ShareChip share={j.share} className="ml-1" />
                     {/*
+                     * Needs Scheduling — set by the Approve on Client's
+                     * Behalf endpoint when its auto-reschedule found no free
+                     * slot in the next 7 days. The job already moved to
+                     * job_status 1 (Scheduled) so nothing else on the row
+                     * flags it; ops needs this to know it still wants a
+                     * manual Schedule & Assign.
+                     */}
+                    {Number(j.needs_scheduling) === 1 && (
+                      <StatusChip tone="warning" size="sm" className="ml-1" title="Approved with no free slot in the next 7 days — needs a manual Schedule & Assign">
+                        Needs Scheduling
+                      </StatusChip>
+                    )}
+                    {/*
                      * "No Services" pill — shared anomaly indicator for
                      * BOOKED jobs with zero active services (counts only
                      * job_service_status=1 server-side). Same chip
@@ -1288,6 +1315,23 @@ export default function MyOrdersPage() {
                           aria-label="Material Review"
                         >
                           <ClipboardList className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {/*
+                        * Approve on Client's Behalf (status 15 — Approval
+                        * Pending). Gated like Material Review above but on
+                        * job_status 15, not 16/sub-status 2 — see
+                        * canApproveOnClientsBehalf in lib/client-approval.ts.
+                        */}
+                      {canApproveOnClientsBehalf(j.job_status, canJob.isJobMaterialReview) && (
+                        <button
+                          type="button"
+                          onClick={() => setClientApprovalJobId(j.job_id)}
+                          className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline"
+                          title="Approve on Client's Behalf"
+                          aria-label="Approve on Client's Behalf"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
                         </button>
                       )}
                       {/*
@@ -1488,6 +1532,21 @@ export default function MyOrdersPage() {
         jobId={materialReviewJobId}
         onClose={() => setMaterialReviewJobId(null)}
         onReviewed={() => {
+          cacheRef.current.clear();
+          load(false, true);
+          setCountsReload((n) => n + 1);
+        }}
+      />
+
+      {/* Approve on Client's Behalf — moves the job off status 15 to
+          job_status 1 (Scheduled, possibly needing manual scheduling — see
+          the Needs Scheduling chip above), so refresh the list AND its tab
+          count the same way. */}
+      <ClientApprovalOnBehalfModal
+        open={clientApprovalJobId != null}
+        jobId={clientApprovalJobId}
+        onClose={() => setClientApprovalJobId(null)}
+        onApproved={() => {
           cacheRef.current.clear();
           load(false, true);
           setCountsReload((n) => n + 1);

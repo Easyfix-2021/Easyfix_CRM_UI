@@ -199,6 +199,26 @@ export const api = {
   deleteJobDocument: (jobId: number, imageId: number) =>
     request<{ image_id: number }>(`/admin/jobs/${jobId}/documents/${imageId}`, { method: 'DELETE' }),
 
+  /*
+   * Approve on Client's Behalf — ops-initiated approval of the material
+   * quote at status 15 (Approval Pending) when the client confirmed by
+   * phone/WhatsApp rather than through their own portal. Multipart: a
+   * required comment (10..1000 chars, validated client-side too — see
+   * lib/client-approval.ts) plus 1..5 proof files (audio/image/pdf, <=10MB
+   * each), stored as job documents under category 'ClientApprovalProof'.
+   * 409 "This job is not waiting for client approval" when job_status != 15
+   * or isJobMaterialReview is missing. See ClientApprovalOnBehalfModal.
+   */
+  approveJobOnClientBehalf: (jobId: number, comment: string, files: File[]) => {
+    const fd = new FormData();
+    fd.append('comment', comment);
+    for (const f of files) fd.append('files', f);
+    return request<ClientApprovalOnBehalfResult>(`/admin/jobs/${jobId}/client-approval-on-behalf`, {
+      method: 'POST',
+      body: fd,
+    });
+  },
+
   // Per-service client-billing approval ("Approve Tx" data action).
   setJobServiceApproval: (jobId: number, jobServiceId: number, approvalByClient: 0 | 1) =>
     request<{ job_service_id: number }>(
@@ -269,7 +289,40 @@ export type JobChargeService = {
 
 /** A Job Sheet / Purchase Order attachment. `url` is the (authenticated) fetch source. */
 export type JobDocument = { image_id: number; url: string };
-export type JobDocumentCategory = 'JobSheet' | 'PurchaseOrder';
+export type JobDocumentCategory = 'JobSheet' | 'PurchaseOrder' | 'ClientApprovalProof';
+
+/*
+ * Single source of truth for job-document category labels — wherever a
+ * category code is shown to an operator, read it from here rather than
+ * re-typing the string (JobDocumentsCard's two widget titles included).
+ * 'ClientApprovalProof' is written by POST
+ * /admin/jobs/:id/client-approval-on-behalf (see approveJobOnClientBehalf
+ * below); nothing currently LISTS that category back, but the label lives
+ * here so the first surface that does never has to invent one.
+ */
+export const JOB_DOCUMENT_CATEGORY_LABEL: Record<JobDocumentCategory, string> = {
+  JobSheet: 'Job Sheet',
+  PurchaseOrder: 'Purchase Order',
+  ClientApprovalProof: 'Client Approval Proof',
+};
+
+/*
+ * Response shape for approveJobOnClientBehalf — see its doc comment above.
+ * `schedule` reports what the auto-reschedule attempt did: `rescheduled`
+ * true means `requested_date_time` is the new appointment; otherwise
+ * `needs_scheduling` true means no free slot was found in the next 7 days
+ * and the job (already moved to job_status 1) needs a manual Schedule &
+ * Assign. Both false is the third, quieter case: approved with no schedule
+ * change needed at all.
+ */
+export type ClientApprovalOnBehalfResult = {
+  job_status: number;
+  schedule: {
+    rescheduled: boolean;
+    requested_date_time: string | null;
+    needs_scheduling: boolean;
+  };
+};
 
 export type JobChargesResponse = {
   materials: JobCharge[];
