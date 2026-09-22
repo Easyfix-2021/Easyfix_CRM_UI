@@ -50,6 +50,8 @@ export type StateRow = {
   state_name: string;
   state_code: string | null;
   country_id: number | null;
+  /* 'State' | 'UT' — NULL until migrations/2026-09-21-state-zonal-manager.sql runs, or for a non-official name. */
+  state_type: 'State' | 'UT' | null;
   state_status: number;
   state_user: number | null;
   manager_name: string | null;
@@ -69,6 +71,9 @@ export type StateRow = {
 export type StatesResponse = { items: StateRow[]; total: number; manager_columns: boolean };
 
 const NO_MANAGER = 'none';
+
+// Official classification — 28 States and 8 Union Territories.
+const TYPE_LABEL: Record<'State' | 'UT', string> = { State: 'State', UT: 'Union Territory' };
 
 const managerLeft = (s: StateRow) => s.state_user != null && Number(s.manager_status) !== 1;
 const needsAttention = (s: StateRow) => s.state_user == null || managerLeft(s);
@@ -147,7 +152,8 @@ export function StatesTab({
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return states.filter((s) =>
-      (!q || s.state_name.toLowerCase().includes(q) || (s.state_code ?? '').toLowerCase().includes(q)) &&
+      (!q || s.state_name.toLowerCase().includes(q) || (s.state_code ?? '').toLowerCase().includes(q)
+        || (s.state_type != null && TYPE_LABEL[s.state_type].toLowerCase().includes(q))) &&
       (!managerFilter || (managerFilter === NO_MANAGER ? s.state_user == null : String(s.state_user) === managerFilter)));
   }, [states, search, managerFilter]);
 
@@ -420,8 +426,11 @@ export function StatesTab({
                       )}
                       <td className="!text-center font-mono text-xs">{s.state_id}</td>
                       <td className="!text-left">
-                        <span className="font-medium">{s.state_name}</span>
-                        {s.state_code && <span className="ml-1.5 text-xs text-muted-foreground">{s.state_code}</span>}
+                        <div className="leading-tight">
+                          <span className="font-medium">{s.state_name}</span>
+                          {s.state_code && <span className="ml-1.5 text-xs text-muted-foreground">{s.state_code}</span>}
+                        </div>
+                        {s.state_type && <div className="text-xs text-muted-foreground">{TYPE_LABEL[s.state_type]}</div>}
                       </td>
                       <td className="!text-left">
                         {s.state_user == null ? (
@@ -476,7 +485,13 @@ export function StatesTab({
             </table>
           </div>
           <div className="px-3 py-2 border-t flex justify-between flex-wrap gap-2 text-xs text-muted-foreground">
-            <span>Showing {visible.length} of {states.length} states{states.some(needsAttention) ? '' : ' · every state has an active manager'}</span>
+            <span>
+              Showing {visible.length} of {states.length}
+              {states.some((s) => s.state_type) && (
+                <> · {states.filter((s) => s.state_type === 'State').length} States, {states.filter((s) => s.state_type === 'UT').length} Union Territories</>
+              )}
+              {states.some(needsAttention) ? '' : ' · every state has an active manager'}
+            </span>
             <span>One manager per state · one manager can hold many states</span>
           </div>
         </CardContent>
@@ -485,6 +500,7 @@ export function StatesTab({
       <StateFormDialog
         open={addOpen || editing != null}
         editing={editing}
+        typesEnabled={states.some((s) => s.state_type != null)}
         userOptions={userOptions}
         userName={userName}
         onClose={() => { setEditing(null); onAddOpenChange(false); }}
@@ -511,10 +527,12 @@ function SyncChip({ s }: { s: StateRow }) {
 
 // ─── Add / Edit state ────────────────────────────────────────────────
 function StateFormDialog({
-  open, editing, userOptions, userName, onClose, onSaved,
+  open, editing, typesEnabled, userOptions, userName, onClose, onSaved,
 }: {
   open: boolean;
   editing: StateRow | null;
+  /* False until the migration adds state_type — the field is hidden rather than sent and refused. */
+  typesEnabled: boolean;
   userOptions: Array<{ value: string | number; label: string }>;
   userName: (id: number) => string;
   onClose: () => void;
@@ -524,6 +542,8 @@ function StateFormDialog({
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [manager, setManager] = useState('');
+  // null = not classified yet (a row the migration could not type by its official name).
+  const [stateType, setStateType] = useState<'State' | 'UT' | null>('State');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -532,6 +552,8 @@ function StateFormDialog({
     setName(editing?.state_name ?? '');
     setCode(editing?.state_code ?? '');
     setManager(editing?.state_user != null ? String(editing.state_user) : '');
+    // A new state defaults to State; an existing row shows what it has — never a guess.
+    setStateType(editing ? editing.state_type : 'State');
     setError(null);
   }, [open, editing]);
 
@@ -542,6 +564,7 @@ function StateFormDialog({
     setError(null);
     if (!name.trim()) { setError('State name is required'); return; }
     if (!manager) { setError('Pick a zonal manager — a state can\'t be saved without one'); return; }
+    if (typesEnabled && stateType == null) { setError('Choose State or Union Territory'); return; }
     setSubmitting(true);
     try {
       if (isEdit) {
@@ -551,6 +574,7 @@ function StateFormDialog({
         if (name.trim() !== editing!.state_name) body.state_name = name.trim();
         if ((code.trim() || null) !== (editing!.state_code || null)) body.state_code = code.trim() || null;
         if (managerChanged) body.state_user = Number(manager);
+        if (typesEnabled && stateType != null && stateType !== editing!.state_type) body.state_type = stateType;
         if (Object.keys(body).length === 0) { onClose(); return; }
         const r = await api.patch<{ cities_updated: number }>(`/admin/states/${editing!.state_id}`, body);
         showToast({
@@ -560,7 +584,12 @@ function StateFormDialog({
             : `${name.trim()} saved`,
         });
       } else {
-        await api.post('/admin/states', { state_name: name.trim(), state_code: code.trim() || null, state_user: Number(manager) });
+        await api.post('/admin/states', {
+          state_name: name.trim(),
+          state_code: code.trim() || null,
+          state_user: Number(manager),
+          ...(typesEnabled && stateType != null ? { state_type: stateType } : {}),
+        });
         showToast({ variant: 'success', message: `${name.trim()} added with ${userName(Number(manager))}` });
       }
       onSaved();
@@ -588,6 +617,20 @@ function StateFormDialog({
               <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 10))} placeholder="UP" className="font-mono" />
             </div>
           </div>
+
+          {typesEnabled && (
+            <div>
+              <Label className="block mb-1" required>Type</Label>
+              <div className="flex gap-4 text-sm" role="radiogroup" aria-label="State or Union Territory">
+                {(['State', 'UT'] as const).map((t) => (
+                  <label key={t} className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="state-type" checked={stateType === t} onChange={() => setStateType(t)} />
+                    {TYPE_LABEL[t]}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <Label className="block mb-1" required>Zonal Manager</Label>
