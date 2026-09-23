@@ -60,7 +60,10 @@ type BucketKey = LinkKey | WaitKey;
 type Counts = {
   period: string;
   links: Record<'sent' | LinkKey, number>;
+  /* Every OPEN order in the bucket, whatever day its link went out. */
   open: Record<LinkKey, number>;
+  /* The same three narrowed to the period's links — only "closed" reads this. */
+  period_open?: Record<LinkKey, number>;
   waiting: Record<WaitKey, { today: number; old: number }>;
 };
 type Resp = { items: ComponentProps<typeof UnconfirmedJobsTable>['rows']; total: number };
@@ -155,6 +158,21 @@ export function BookingQueueView({
 
   const c = counts.data;
   const sent = c?.links.sent ?? 0;
+  /*
+   * "closed" = of the PERIOD'S links, the ones already dealt with. Derived from
+   * the period subset, never from the all-time open count — subtracting a
+   * whole-board number from a one-day number produces a negative that reads as
+   * a bug. Clamped at 0 against an older backend that sends no period_open.
+   */
+  const openTotal = c
+    ? c.open.response_received + c.open.no_response + c.open.delivery_failed
+      + c.waiting.new.today + c.waiting.new.old
+      + c.waiting.no_link_needed.today + c.waiting.no_link_needed.old
+    : 0;
+  function closedIn(k: LinkKey) {
+    if (!c) return undefined;
+    return Math.max(0, c.links[k] - (c.period_open?.[k] ?? c.links[k]));
+  }
 
   if (counts.error) {
     return (
@@ -171,8 +189,13 @@ export function BookingQueueView({
           are "waiting now" counts, which a date window would misdescribe. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-muted-foreground">
-          Links sent {PERIODS.find((p) => p.key === period)?.label.toLowerCase()}:{' '}
-          <span className="text-sm font-semibold text-foreground">{counts.data ? sent : '—'}</span>
+          {/* The tiles add up to this, which is the number the tab header shows
+              — say so, so a wrong total is visible rather than inferred. */}
+          Open orders:{' '}
+          <span className="text-sm font-semibold text-foreground">{c ? openTotal : '—'}</span>
+          <span className="ml-2 font-normal">
+            · links sent {PERIODS.find((p) => p.key === period)?.label.toLowerCase()}: {c ? sent : '—'}
+          </span>
         </span>
         <div className="ml-auto flex overflow-hidden rounded-lg border border-border">
           {PERIODS.map((p) => (
@@ -199,6 +222,7 @@ export function BookingQueueView({
         <LinkTile
           label="Response received" tone="info"
           value={c?.links.response_received} sent={sent} open={c?.open.response_received}
+          closed={closedIn('response_received')}
           openLabel="waiting to attach SKU"
           selected={bucket === 'response_received'}
           onClick={() => { setBucket('response_received'); setPage(0); }}
@@ -213,6 +237,7 @@ export function BookingQueueView({
         <LinkTile
           label="No response" tone="warning"
           value={c?.links.no_response} sent={sent} open={c?.open.no_response}
+          closed={closedIn('no_response')}
           openLabel="still to call"
           selected={bucket === 'no_response'}
           onClick={() => { setBucket('no_response'); setPage(0); }}
@@ -220,6 +245,7 @@ export function BookingQueueView({
         <LinkTile
           label="Delivery failed — call, no resend" tone="danger"
           value={c?.links.delivery_failed} sent={sent} open={c?.open.delivery_failed}
+          closed={closedIn('delivery_failed')}
           openLabel="to call"
           selected={bucket === 'delivery_failed'}
           onClick={() => { setBucket('delivery_failed'); setPage(0); }}
@@ -297,31 +323,44 @@ function tileClass(selected: boolean, tone?: string) {
   ].join(' ');
 }
 
-/** A tile whose number describes what happened to the links sent. */
+/*
+ * A link tile. TWO numbers, and which one is the HEADLINE matters.
+ *
+ * The headline is the WORK: every open order in this bucket, whatever day its
+ * link went out. That is what the grid below lists, and the five headlines add
+ * up to the tab total — the check that catches a bucket quietly claiming
+ * nobody. The first cut made the period funnel the headline and the work a
+ * subset of it, which on the real book read 0 / 0 across every tile while 133
+ * open orders sat in No response from older links: the page accounted for 13
+ * of 149 orders and looked finished.
+ *
+ * The funnel is still here, underneath, because it is how ops measures the day
+ * — but it is labelled as the period's links so it cannot be read as the queue.
+ */
 function LinkTile({
-  label, tone, value, sent, open, openLabel, selected, onClick,
+  label, tone, value, sent, open, closed, openLabel, selected, onClick,
 }: {
   label: string; tone: string; value?: number; sent: number;
-  open?: number; openLabel: string; selected: boolean; onClick: () => void;
+  open?: number; closed?: number; openLabel: string; selected: boolean; onClick: () => void;
 }) {
-  const loaded = value !== undefined;
+  const loaded = open !== undefined;
   return (
     <button type="button" onClick={onClick} className={tileClass(selected, tone)}>
       {/* An em dash until the count arrives: a 0 that means "not loaded yet" is
           indistinguishable from a 0 that means "none", and on this page that
           difference is the whole point. */}
-      <div className="text-2xl font-semibold leading-none">
-        {loaded ? value : '—'}
-        {loaded && <span className="text-sm font-semibold opacity-65"> / {sent}</span>}
-      </div>
+      <div className="text-2xl font-semibold leading-none">{loaded ? open : '—'}</div>
       <div className="mt-1.5 text-xs font-semibold">{label}</div>
       {loaded && (
+        <div className="mt-1 text-xs opacity-80">{openLabel}</div>
+      )}
+      {loaded && sent > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-semibold text-background">
-            {open ?? 0} {openLabel}
+            {value ?? 0} of {sent} links
           </span>
           <span className="rounded-full border border-current/20 bg-card/70 px-2 py-0.5 text-xs font-semibold">
-            {Math.max(0, (value ?? 0) - (open ?? 0))} closed by team
+            {closed ?? 0} closed
           </span>
         </div>
       )}
