@@ -28,7 +28,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { FileSpreadsheet, Plus, Pencil, XCircle, MoreVertical, Download, Upload as UploadIcon, UserCog, Loader2 } from 'lucide-react';
+import { FileSpreadsheet, Plus, Pencil, XCircle, MoreVertical, Download, Upload as UploadIcon, UserCog, Loader2, Copy } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
@@ -64,6 +64,8 @@ type ReportListItem = {
   hasChart: boolean;
   restricted: boolean;
   shareEnabled: boolean;
+  /* Present only for rows this user may edit — the BE withholds it otherwise. */
+  shareToken: string | null;
   current: Upload | null;
   canEdit: boolean;
   canTransferOwner: boolean;
@@ -143,6 +145,15 @@ export default function CustomReportsListPage() {
     }
   }
 
+  /* Same URL shape and toasts as the report page's Copy Link. */
+  function copyLink(r: ReportListItem) {
+    if (!r.shareToken) return;
+    const url = `${window.location.origin}/public/report/${r.shareToken}`;
+    navigator.clipboard.writeText(url)
+      .then(() => showToast({ variant: 'success', message: 'Link copied.' }))
+      .catch(() => showToast({ variant: 'error', message: 'Could not copy the link.' }));
+  }
+
   const closeDialog = () => setDialog(null);
   const afterChange = () => { setDialog(null); refetch(); };
 
@@ -191,9 +202,24 @@ export default function CustomReportsListPage() {
                   </td>
                   <td className="!text-right">{r.current ? r.current.rowCount.toLocaleString('en-IN') : '—'}</td>
                   <td className="!text-left whitespace-nowrap">
-                    {r.shareEnabled
-                      ? <StatusChip tone="success" size="sm">Public Link</StatusChip>
-                      : <span className="text-muted-foreground">Not Enabled</span>}
+                    {/* The chip is the copy affordance when this user holds the
+                        token; a viewer without it still sees that a link exists.
+                        Enabling/regenerating stays on the report page. */}
+                    {!r.shareEnabled ? (
+                      <span className="text-muted-foreground">Not Enabled</span>
+                    ) : r.shareToken ? (
+                      <button
+                        type="button"
+                        onClick={() => copyLink(r)}
+                        title="Copy Public Link"
+                        className="inline-flex items-center gap-1 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <StatusChip tone="success" size="sm">Public Link</StatusChip>
+                        <Copy className="size-3.5 text-muted-foreground" />
+                      </button>
+                    ) : (
+                      <StatusChip tone="success" size="sm">Public Link</StatusChip>
+                    )}
                   </td>
                   <td className="!text-left">
                     <div className="flex flex-wrap gap-1">
