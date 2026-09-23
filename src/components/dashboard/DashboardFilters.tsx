@@ -8,7 +8,15 @@ import { useFetch } from '@/lib/hooks';
 /*
  * ── THE DASHBOARD FILTER BAR (2026-09-23) ─────────────────────────────────
  *
- * Four filters — Client, City, Project Manager, Zonal Manager — sitting under
+ * 2026-09-23, later the same day: Project Manager gave way to Vertical, per
+ * ops. Still FOUR controls and still one row — a swap, not an addition, because
+ * a fifth wraps and pushes the attention tiles under the fold.
+ *
+ * The backend keeps accepting `projectManagerId` (the predicate and its tests
+ * are still there), so restoring the control is a one-line change here rather
+ * than another backend round trip.
+ *
+ * Four filters — Client, City, Vertical, Zonal Manager — sitting under
  * the Notice Board and driving BOTH rows of /dashboard: the eight funnel cards
  * and the six "Orders Needing Immediate Attention" tiles.
  *
@@ -45,12 +53,12 @@ import { useFetch } from '@/lib/hooks';
 export type DashFilters = {
   clientId: number[];
   cityId: number[];
-  projectManagerId: number[];
+  verticalId: number[];
   zonalManagerId: number[];
 };
 
 export const EMPTY_DASH_FILTERS: DashFilters = {
-  clientId: [], cityId: [], projectManagerId: [], zonalManagerId: [],
+  clientId: [], cityId: [], verticalId: [], zonalManagerId: [],
 };
 
 /*
@@ -61,7 +69,10 @@ export const EMPTY_DASH_FILTERS: DashFilters = {
 const PARAM: Record<keyof DashFilters, string> = {
   clientId: 'dfClient',
   cityId: 'dfCity',
-  projectManagerId: 'dfPm',
+  // `dfVertical`, not a reused `dfPm` — a bookmark from the Project Manager
+  // build must not come back as a vertical selection. An unknown key is simply
+  // ignored by readDashFilterParams, which is the right failure.
+  verticalId: 'dfVertical',
   zonalManagerId: 'dfZm',
 };
 
@@ -126,14 +137,15 @@ export function DashboardFilters({
 }) {
   /*
    * Manager options are NOT in useLookup, so they are fetched here — the same
-   * two endpoints and the same `userType=1` (Primary SPOC) the QuickSight
-   * reports use, narrowed by the client selection so picking a client prunes
-   * the manager lists to the ones who actually own its work.
+   * endpoint the QuickSight reports use, narrowed by the client selection so
+   * picking a client prunes the list to the managers who actually own its work.
+   * Verticals need no fetch here — QuickSightFilterBar reads them from
+   * useLookup, which every CRM page already loads on mount.
    *
-   * Both endpoints are gated on the `admin` ROLE GROUP, not the Admin role —
+   * The endpoint is gated on the `admin` ROLE GROUP, not the Admin role —
    * and Project Manager (role 13) and Zonal Field Team (role 12) are both in
    * that group (services/role.service.js ROLE_ID_TO_GROUP). So the managers
-   * this bar exists for can load their own dropdowns.
+   * this bar exists for can load their own dropdown.
    */
   const clientScopeQs = useMemo(() => {
     const qs = new URLSearchParams();
@@ -144,17 +156,10 @@ export function DashboardFilters({
   const zmRes = useFetch<ManagerLite[]>(
     clientScopeQs ? `/shared/lookup/zonal-managers?${clientScopeQs}` : '/shared/lookup/zonal-managers',
   );
-  const pmRes = useFetch<ManagerLite[]>(
-    `/shared/lookup/project-managers?userType=1${clientScopeQs ? `&${clientScopeQs}` : ''}`,
-  );
 
   const zonalManagerOptions = useMemo<SearchOption[]>(
     () => (zmRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
     [zmRes.data],
-  );
-  const projectManagerOptions = useMemo<SearchOption[]>(
-    () => (pmRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
-    [pmRes.data],
   );
 
   /*
@@ -174,13 +179,6 @@ export function DashboardFilters({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zmRes.data, zonalManagerOptions]);
 
-  useEffect(() => {
-    if (!pmRes.data) return;
-    const valid = new Set(projectManagerOptions.map((o) => Number(o.value)));
-    const next = value.projectManagerId.filter((v) => valid.has(Number(v)));
-    if (next.length !== value.projectManagerId.length) onChange({ ...value, projectManagerId: next });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pmRes.data, projectManagerOptions]);
 
   const anySet = dashAnyFilterSet(value);
 
@@ -197,18 +195,17 @@ export function DashboardFilters({
     <div className="flex flex-wrap items-end gap-3">
       <QuickSightFilterBar
         className="min-w-0 flex-1 lg:grid-cols-4"
-        show={{ clients: true, cities: true, zonalManagers: true, projectManagers: true }}
+        show={{ clients: true, cities: true, verticals: true, zonalManagers: true }}
         disabled={disabled}
         clients={value.clientId}
         onClientsChange={(v) => onChange({ ...value, clientId: asNumbers(v) })}
         cities={value.cityId}
         onCitiesChange={(v) => onChange({ ...value, cityId: asNumbers(v) })}
+        verticals={value.verticalId}
+        onVerticalsChange={(v) => onChange({ ...value, verticalId: asNumbers(v) })}
         zonalManagers={value.zonalManagerId}
         onZonalManagersChange={(v) => onChange({ ...value, zonalManagerId: asNumbers(v) })}
         zonalManagerOptions={zonalManagerOptions}
-        projectManagers={value.projectManagerId}
-        onProjectManagersChange={(v) => onChange({ ...value, projectManagerId: asNumbers(v) })}
-        projectManagerOptions={projectManagerOptions}
       />
 
       {/*
