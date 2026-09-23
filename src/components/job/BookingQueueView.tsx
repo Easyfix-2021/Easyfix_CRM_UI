@@ -55,13 +55,21 @@ import { UnconfirmedJobsTable } from './UnconfirmedJobsTable';
 
 type LinkKey = 'response_received' | 'no_response' | 'delivery_failed';
 type WaitKey = 'new' | 'no_link_needed';
-type BucketKey = LinkKey | WaitKey;
+/*
+ * The three answers a link can produce. They are grid filters as well as
+ * counts, so clicking one narrows the rows below — the backend accepts them
+ * through the same `bucket=` parameter the tiles use.
+ */
+type ResponseKind = 'ready' | 'reschedule' | 'cancel';
+type BucketKey = LinkKey | WaitKey | `response_${ResponseKind}`;
 
 type Counts = {
   period: string;
   links: Record<'sent' | LinkKey, number>;
   /* Every OPEN order in the bucket, whatever day its link went out. */
   open: Record<LinkKey, number>;
+  /* What the customers who answered asked for. Sums to open.response_received. */
+  response_breakdown?: Record<ResponseKind, number>;
   /* The same three narrowed to the period's links — only "closed" reads this. */
   period_open?: Record<LinkKey, number>;
   waiting: Record<WaitKey, { today: number; old: number }>;
@@ -223,9 +231,22 @@ export function BookingQueueView({
           label="Response received" tone="info"
           value={c?.links.response_received} sent={sent} open={c?.open.response_received}
           closed={closedIn('response_received')}
-          openLabel="waiting to attach SKU"
-          selected={bucket === 'response_received'}
+          openLabel="the customer answered"
+          selected={bucket.startsWith('response')}
           onClick={() => { setBucket('response_received'); setPage(0); }}
+          /*
+           * The three kinds of answer, each its own filter. An answer is not
+           * one thing: "book me an SKU", "move my date" and "cancel it" need
+           * different work from different people, and a single number of 3
+           * hides which. Each pill narrows the grid to exactly its own count.
+           */
+          split={RESPONSE_KINDS.map((k) => ({
+            key: k,
+            label: RESPONSE_LABEL[k],
+            n: c?.response_breakdown?.[k],
+            on: bucket === `response_${k}`,
+            onPick: () => { setBucket(`response_${k}`); setPage(0); },
+          }))}
         />
         {/* PARKED, not dropped. Ops has still to define the blocker list, and a
             missing tile would read as "already built and empty". */}
@@ -297,12 +318,22 @@ export function BookingQueueView({
   );
 }
 
+const RESPONSE_KINDS: ResponseKind[] = ['ready', 'reschedule', 'cancel'];
+const RESPONSE_LABEL: Record<ResponseKind, string> = {
+  ready: 'Ready for SKU',
+  reschedule: 'Reschedule',
+  cancel: 'Cancel',
+};
+
 const TILE_LABEL: Record<BucketKey, string> = {
   new: 'New — waiting for link',
   no_link_needed: 'No link needed — calling',
   response_received: 'Response received',
   no_response: 'No response',
   delivery_failed: 'Delivery failed',
+  response_ready: 'Response received · ready for SKU',
+  response_reschedule: 'Response received · reschedule asked',
+  response_cancel: 'Response received · cancel asked',
 };
 
 /*
@@ -337,11 +368,14 @@ function tileClass(selected: boolean, tone?: string) {
  * The funnel is still here, underneath, because it is how ops measures the day
  * — but it is labelled as the period's links so it cannot be read as the queue.
  */
+type SplitPill = { key: string; label: string; n?: number; on: boolean; onPick: () => void };
+
 function LinkTile({
-  label, tone, value, sent, open, closed, openLabel, selected, onClick,
+  label, tone, value, sent, open, closed, openLabel, selected, onClick, split,
 }: {
   label: string; tone: string; value?: number; sent: number;
-  open?: number; closed?: number; openLabel: string; selected: boolean; onClick: () => void;
+  open?: number; closed?: number; openLabel: string; selected: boolean;
+  onClick: () => void; split?: SplitPill[];
 }) {
   const loaded = open !== undefined;
   return (
@@ -353,6 +387,32 @@ function LinkTile({
       <div className="mt-1.5 text-xs font-semibold">{label}</div>
       {loaded && (
         <div className="mt-1 text-xs opacity-80">{openLabel}</div>
+      )}
+      {loaded && split && (
+        /*
+         * Nested buttons are invalid HTML, so these are spans with a button
+         * role — the tile itself is the outer button. stopPropagation keeps a
+         * pill click from also re-selecting the whole tile and throwing away
+         * the narrower filter the operator just asked for.
+         */
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {split.map((sp) => (
+            <span
+              key={sp.key}
+              role="button"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); sp.onPick(); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); sp.onPick(); }
+              }}
+              className={`cursor-pointer rounded-full px-2 py-0.5 text-xs font-semibold ${
+                sp.on ? 'bg-foreground text-background' : 'border border-current/20 bg-card/70'
+              }`}
+            >
+              {sp.label} {sp.n ?? 0}
+            </span>
+          ))}
+        </div>
       )}
       {loaded && sent > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
