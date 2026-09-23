@@ -65,20 +65,32 @@ type BucketKey = LinkKey | WaitKey | `response_${ResponseKind}`;
 
 type Counts = {
   period: string;
-  links: Record<'sent' | LinkKey, number>;
-  /* Every OPEN order in the bucket, whatever day its link went out. */
-  open: Record<LinkKey, number>;
+  /* Every open order in the date range, one bucket each. Sums to `total`. */
+  open: Record<LinkKey | WaitKey, number>;
+  total: number;
   /* What the customers who answered asked for. Sums to open.response_received. */
   response_breakdown?: Record<ResponseKind, number>;
-  /* The same three narrowed to the period's links — only "closed" reads this. */
-  period_open?: Record<LinkKey, number>;
   waiting: Record<WaitKey, { today: number; old: number }>;
+  /* How many of these orders have had a link go out. Context, not a bucket. */
+  links_sent: number;
+  period_start: string | null;
+  period_end: string | null;
 };
+
 type Resp = { items: ComponentProps<typeof UnconfirmedJobsTable>['rows']; total: number };
 type TableProps = ComponentProps<typeof UnconfirmedJobsTable>;
 type JobsQuery = Record<string, string | number | undefined>;
 
+/*
+ * The date tabs filter orders by WHEN THE TICKET CAME IN, and every tile moves
+ * with them (ops, 2026-09-23).
+ *
+ * All is the DEFAULT and it is first: the page answers "what is open on my
+ * desk", and most of that book was raised weeks ago — defaulting to Today
+ * would open on an empty screen while 149 orders waited.
+ */
 const PERIODS = [
+  { key: 'all', label: 'All' },
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
   { key: 'last7', label: 'Last 7 days' },
@@ -98,7 +110,7 @@ export function BookingQueueView({
   ownerId?: number;
   onMutation?: () => void;
 }) {
-  const [period, setPeriod] = useState<string>('today');
+  const [period, setPeriod] = useState<string>('all');
   const [bucket, setBucket] = useState<BucketKey>('new');
   const [escalated, setEscalated] = useState(false);
   const [rescheduled, setRescheduled] = useState(false);
@@ -128,8 +140,19 @@ export function BookingQueueView({
   const countsKey = `/admin/jobs/booking-queue?period=${period}${ownerId ? `&ownerId=${ownerId}` : ''}`;
   const counts = useFetch<Counts>(countsKey);
 
+  /*
+   * The SAME window the tiles counted, handed to the grid as the list's own
+   * dateType=ticket range. Derived from what the counts endpoint ACTUALLY
+   * used (period_start / period_end), not re-computed here: two
+   * implementations of "yesterday in IST" is how a tile and its rows end up
+   * describing different days. On All the endpoint returns nulls and no date
+   * filter is sent.
+   */
   const rowsKey = buildJobsKey({
     ...query,
+    dateType: counts.data?.period_start ? 'ticket' : undefined,
+    startDate: counts.data?.period_start ?? undefined,
+    endDate: counts.data?.period_end ?? undefined,
     bucket,
     isEscalated: escalated ? 'true' : undefined,
     customerRescheduled: rescheduled ? 'true' : undefined,
@@ -165,23 +188,12 @@ export function BookingQueueView({
   }
 
   const c = counts.data;
-  const sent = c?.links.sent ?? 0;
   /*
    * "closed" = of the PERIOD'S links, the ones already dealt with. Derived from
    * the period subset, never from the all-time open count — subtracting a
    * whole-board number from a one-day number produces a negative that reads as
    * a bug. Clamped at 0 against an older backend that sends no period_open.
    */
-  const openTotal = c
-    ? c.open.response_received + c.open.no_response + c.open.delivery_failed
-      + c.waiting.new.today + c.waiting.new.old
-      + c.waiting.no_link_needed.today + c.waiting.no_link_needed.old
-    : 0;
-  function closedIn(k: LinkKey) {
-    if (!c) return undefined;
-    return Math.max(0, c.links[k] - (c.period_open?.[k] ?? c.links[k]));
-  }
-
   if (counts.error) {
     return (
       <div className="m-3 rounded-lg border border-warning bg-warning-tint px-3 py-2 text-xs text-warning-strong">
@@ -197,13 +209,11 @@ export function BookingQueueView({
           are "waiting now" counts, which a date window would misdescribe. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-muted-foreground">
-          {/* The tiles add up to this, which is the number the tab header shows
-              — say so, so a wrong total is visible rather than inferred. */}
-          Open orders:{' '}
-          <span className="text-sm font-semibold text-foreground">{c ? openTotal : '—'}</span>
-          <span className="ml-2 font-normal">
-            · links sent {PERIODS.find((p) => p.key === period)?.label.toLowerCase()}: {c ? sent : '—'}
-          </span>
+          {/* The tiles add up to this, which is also the grid's population —
+              say it on the page so a wrong total is visible, not inferred. */}
+          Open orders{period === 'all' ? '' : ` created ${PERIODS.find((p) => p.key === period)?.label.toLowerCase()}`}:{' '}
+          <span className="text-sm font-semibold text-foreground">{c ? c.total : '—'}</span>
+          <span className="ml-2 font-normal">· link already sent for {c ? c.links_sent : '—'}</span>
         </span>
         <div className="ml-auto flex overflow-hidden rounded-lg border border-border">
           {PERIODS.map((p) => (
@@ -224,21 +234,20 @@ export function BookingQueueView({
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
         <WaitingTile
           label="New — waiting for link" hint="Link goes out on the next hourly run"
-          counts={c?.waiting.new} selected={bucket === 'new'}
+          total={c?.open.new} counts={c?.waiting.new} selected={bucket === 'new'}
           onClick={() => { setBucket('new'); setPage(0); }}
         />
         <LinkTile
           label="Response received" tone="info"
-          value={c?.links.response_received} sent={sent} open={c?.open.response_received}
-          closed={closedIn('response_received')}
+          open={c?.open.response_received}
           openLabel="the customer answered"
           selected={bucket.startsWith('response')}
           onClick={() => { setBucket('response_received'); setPage(0); }}
           /*
            * The three kinds of answer, each its own filter. An answer is not
            * one thing: "book me an SKU", "move my date" and "cancel it" need
-           * different work from different people, and a single number of 3
-           * hides which. Each pill narrows the grid to exactly its own count.
+           * different work from different people, and a single number hides
+           * which. Each pill narrows the grid to exactly its own count.
            */
           split={RESPONSE_KINDS.map((k) => ({
             key: k,
@@ -257,23 +266,22 @@ export function BookingQueueView({
         </div>
         <LinkTile
           label="No response" tone="warning"
-          value={c?.links.no_response} sent={sent} open={c?.open.no_response}
-          closed={closedIn('no_response')}
+          open={c?.open.no_response}
           openLabel="still to call"
           selected={bucket === 'no_response'}
           onClick={() => { setBucket('no_response'); setPage(0); }}
         />
         <LinkTile
           label="Delivery failed — call, no resend" tone="danger"
-          value={c?.links.delivery_failed} sent={sent} open={c?.open.delivery_failed}
-          closed={closedIn('delivery_failed')}
+          open={c?.open.delivery_failed}
           openLabel="to call"
           selected={bucket === 'delivery_failed'}
           onClick={() => { setBucket('delivery_failed'); setPage(0); }}
         />
         <WaitingTile
           label="No link needed — calling" hint="Client setting: auto process = false"
-          counts={c?.waiting.no_link_needed} selected={bucket === 'no_link_needed'}
+          total={c?.open.no_link_needed} counts={c?.waiting.no_link_needed}
+          selected={bucket === 'no_link_needed'}
           onClick={() => { setBucket('no_link_needed'); setPage(0); }}
         />
       </div>
@@ -371,11 +379,10 @@ function tileClass(selected: boolean, tone?: string) {
 type SplitPill = { key: string; label: string; n?: number; on: boolean; onPick: () => void };
 
 function LinkTile({
-  label, tone, value, sent, open, closed, openLabel, selected, onClick, split,
+  label, tone, open, openLabel, selected, onClick, split,
 }: {
-  label: string; tone: string; value?: number; sent: number;
-  open?: number; closed?: number; openLabel: string; selected: boolean;
-  onClick: () => void; split?: SplitPill[];
+  label: string; tone: string; open?: number; openLabel: string;
+  selected: boolean; onClick: () => void; split?: SplitPill[];
 }) {
   const loaded = open !== undefined;
   return (
@@ -385,9 +392,7 @@ function LinkTile({
           difference is the whole point. */}
       <div className="text-2xl font-semibold leading-none">{loaded ? open : '—'}</div>
       <div className="mt-1.5 text-xs font-semibold">{label}</div>
-      {loaded && (
-        <div className="mt-1 text-xs opacity-80">{openLabel}</div>
-      )}
+      {loaded && <div className="mt-1 text-xs opacity-80">{openLabel}</div>}
       {loaded && split && (
         /*
          * Nested buttons are invalid HTML, so these are spans with a button
@@ -414,32 +419,23 @@ function LinkTile({
           ))}
         </div>
       )}
-      {loaded && sent > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
-          <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-semibold text-background">
-            {value ?? 0} of {sent} links
-          </span>
-          <span className="rounded-full border border-current/20 bg-card/70 px-2 py-0.5 text-xs font-semibold">
-            {closed ?? 0} closed
-          </span>
-        </div>
-      )}
     </button>
   );
 }
 
 /** A tile with no link outcome to report — a plain "waiting now" count. */
 function WaitingTile({
-  label, hint, counts, selected, onClick,
+  label, hint, total, counts, selected, onClick,
 }: {
-  label: string; hint: string;
+  label: string; hint: string; total?: number;
   counts?: { today: number; old: number }; selected: boolean; onClick: () => void;
 }) {
   return (
     <button type="button" onClick={onClick} className={tileClass(selected)}>
-      <div className="text-2xl font-semibold leading-none">
-        {counts ? counts.today + counts.old : '—'}
-      </div>
+      {/* The bucket's own count, NOT today+old added up: when a date tab is on,
+          the split is of the filtered set and adding it back would restate the
+          same number while looking like a second opinion. */}
+      <div className="text-2xl font-semibold leading-none">{total ?? '—'}</div>
       <div className="mt-1.5 text-xs font-semibold">{label}</div>
       {counts && (
         <div className="mt-1.5 flex gap-3 text-xs text-muted-foreground">
