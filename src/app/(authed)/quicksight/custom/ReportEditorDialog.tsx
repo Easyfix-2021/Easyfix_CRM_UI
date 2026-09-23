@@ -289,6 +289,18 @@ export function ReportEditorDialog({
 
           <div className="space-y-2">
             <Label className="block">Who Can View</Label>
+            {/*
+             * Say the quiet part out loud. Visibility is
+             * `isAdmin || isOwner || role is listed` (see canSee() in
+             * quicksight-dynamic-reports.service.js), so the role list can
+             * never exclude the owner or a Custom Reports administrator —
+             * and the Admin role holds that key, which made ticking "Admin"
+             * here look meaningful when it changes nothing.
+             */}
+            <p className="text-xs text-muted-foreground">
+              You (the owner) and anyone with the Custom Reports administrator permission
+              can always open this report, whichever roles you pick.
+            </p>
             <label className="flex items-center gap-1.5 text-sm">
               <input type="radio" className="accent-primary" checked={who === 'everyone'} onChange={() => setWho('everyone')} />
               Everyone With Custom Reports Access

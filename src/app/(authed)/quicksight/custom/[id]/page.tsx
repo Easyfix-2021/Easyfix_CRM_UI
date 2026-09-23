@@ -56,6 +56,7 @@ import { type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagin
 
 import { ReportEditorDialog } from '../ReportEditorDialog';
 import { UploadDialog } from './UploadDialog';
+import { TransferOwnerDialog } from './TransferOwnerDialog';
 import { ReportDataTable } from './ReportDataTable';
 import { ReportChart } from './ReportChart';
 import { RetentionNote } from './retention-note';
@@ -527,53 +528,3 @@ function UploadHistory({
 }
 
 /* ── Transfer Owner (Admin only) ──────────────────────────────────────── */
-
-function TransferOwnerDialog({
-  reportId, currentOwnerId, onClose, onTransferred,
-}: {
-  reportId: number;
-  currentOwnerId: number;
-  onClose: () => void;
-  onTransferred: () => void;
-}) {
-  const lookup = useLookup();
-  const [userId, setUserId] = React.useState<number | ''>('');
-  const [submitting, setSubmitting] = React.useState(false);
-  const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty: () => userId !== '', when: () => !submitting });
-
-  async function submit() {
-    if (!userId || submitting) return;
-    setSubmitting(true);
-    try {
-      await api.put(`${API_BASE}/${reportId}/owner`, { userId });
-      showToast({ variant: 'success', message: 'Owner transferred.' });
-      onTransferred();
-    } catch (e) {
-      showToast({ variant: 'error', message: formatApiError(e, { fallback: 'Could not transfer ownership' }) });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={guardedOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><UserCog className="size-4" /> Transfer Owner</DialogTitle>
-        </DialogHeader>
-        <SearchSelect
-          value={userId}
-          onChange={(v) => setUserId(v ? Number(v) : '')}
-          options={lookup.toOpts.adminUsers.filter((o) => o.value !== currentOwnerId)}
-          placeholder="Select New Owner"
-        />
-        <DialogFooter>
-          <CancelButton onCancel={onClose} disabled={submitting} />
-          <Button onClick={submit} disabled={!userId || submitting}>
-            {submitting ? <><Loader2 className="mr-1 size-4 animate-spin" /> Transferring…</> : 'Transfer'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
