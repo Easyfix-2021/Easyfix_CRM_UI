@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Select } from '@/components/ui/select';
 import { DateTimeSlotPicker, TimeSelect } from '@/components/ui/date-time-slot-picker';
+import { MinDateCalendar } from '@/components/ui/min-date-calendar';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -9804,18 +9805,25 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 */}
               <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Requested Date *">
-                  <Input
-                    required
-                    type="date"
-                    min={todayIso}
+                  {/* MinDateCalendar, not <input type="date" min>: iOS Safari's
+                      native picker ignores `min`, so on an iPhone every past
+                      day stayed tappable and a back-dated job could be created
+                      (job CREATE has no server-side past-date guard — only
+                      assign / offer / reschedule do). Emptiness is still gated
+                      by `section2Complete`, which requires requested_date_time,
+                      exactly as it already is for the SearchSelect-based time
+                      control beside it (its `required` never drove native
+                      validation either). */}
+                  <MinDateCalendar
+                    minDate={todayIso}
                     value={requestedDate}
-                    onChange={(e) => {
-                      set('requested_date', e.target.value);
+                    onChange={(d) => {
+                      set('requested_date', d);
                       // If the new date is in the future, allow any
                       // previously-picked time (no past-today gate);
                       // if it's today and the existing time is now past,
                       // clear so the operator must re-pick a valid one.
-                      if (e.target.value === todayIso && requestedTime && requestedTime < minTimeToday) {
+                      if (d === todayIso && requestedTime && requestedTime < minTimeToday) {
                         set('requested_time', '');
                       }
                     }}
