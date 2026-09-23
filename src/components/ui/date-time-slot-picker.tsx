@@ -61,6 +61,7 @@
 import * as React from 'react';
 import { Input } from './input';
 import { SearchSelect, type SearchOption } from './search-select';
+import { MinDateCalendar } from './min-date-calendar';
 import { cn } from '@/lib/utils';
 
 /* Half-hour mode only — 'hour-frame' offers all 24 hours and needs no escape row. */
@@ -293,14 +294,14 @@ export function DateTimeSlotPicker({
     // date input on mobile is too cramped to tap/read, which is why the
     // customer couldn't pick a date.
     <div className={cn('grid grid-cols-1 sm:grid-cols-2 gap-2', className)}>
-      <Input
-        type="date"
-        min={minDate}
+      {/* Our own calendar, not <input type="date" min>: iOS Safari's native
+          picker ignores `min` and leaves every blocked day tappable, so on an
+          iPhone the past dates this control exists to gate were selectable. */}
+      <MinDateCalendar
         value={date}
+        minDate={minDate}
         disabled={disabled}
-        required={required}
-        onChange={(e) => {
-          const d = e.target.value;
+        onChange={(d) => {
           // Switching to today can make the existing time past — drop it so the
           // operator re-picks a valid slot rather than submitting a past time.
           const newMinTime = (min && d === minDate) ? min!.split('T')[1] : undefined;
