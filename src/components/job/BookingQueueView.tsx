@@ -172,7 +172,7 @@ export function BookingQueueView({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-muted-foreground">
           Links sent {PERIODS.find((p) => p.key === period)?.label.toLowerCase()}:{' '}
-          <span className="text-sm font-bold text-foreground">{counts.data ? sent : '—'}</span>
+          <span className="text-sm font-semibold text-foreground">{counts.data ? sent : '—'}</span>
         </span>
         <div className="ml-auto flex overflow-hidden rounded-lg border border-border">
           {PERIODS.map((p) => (
@@ -206,9 +206,9 @@ export function BookingQueueView({
         {/* PARKED, not dropped. Ops has still to define the blocker list, and a
             missing tile would read as "already built and empty". */}
         <div className="rounded-lg border border-dashed border-border bg-card px-3.5 py-3 opacity-70">
-          <div className="text-2xl font-bold leading-none text-muted-foreground">—</div>
-          <div className="mt-1.5 text-xs font-bold">Client queue — pending</div>
-          <div className="mt-1 text-[11px] text-muted-foreground">Parked · rules to follow</div>
+          <div className="text-2xl font-semibold leading-none text-muted-foreground">—</div>
+          <div className="mt-1.5 text-xs font-semibold">Client queue — pending</div>
+          <div className="mt-1 text-xs text-muted-foreground">Parked · rules to follow</div>
         </div>
         <LinkTile
           label="No response" tone="warning"
@@ -232,7 +232,7 @@ export function BookingQueueView({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[11px] font-semibold text-muted-foreground">Flags</span>
+        <span className="text-xs font-semibold text-muted-foreground">Flags</span>
         <FlagChip on={escalated} tone="danger" onClick={() => { setEscalated((v) => !v); setPage(0); }}>
           🔥 Escalated
         </FlagChip>
@@ -310,17 +310,17 @@ function LinkTile({
       {/* An em dash until the count arrives: a 0 that means "not loaded yet" is
           indistinguishable from a 0 that means "none", and on this page that
           difference is the whole point. */}
-      <div className="text-2xl font-bold leading-none">
+      <div className="text-2xl font-semibold leading-none">
         {loaded ? value : '—'}
-        {loaded && <span className="text-sm font-bold opacity-65"> / {sent}</span>}
+        {loaded && <span className="text-sm font-semibold opacity-65"> / {sent}</span>}
       </div>
-      <div className="mt-1.5 text-xs font-bold">{label}</div>
+      <div className="mt-1.5 text-xs font-semibold">{label}</div>
       {loaded && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          <span className="rounded-full bg-foreground px-2 py-0.5 text-[10.5px] font-bold text-background">
+          <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-semibold text-background">
             {open ?? 0} {openLabel}
           </span>
-          <span className="rounded-full border border-current/20 bg-card/70 px-2 py-0.5 text-[10.5px] font-semibold">
+          <span className="rounded-full border border-current/20 bg-card/70 px-2 py-0.5 text-xs font-semibold">
             {Math.max(0, (value ?? 0) - (open ?? 0))} closed by team
           </span>
         </div>
@@ -338,17 +338,17 @@ function WaitingTile({
 }) {
   return (
     <button type="button" onClick={onClick} className={tileClass(selected)}>
-      <div className="text-2xl font-bold leading-none">
+      <div className="text-2xl font-semibold leading-none">
         {counts ? counts.today + counts.old : '—'}
       </div>
-      <div className="mt-1.5 text-xs font-bold">{label}</div>
+      <div className="mt-1.5 text-xs font-semibold">{label}</div>
       {counts && (
-        <div className="mt-1.5 flex gap-3 text-[11px] text-muted-foreground">
+        <div className="mt-1.5 flex gap-3 text-xs text-muted-foreground">
           <span>Today: <strong className="text-foreground">{counts.today}</strong></span>
           <span>Old: <strong className="text-foreground">{counts.old}</strong></span>
         </div>
       )}
-      <div className="mt-1 text-[10.5px] text-muted-foreground">{hint}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
     </button>
   );
 }
@@ -360,7 +360,7 @@ function FlagChip({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${TONE[tone]} ${
+      className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${TONE[tone]} ${
         on ? 'ring-2 ring-foreground ring-offset-0' : ''
       }`}
       aria-pressed={on}

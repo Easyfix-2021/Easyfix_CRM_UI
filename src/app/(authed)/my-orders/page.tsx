@@ -980,7 +980,7 @@ export default function MyOrdersPage() {
                     key={v}
                     type="button"
                     onClick={() => setUnconfirmedView(v)}
-                    className={`-mb-px border-b-2 px-4 py-2 text-[13px] font-bold ${
+                    className={`-mb-px border-b-2 px-4 py-2 text-[13px] font-semibold ${
                       unconfirmedView === v
                         ? 'border-primary text-primary'
                         : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -988,7 +988,7 @@ export default function MyOrdersPage() {
                   >
                     {label}
                     {v === 'new' && (
-                      <span className="ml-1.5 align-[2px] rounded bg-primary px-1.5 py-px text-[9px] font-extrabold text-primary-foreground">
+                      <span className="ml-1.5 align-[2px] rounded bg-primary px-1.5 py-px text-xs font-semibold text-primary-foreground">
                         NEW
                       </span>
                     )}
