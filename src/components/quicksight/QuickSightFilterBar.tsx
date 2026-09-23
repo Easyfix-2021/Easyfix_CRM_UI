@@ -5,7 +5,7 @@
  * by most QuickSight reports (Open Orders, Client Performance, Vertical
  * Orders, City/Technician Performance, Employee Productivity, …).
  *
- * Filters: Clients, Verticals, Service Categories, Zonal Managers,
+ * Filters: Clients, Cities, Verticals, Service Categories, Zonal Managers,
  * Project Managers. Each is the canonical SearchMultiSelect (searchable,
  * multi, empty = "all") — NOT a forked variant. Every filter is fully
  * controlled (value + onChange) so the parent page owns filter state and
@@ -41,6 +41,17 @@ export type QuickSightFilterValue = Array<string | number>;
  */
 export type QuickSightFilterToggles = {
   clients?: boolean;
+  /*
+   * `cities` (2026-09-23) — added for the /dashboard filter bar, which filters
+   * by Client / City / Project Manager / Zonal Manager. Four of those five
+   * controls already lived here, so extending this component WAS the change; a
+   * dashboard-only bar would have been a second copy of four pickers, their
+   * lookups and this label treatment for someone to keep in step by hand.
+   *
+   * Options come from useLookup's cities, which every CRM page already fetches
+   * on mount — so a report that does not show this filter pays nothing for it.
+   */
+  cities?: boolean;
   verticals?: boolean;
   serviceCategories?: boolean;
   zonalManagers?: boolean;
@@ -52,6 +63,9 @@ export type QuickSightFilterBarProps = {
 
   clients?: QuickSightFilterValue;
   onClientsChange?: (next: QuickSightFilterValue) => void;
+
+  cities?: QuickSightFilterValue;
+  onCitiesChange?: (next: QuickSightFilterValue) => void;
 
   verticals?: QuickSightFilterValue;
   onVerticalsChange?: (next: QuickSightFilterValue) => void;
@@ -96,6 +110,8 @@ export function QuickSightFilterBar({
   show,
   clients = [],
   onClientsChange,
+  cities = [],
+  onCitiesChange,
   verticals = [],
   onVerticalsChange,
   serviceCategories = [],
@@ -135,6 +151,19 @@ export function QuickSightFilterBar({
             options={lookup.toOpts.clients}
             placeholder="All Clients"
             selectedLabel="clients"
+            disabled={disabled}
+          />
+        </Field>
+      )}
+
+      {show.cities && (
+        <Field label="Cities">
+          <SearchMultiSelect
+            value={cities}
+            onChange={(v) => onCitiesChange?.(v)}
+            options={lookup.toOpts.cities}
+            placeholder="All Cities"
+            selectedLabel="cities"
             disabled={disabled}
           />
         </Field>
