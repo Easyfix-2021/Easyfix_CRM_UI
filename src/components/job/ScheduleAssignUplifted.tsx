@@ -9,7 +9,7 @@ import type { JobOffer } from '@/lib/api';
 import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
-import { formatServiceAddress } from '@/lib/format';
+import { formatServiceAddress, productsAtBooking } from '@/lib/format';
 import { collectedByText } from '@/lib/collected-by';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
@@ -103,6 +103,8 @@ export type UpliftedJob = {
   vertical_name?: string | null;
   source_type?: string | null;
   helper_req?: number | null;
+  /* tbl_job.product_quantity — units the client booked (not service lines). */
+  product_quantity?: number | null;
   branch_details?: string | null;
   building_name?: string | null;
   product_code?: string | null;
@@ -633,6 +635,11 @@ export function ScheduleAssignUplifted({
             <span>
               <span className="text-muted-foreground">Helper needed </span>
               <span className="font-medium">{job?.helper_req == null ? 'Not added' : Number(job.helper_req) === 1 ? 'Yes' : 'No'}</span>
+            </span>
+            {/* What the CLIENT booked, beside what will be done for it. */}
+            <span>
+              <span className="text-muted-foreground">Products Added at Booking </span>
+              <span className="font-medium">{productsAtBooking(job?.product_quantity)}</span>
             </span>
           </p>
           {!job?.services?.length ? (
