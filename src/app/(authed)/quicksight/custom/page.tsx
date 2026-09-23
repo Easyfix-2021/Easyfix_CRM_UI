@@ -66,6 +66,7 @@ type ReportListItem = {
   shareEnabled: boolean;
   current: Upload | null;
   canEdit: boolean;
+  canTransferOwner: boolean;
   updatedAt: string;
 };
 type ListResponse = { canCreate: boolean; isAdmin: boolean; reports: ReportListItem[] };
@@ -94,7 +95,6 @@ export default function CustomReportsListPage() {
 
   const reports = data?.reports ?? [];
   const isEmpty = !accessDenied && !loading && !error && reports.length === 0;
-  const isAdmin = !!data?.isAdmin;
 
   /* Fetch the full definition, then open the dialog that needs it. */
   const openWithDetail = React.useCallback(async (id: number, kind: RowDialog['kind']) => {
@@ -202,23 +202,27 @@ export default function CustomReportsListPage() {
                     </div>
                   </td>
                   <td className="!text-right">
-                    {r.canEdit ? (
+                    {(r.canEdit || r.canTransferOwner) ? (
                       <div className="inline-flex items-center justify-end gap-0.5">
                         {busyId === r.id && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-                        <IconButton
-                          icon={Pencil}
-                          intent="primary"
-                          label="Edit Report"
-                          disabled={busyId === r.id}
-                          onClick={() => openWithDetail(r.id, 'edit')}
-                        />
-                        <IconButton
-                          icon={XCircle}
-                          intent="danger"
-                          label="Archive Report"
-                          disabled={busyId === r.id}
-                          onClick={() => handleArchive(r)}
-                        />
+                        {r.canEdit && (
+                          <>
+                            <IconButton
+                              icon={Pencil}
+                              intent="primary"
+                              label="Edit Report"
+                              disabled={busyId === r.id}
+                              onClick={() => openWithDetail(r.id, 'edit')}
+                            />
+                            <IconButton
+                              icon={XCircle}
+                              intent="danger"
+                              label="Archive Report"
+                              disabled={busyId === r.id}
+                              onClick={() => handleArchive(r)}
+                            />
+                          </>
+                        )}
                         {/* modal={false} + onCloseAutoFocus: Radix's modal mode locks
                             body pointer-events while closing, which races a dialog
                             opened from an item. See EasyfixerActionMenu. */}
@@ -235,15 +239,21 @@ export default function CustomReportsListPage() {
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-52" onCloseAutoFocus={(e) => e.preventDefault()}>
-                            <DropdownMenuItem onClick={() => handleTemplate(r, 'xlsx')}>
-                              <Download className="mr-2 size-4" /> Download Template
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openWithDetail(r.id, 'upload')}>
-                              <UploadIcon className="mr-2 size-4" /> Upload
-                            </DropdownMenuItem>
-                            {isAdmin && (
+                            {r.canEdit && (
                               <>
-                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleTemplate(r, 'xlsx')}>
+                                  <Download className="mr-2 size-4" /> Download Template
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => openWithDetail(r.id, 'upload')}>
+                                  <UploadIcon className="mr-2 size-4" /> Upload
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            {/* Owner or the BE email allowlist — the Admin KEY does not
+                                grant this, so it is NOT gated on isAdmin. */}
+                            {r.canTransferOwner && (
+                              <>
+                                {r.canEdit && <DropdownMenuSeparator />}
                                 <DropdownMenuItem onClick={() => openWithDetail(r.id, 'owner')}>
                                   <UserCog className="mr-2 size-4" /> Transfer Owner
                                 </DropdownMenuItem>

@@ -341,7 +341,10 @@ export default function CustomReportViewPage() {
               </Button>
             </>
           )}
-          {d.isAdmin && (
+          {/* Owner or an operator on the BE email allowlist. NOT the Admin
+              key — an admin may edit and archive every report but cannot
+              re-point ownership, so this must not read d.isAdmin. */}
+          {d.canTransferOwner && (
             <Button variant="outline" onClick={() => setTransferring(true)}>
               <UserCog className="mr-1 size-4" /> Transfer Owner
             </Button>

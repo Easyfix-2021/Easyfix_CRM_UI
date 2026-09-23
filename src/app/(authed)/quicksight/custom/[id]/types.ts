@@ -35,6 +35,8 @@ export type ReportDetail = {
   ownerName: string | null;
   shareToken: string | null;
   canEdit: boolean;
+  /* Owner or an operator on the BE email allowlist — never a role. */
+  canTransferOwner: boolean;
   isAdmin: boolean;
   columnsChanged: boolean;
   current: Upload | null;
