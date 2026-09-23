@@ -30,20 +30,21 @@ import { UnconfirmedJobsTable } from './UnconfirmedJobsTable';
  * together: a job that is "Overdue" there is "No response" here, so one screen
  * carrying both would count it twice.
  *
- * ── THE TWO NUMBERS ON A LINK TILE, WHICH ARE NOT THE SAME QUESTION ───────
+ * ── ONE NUMBER PER TILE, AND THE PILLS THAT BREAK IT DOWN ─────────────────
  *
- *   25 / 100          what happened to the links SENT in the period. A fact
- *                     about the day; it does not move when the team works.
- *   7 waiting         how many of those still need somebody. This goes down.
+ * Every tile is the same kind of number: open orders in that bucket. The five
+ * add up to the total printed in the strip header, which is the check that
+ * catches a bucket quietly claiming nobody.
  *
- * Both come from ONE backend row per tile, so they cannot disagree, and the
- * grid lists exactly the second number — see booking-queue.service.js, which
- * also owns the `bucket=` predicate this grid sends, so a tile and its rows are
- * physically incapable of describing different populations.
+ * Inside each tile, Day 0 / 1 / 2 / 3+ splits it by how long the ticket has
+ * been waiting, and those four sum to the tile. Response received carries the
+ * three kinds of answer as well, because what the customer asked for is what
+ * decides who picks the order up.
  *
- * New / No link needed have no link outcome to report, so they show Today ·
- * Old instead. "Old" is load-bearing: it is where an order goes when its link
- * never went out, and without it those would vanish from every tile.
+ * Every count on screen is also a FILTER: clicking a tile or a pill narrows the
+ * grid to exactly the orders it counted. The predicate lives in
+ * booking-queue.service.js and serves both the count and the list, so a tile
+ * and its rows are physically incapable of describing different populations.
  *
  * ── WHAT IS DELIBERATELY NOT HERE ─────────────────────────────────────────
  *
@@ -63,18 +64,26 @@ type WaitKey = 'new' | 'no_link_needed';
 type ResponseKind = 'ready' | 'reschedule' | 'cancel';
 type BucketKey = LinkKey | WaitKey | `response_${ResponseKind}`;
 
+/*
+ * How old the ticket is, in IST calendar days. '3plus' is THREE OR MORE, not
+ * three: the oldest open order on the real book was raised five months ago, and
+ * a plain "Day 3" would leave every one of those in no pill — the pills would
+ * stop summing to the tile, and the longest-waiting orders, which is what the
+ * pills exist to surface, would be the invisible ones.
+ */
+type DayKey = '0' | '1' | '2' | '3plus';
+type DayCounts = Record<DayKey, number>;
+
 type Counts = {
-  period: string;
-  /* Every open order in the date range, one bucket each. Sums to `total`. */
+  /* Every open order, one bucket each. Sums to `total`. */
   open: Record<LinkKey | WaitKey, number>;
   total: number;
   /* What the customers who answered asked for. Sums to open.response_received. */
   response_breakdown?: Record<ResponseKind, number>;
-  waiting: Record<WaitKey, { today: number; old: number }>;
+  /* Each bucket's four day pills. Each set sums to that bucket's own count. */
+  days?: Record<LinkKey | WaitKey, DayCounts>;
   /* How many of these orders have had a link go out. Context, not a bucket. */
   links_sent: number;
-  period_start: string | null;
-  period_end: string | null;
 };
 
 type Resp = { items: ComponentProps<typeof UnconfirmedJobsTable>['rows']; total: number };
@@ -82,26 +91,27 @@ type TableProps = ComponentProps<typeof UnconfirmedJobsTable>;
 type JobsQuery = Record<string, string | number | undefined>;
 
 /*
- * The date tabs filter orders by WHEN THE TICKET CAME IN, and every tile moves
- * with them (ops, 2026-09-23).
+ * THE DAY PILLS REPLACED A DATE FILTER AT THE TOP (ops, 2026-09-23).
  *
- * All is the DEFAULT and it is first: the page answers "what is open on my
- * desk", and most of that book was raised weeks ago — defaulting to Today
- * would open on an empty screen while 149 orders waited.
+ * The page carried All / Today / Yesterday / Last 7 days above the tiles. It
+ * worked, and ops asked for it to go: a date control at the top answers "how
+ * many came in yesterday", while the question in front of an executive is
+ * "which of the orders on my desk have waited longest" — and that is per
+ * bucket, not per page. Two date controls on one screen was also one too many.
+ *
+ * So the age lives INSIDE each tile now, and the tile's own number stays the
+ * whole bucket. Day N = N IST calendar days since the ticket came in.
  */
-const PERIODS = [
-  { key: 'all', label: 'All' },
-  { key: 'today', label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: 'last7', label: 'Last 7 days' },
-] as const;
+const DAYS: { key: DayKey; label: string }[] = [
+  { key: '0', label: 'Day 0' },
+  { key: '1', label: 'Day 1' },
+  { key: '2', label: 'Day 2' },
+  { key: '3plus', label: 'Day 3+' },
+];
 
 // `/admin/jobs` caps limit at 500, so "All" must send 500 and not the helper's
 // 1000 default (which 400s). Same value as the other My Orders views.
 const JOBS_MAX_LIMIT = 500;
-
-// Remembered per operator, so the tab they work in is the one that opens.
-const PERIOD_KEY = 'easyfix.crm.bookingQueue.period.v1';
 
 export function BookingQueueView({
   query, ownerId, onMutation, ...tableProps
@@ -110,8 +120,14 @@ export function BookingQueueView({
   ownerId?: number;
   onMutation?: () => void;
 }) {
-  const [period, setPeriod] = useState<string>('all');
   const [bucket, setBucket] = useState<BucketKey>('new');
+  /*
+   * The day pill inside the selected tile, or null for the whole bucket.
+   * Cleared whenever the tile changes: "Day 2" of one bucket means nothing in
+   * another, and carrying it across would silently show a narrower list than
+   * the tile the operator just clicked.
+   */
+  const [day, setDay] = useState<DayKey | null>(null);
   const [escalated, setEscalated] = useState(false);
   const [rescheduled, setRescheduled] = useState(false);
   const [page, setPage] = useState(0);
@@ -124,36 +140,22 @@ export function BookingQueueView({
    */
   const [reloadKey, setReloadKey] = useState(0);
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(PERIOD_KEY);
-      if (saved && PERIODS.some((p) => p.key === saved)) setPeriod(saved);
-    } catch { /* private window / blocked storage — the default is fine */ }
-  }, []);
-
-  function pickPeriod(p: string) {
-    setPeriod(p);
+  function pickBucket(b: BucketKey, d: DayKey | null = null) {
+    setBucket(b);
+    setDay(d);
     setPage(0);
-    try { localStorage.setItem(PERIOD_KEY, p); } catch { /* not worth failing over */ }
   }
 
-  const countsKey = `/admin/jobs/booking-queue?period=${period}${ownerId ? `&ownerId=${ownerId}` : ''}`;
+  const countsKey = `/admin/jobs/booking-queue${ownerId ? `?ownerId=${ownerId}` : ''}`;
   const counts = useFetch<Counts>(countsKey);
 
-  /*
-   * The SAME window the tiles counted, handed to the grid as the list's own
-   * dateType=ticket range. Derived from what the counts endpoint ACTUALLY
-   * used (period_start / period_end), not re-computed here: two
-   * implementations of "yesterday in IST" is how a tile and its rows end up
-   * describing different days. On All the endpoint returns nulls and no date
-   * filter is sent.
-   */
   const rowsKey = buildJobsKey({
     ...query,
-    dateType: counts.data?.period_start ? 'ticket' : undefined,
-    startDate: counts.data?.period_start ?? undefined,
-    endDate: counts.data?.period_end ?? undefined,
     bucket,
+    // The day pill rides INSIDE the bucket predicate server-side, so the grid
+    // gets exactly the rows the pill counted rather than a second filter that
+    // looks right on its own.
+    ageDay: day ?? undefined,
     isEscalated: escalated ? 'true' : undefined,
     customerRescheduled: rescheduled ? 'true' : undefined,
     limit: pageSizeToLimit(pageSize, JOBS_MAX_LIMIT),
@@ -188,12 +190,7 @@ export function BookingQueueView({
   }
 
   const c = counts.data;
-  /*
-   * "closed" = of the PERIOD'S links, the ones already dealt with. Derived from
-   * the period subset, never from the all-time open count — subtracting a
-   * whole-board number from a one-day number produces a negative that reads as
-   * a bug. Clamped at 0 against an older backend that sends no period_open.
-   */
+
   if (counts.error) {
     return (
       <div className="m-3 rounded-lg border border-warning bg-warning-tint px-3 py-2 text-xs text-warning-strong">
@@ -205,56 +202,43 @@ export function BookingQueueView({
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      {/* Period — applies to the three LINK tiles only. New / No link needed
-          are "waiting now" counts, which a date window would misdescribe. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-muted-foreground">
           {/* The tiles add up to this, which is also the grid's population —
               say it on the page so a wrong total is visible, not inferred. */}
-          Open orders{period === 'all' ? '' : ` created ${PERIODS.find((p) => p.key === period)?.label.toLowerCase()}`}:{' '}
+          Open orders:{' '}
           <span className="text-sm font-semibold text-foreground">{c ? c.total : '—'}</span>
           <span className="ml-2 font-normal">· link already sent for {c ? c.links_sent : '—'}</span>
         </span>
-        <div className="ml-auto flex overflow-hidden rounded-lg border border-border">
-          {PERIODS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => pickPeriod(p.key)}
-              className={`px-3 py-1.5 text-xs font-semibold ${
-                period === p.key ? 'bg-foreground text-background' : 'bg-card text-foreground hover:bg-muted'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-        <WaitingTile
+        <Tile
           label="New — waiting for link" hint="Link goes out on the next hourly run"
-          total={c?.open.new} counts={c?.waiting.new} selected={bucket === 'new'}
-          onClick={() => { setBucket('new'); setPage(0); }}
+          open={c?.open.new} days={c?.days?.new}
+          selected={bucket === 'new'} activeDay={bucket === 'new' ? day : null}
+          onPick={(d) => pickBucket('new', d)}
         />
-        <LinkTile
-          label="Response received" tone="info"
-          open={c?.open.response_received}
-          openLabel="the customer answered"
+        <Tile
+          label="Response received" tone="info" hint="the customer answered"
+          open={c?.open.response_received} days={c?.days?.response_received}
           selected={bucket.startsWith('response')}
-          onClick={() => { setBucket('response_received'); setPage(0); }}
+          activeDay={bucket.startsWith('response') ? day : null}
+          onPick={(d) => pickBucket('response_received', d)}
           /*
-           * The three kinds of answer, each its own filter. An answer is not
-           * one thing: "book me an SKU", "move my date" and "cancel it" need
-           * different work from different people, and a single number hides
-           * which. Each pill narrows the grid to exactly its own count.
+           * Response received carries BOTH splits, and they answer different
+           * questions: how old it is, and what the customer actually asked for.
+           * The answer is the one that decides who picks it up, so it sits
+           * first. Selecting one clears the other — an order cannot be filtered
+           * by two different narrowings of the same tile at once without the
+           * count on screen ceasing to describe the rows.
            */
-          split={RESPONSE_KINDS.map((k) => ({
+          extra={RESPONSE_KINDS.map((k) => ({
             key: k,
             label: RESPONSE_LABEL[k],
             n: c?.response_breakdown?.[k],
             on: bucket === `response_${k}`,
-            onPick: () => { setBucket(`response_${k}`); setPage(0); },
+            onPick: () => pickBucket(`response_${k}`),
           }))}
         />
         {/* PARKED, not dropped. Ops has still to define the blocker list, and a
@@ -264,25 +248,23 @@ export function BookingQueueView({
           <div className="mt-1.5 text-xs font-semibold">Client queue — pending</div>
           <div className="mt-1 text-xs text-muted-foreground">Parked · rules to follow</div>
         </div>
-        <LinkTile
-          label="No response" tone="warning"
-          open={c?.open.no_response}
-          openLabel="still to call"
-          selected={bucket === 'no_response'}
-          onClick={() => { setBucket('no_response'); setPage(0); }}
+        <Tile
+          label="No response" tone="warning" hint="still to call"
+          open={c?.open.no_response} days={c?.days?.no_response}
+          selected={bucket === 'no_response'} activeDay={bucket === 'no_response' ? day : null}
+          onPick={(d) => pickBucket('no_response', d)}
         />
-        <LinkTile
-          label="Delivery failed — call, no resend" tone="danger"
-          open={c?.open.delivery_failed}
-          openLabel="to call"
-          selected={bucket === 'delivery_failed'}
-          onClick={() => { setBucket('delivery_failed'); setPage(0); }}
+        <Tile
+          label="Delivery failed — call, no resend" tone="danger" hint="to call"
+          open={c?.open.delivery_failed} days={c?.days?.delivery_failed}
+          selected={bucket === 'delivery_failed'} activeDay={bucket === 'delivery_failed' ? day : null}
+          onPick={(d) => pickBucket('delivery_failed', d)}
         />
-        <WaitingTile
-          label="No link needed — calling" hint="Client setting: auto process = false"
-          total={c?.open.no_link_needed} counts={c?.waiting.no_link_needed}
-          selected={bucket === 'no_link_needed'}
-          onClick={() => { setBucket('no_link_needed'); setPage(0); }}
+        <Tile
+          label="No link needed — calling" tone="purple" hint="client setting: auto process = false"
+          open={c?.open.no_link_needed} days={c?.days?.no_link_needed}
+          selected={bucket === 'no_link_needed'} activeDay={bucket === 'no_link_needed' ? day : null}
+          onPick={(d) => pickBucket('no_link_needed', d)}
         />
       </div>
 
@@ -301,6 +283,7 @@ export function BookingQueueView({
           <span>
             <strong className="text-foreground">{rows.data?.total ?? '—'}</strong> open ·{' '}
             {TILE_LABEL[bucket]}
+            {day && ` · ${DAYS.find((d) => d.key === day)?.label}`}
           </span>
           <span>Newest first</span>
         </div>
@@ -352,6 +335,7 @@ const TONE: Record<string, string> = {
   info: 'bg-info-tint border-info/30 text-info-strong',
   warning: 'bg-warning-tint border-warning/30 text-warning-strong',
   danger: 'bg-destructive/10 border-destructive/30 text-destructive',
+  purple: 'bg-accent border-accent-foreground/20 text-accent-foreground',
 };
 
 function tileClass(selected: boolean, tone?: string) {
@@ -362,88 +346,80 @@ function tileClass(selected: boolean, tone?: string) {
   ].join(' ');
 }
 
-/*
- * A link tile. TWO numbers, and which one is the HEADLINE matters.
- *
- * The headline is the WORK: every open order in this bucket, whatever day its
- * link went out. That is what the grid below lists, and the five headlines add
- * up to the tab total — the check that catches a bucket quietly claiming
- * nobody. The first cut made the period funnel the headline and the work a
- * subset of it, which on the real book read 0 / 0 across every tile while 133
- * open orders sat in No response from older links: the page accounted for 13
- * of 149 orders and looked finished.
- *
- * The funnel is still here, underneath, because it is how ops measures the day
- * — but it is labelled as the period's links so it cannot be read as the queue.
- */
-type SplitPill = { key: string; label: string; n?: number; on: boolean; onPick: () => void };
+type ExtraPill = { key: string; label: string; n?: number; on: boolean; onPick: () => void };
 
-function LinkTile({
-  label, tone, open, openLabel, selected, onClick, split,
+/*
+ * One tile: a bucket's count, and the pills that break it down.
+ *
+ * There used to be two components — one for the link buckets, one for the
+ * waiting ones — because their numbers meant different things. They do not any
+ * more: every tile is "open orders in this bucket", so one component is the
+ * honest shape, and a reader cannot wonder whether the two count differently.
+ */
+function Tile({
+  label, tone, hint, open, days, selected, activeDay, onPick, extra,
 }: {
-  label: string; tone: string; open?: number; openLabel: string;
-  selected: boolean; onClick: () => void; split?: SplitPill[];
+  label: string; tone?: string; hint: string;
+  open?: number; days?: DayCounts;
+  selected: boolean; activeDay: DayKey | null;
+  onPick: (day: DayKey | null) => void;
+  extra?: ExtraPill[];
 }) {
   const loaded = open !== undefined;
   return (
-    <button type="button" onClick={onClick} className={tileClass(selected, tone)}>
-      {/* An em dash until the count arrives: a 0 that means "not loaded yet" is
-          indistinguishable from a 0 that means "none", and on this page that
-          difference is the whole point. */}
-      <div className="text-2xl font-semibold leading-none">{loaded ? open : '—'}</div>
-      <div className="mt-1.5 text-xs font-semibold">{label}</div>
-      {loaded && <div className="mt-1 text-xs opacity-80">{openLabel}</div>}
-      {loaded && split && (
-        /*
-         * Nested buttons are invalid HTML, so these are spans with a button
-         * role — the tile itself is the outer button. stopPropagation keeps a
-         * pill click from also re-selecting the whole tile and throwing away
-         * the narrower filter the operator just asked for.
-         */
+    // The tile is a plain div, not a button: it CONTAINS buttons (the pills),
+    // and a button inside a button is invalid HTML that browsers silently
+    // reflow. The headline row is the clickable part.
+    <div className={tileClass(selected, tone)}>
+      <button
+        type="button"
+        onClick={() => onPick(null)}
+        className="block w-full text-left"
+        aria-pressed={selected && !activeDay}
+      >
+        {/* An em dash until the count arrives: a 0 that means "not loaded yet"
+            is indistinguishable from a 0 that means "none", and on this page
+            that difference is the whole point. */}
+        <div className="text-2xl font-semibold leading-none">{loaded ? open : '—'}</div>
+        <div className="mt-1.5 text-xs font-semibold">{label}</div>
+        <div className="mt-1 text-xs opacity-80">{hint}</div>
+      </button>
+      {loaded && extra && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {split.map((sp) => (
-            <span
-              key={sp.key}
-              role="button"
-              tabIndex={0}
-              onClick={(e) => { e.stopPropagation(); sp.onPick(); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); sp.onPick(); }
-              }}
-              className={`cursor-pointer rounded-full px-2 py-0.5 text-xs font-semibold ${
-                sp.on ? 'bg-foreground text-background' : 'border border-current/20 bg-card/70'
-              }`}
-            >
-              {sp.label} {sp.n ?? 0}
-            </span>
+          {extra.map((p) => (
+            <Pill key={p.key} on={p.on} onPick={p.onPick}>{p.label} {p.n ?? 0}</Pill>
           ))}
         </div>
       )}
-    </button>
+      {loaded && days && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {DAYS.map((d) => (
+            <Pill
+              key={d.key}
+              on={selected && activeDay === d.key}
+              onPick={() => onPick(activeDay === d.key ? null : d.key)}
+            >
+              {d.label} · {days[d.key] ?? 0}
+            </Pill>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-/** A tile with no link outcome to report — a plain "waiting now" count. */
-function WaitingTile({
-  label, hint, total, counts, selected, onClick,
-}: {
-  label: string; hint: string; total?: number;
-  counts?: { today: number; old: number }; selected: boolean; onClick: () => void;
-}) {
+/* A pill: a filter, and the count it filters to. */
+function Pill({ on, onPick, children }: { on: boolean; onPick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className={tileClass(selected)}>
-      {/* The bucket's own count, NOT today+old added up: when a date tab is on,
-          the split is of the filtered set and adding it back would restate the
-          same number while looking like a second opinion. */}
-      <div className="text-2xl font-semibold leading-none">{total ?? '—'}</div>
-      <div className="mt-1.5 text-xs font-semibold">{label}</div>
-      {counts && (
-        <div className="mt-1.5 flex gap-3 text-xs text-muted-foreground">
-          <span>Today: <strong className="text-foreground">{counts.today}</strong></span>
-          <span>Old: <strong className="text-foreground">{counts.old}</strong></span>
-        </div>
-      )}
-      <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+    <button
+      type="button"
+      onClick={onPick}
+      aria-pressed={on}
+      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+        on ? 'bg-foreground text-background' : 'border border-current/20 bg-card/70'
+      }`}
+    >
+      {children}
     </button>
   );
 }
