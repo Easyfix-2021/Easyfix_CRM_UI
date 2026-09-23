@@ -274,3 +274,15 @@ export function parseIstDateTime(value: string | Date): Date {
   }
   return new Date(raw);
 }
+
+/*
+ * "Products Added at Booking" — tbl_job.product_quantity, the number of units
+ * the CLIENT asked for when the job was booked. It is NOT the number of service
+ * lines on the job (that is a different question and used to be shown under the
+ * same label). Nothing captured — null, blank or 0 — reads as "NA" rather than
+ * a bare 0, which an operator could quote back to a client as a real figure.
+ */
+export function productsAtBooking(qty: unknown): string {
+  const n = Number(qty);
+  return Number.isFinite(n) && n > 0 ? n.toLocaleString('en-IN') : 'NA';
+}
