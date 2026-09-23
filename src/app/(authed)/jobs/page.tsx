@@ -10,6 +10,8 @@ import {
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, CalendarCheck, MapPin, RefreshCw,
   ClipboardCheck, ClipboardList, CheckCircle2,
+  // Escalated jobs carry the same flame the Schedule & Assign console uses.
+  Flame,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -102,6 +104,14 @@ const JOB_ID_OR_REF_STRIP = /[^A-Za-z0-9._/,-]/g;
 
 type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
+  /*
+   * Escalation, from the same tbl_easyfixer_rating_by_customer row the
+   * Escalated filter uses. The Manage Jobs view (view=manage) always asks the
+   * backend for these columns, so they are present on every row here.
+   */
+  is_escalated?: number | null;
+  no_of_escalations?: number | null;
+  escalated_comments?: string | null;
   job_status: number; job_type: string; source_type: string | null;
   job_desc: string | null;
   // Pending for Material (status 16) sub-state — 1 Quotation Pending, 2
@@ -2049,6 +2059,25 @@ export default function JobsPage() {
                   <td className="font-medium whitespace-nowrap stick-col stick-left">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
+                      {/* An escalated job says so where it is first read — the
+                          same flame the Schedule & Assign console shows, with
+                          the escalation count and the latest comment on hover. */}
+                      {Number(j.is_escalated ?? 0) === 1 && (
+                        <span
+                          className="inline-flex items-center gap-0.5 text-urgent"
+                          title={[
+                            'Escalated',
+                            Number(j.no_of_escalations ?? 0) > 1 ? `${j.no_of_escalations} times` : null,
+                            j.escalated_comments || null,
+                          ].filter(Boolean).join(' · ')}
+                          aria-label="Escalated"
+                        >
+                          <Flame className="size-3.5" />
+                          {Number(j.no_of_escalations ?? 0) > 1 && (
+                            <span className="text-xs font-semibold tabular-nums">{j.no_of_escalations}</span>
+                          )}
+                        </span>
+                      )}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                     {j.job_reference_id && (

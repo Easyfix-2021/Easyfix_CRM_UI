@@ -79,9 +79,12 @@ const managerLeft = (s: StateRow) => s.state_user != null && Number(s.manager_st
 const needsAttention = (s: StateRow) => s.state_user == null || managerLeft(s);
 const inSync = (s: StateRow) => s.state_user != null && s.synced_count >= s.city_count;
 
-/* DATETIME stored as IST wall-clock — sliced, never parsed (same as Created By). */
-function istDate(v: string | null): string {
-  return v ? String(v).replace('T', ' ').slice(0, 10) : '';
+/*
+ * DATETIME stored as IST wall-clock — sliced, never parsed (same as Created By).
+ * Date AND time: two edits on the same day need to be told apart.
+ */
+function istStamp(v: string | null): string {
+  return v ? String(v).replace('T', ' ').slice(0, 16) : '';
 }
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-IN')} ${n === 1 ? one : many}`;
@@ -140,6 +143,16 @@ export function StatesTab({
   }, [states]);
 
   const unassigned = states.filter((s) => s.state_user == null).length;
+
+  // Options for the typeahead above: every manager who holds a state, with
+  // their count, plus the "no manager" bucket when there is one.
+  const managerFilterOptions = useMemo(() => [
+    ...managerOptions.map((m) => ({
+      value: String(m.id),
+      label: `${m.left ? '⚠ ' : ''}${m.name} — ${plural(m.count, 'state', 'states')}${m.left ? ' · left organisation' : ''}`,
+    })),
+    ...(unassigned > 0 ? [{ value: NO_MANAGER, label: `No manager — ${plural(unassigned, 'state', 'states')}` }] : []),
+  ], [managerOptions, unassigned]);
   const leftStates = states.filter(managerLeft).length;
 
   // A filter pointing at a manager who no longer holds any state (they were
@@ -293,21 +306,15 @@ export function StatesTab({
         <CardContent className="p-3 flex items-end gap-2 flex-wrap">
           <div className="min-w-[260px]">
             <Label className="block mb-1 text-xs text-muted-foreground">Current zonal manager</Label>
-            <select
+            {/* The shared typeahead, not a native select: the list grows with
+                every manager who holds a state, and operators look people up by
+                name. Empty value = all managers. */}
+            <SearchSelect
               value={managerFilter}
-              onChange={(e) => setManagerFilter(e.target.value)}
-              className="border rounded h-9 px-2 text-sm bg-background w-full font-medium"
-            >
-              <option value="">All managers ({plural(states.length, 'state', 'states')})</option>
-              {managerOptions.map((m) => (
-                <option key={m.id} value={String(m.id)}>
-                  {m.left ? '⚠ ' : ''}{m.name} — {plural(m.count, 'state', 'states')}{m.left ? ' · left organisation' : ''}
-                </option>
-              ))}
-              {unassigned > 0 && (
-                <option value={NO_MANAGER}>No manager — {plural(unassigned, 'state', 'states')}</option>
-              )}
-            </select>
+              onChange={setManagerFilter}
+              options={managerFilterOptions}
+              placeholder={`All managers (${plural(states.length, 'state', 'states')})`}
+            />
           </div>
           <div className="relative flex-1 min-w-[220px]">
             <Label className="block mb-1 text-xs text-muted-foreground">State</Label>
@@ -469,7 +476,7 @@ export function StatesTab({
                         {s.updated_on ? (
                           <div className="leading-tight">
                             <div>{s.updated_by_name ?? (s.updated_by ? `User #${s.updated_by}` : 'Backfill')}</div>
-                            <div className="text-xs text-muted-foreground">{istDate(s.updated_on)}</div>
+                            <div className="text-xs text-muted-foreground">{istStamp(s.updated_on)}</div>
                           </div>
                         ) : <span className="text-muted-foreground">—</span>}
                       </td>

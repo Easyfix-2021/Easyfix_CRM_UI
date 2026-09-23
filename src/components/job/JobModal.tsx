@@ -48,7 +48,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
-import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
+import { maskMobile, formatServiceAddress, productsAtBooking, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { groupByQuotationNo } from '@/lib/quotation-groups';
 // Material-request-flow-v2 (2026-09-21) — Add Material dialog reuses the
@@ -1443,7 +1443,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 )}
               </span>
             )],
-            ['Total No. of Products', totalProducts(job.services)],
+            /* What the CLIENT booked (tbl_job.product_quantity), not how many
+               service lines the job carries — see productsAtBooking. */
+            ['Products Added at Booking', productsAtBooking(job.product_quantity)],
             // exp_tat is a varchar of hours; '' and NULL are both "not set".
             ['Job Completion TAT', job.exp_tat ? `${String(job.exp_tat)} hrs` : null],
             // Additional Comments / technician-facing notes (efr_special_notes) —
@@ -3210,7 +3212,13 @@ export function ServicesTabBody({ job, onMutated, onDirtyChange, lockCategory }:
           </div>
         </div>
       )}
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-between gap-2">
+        {/* What the CLIENT booked (tbl_job.product_quantity) — beside the
+            services themselves, which are what will be done for it. */}
+        <span className="text-xs">
+          <span className="text-muted-foreground">Products Added at Booking </span>
+          <span className="font-medium">{productsAtBooking(job.product_quantity)}</span>
+        </span>
         {/* Show Inactive toggle remains on the right of the table. The
             old "+ Add Service" trigger lived here too; it's now in the
             inline panel above so this row only carries the toggle. */}
@@ -12688,15 +12696,9 @@ function renderDlValue(v: unknown): React.ReactNode {
 }
 
 /*
- * Total No. of Products (Job Meta) — the number of ACTIVE service LINES, not
- * their summed quantity: legacy's noOfProducts is jobServiceList.size() over
- * getJobServiceList(jobId, 1), the active lines (JobAction.java). On QA the
- * two readings differ for 7,825 of the 380,870 jobs with an active line.
- * getById also returns soft-deleted lines (job_service_status 0) for the
- * Services tab's restore toggle. The retired JobTransactionView summed quantity
- * over every line, those included. Same active test as the Services tab.
+ * The Job Meta row that used to read "Total No. of Products" counted ACTIVE
+ * service LINES (legacy JobAction.java's noOfProducts). Since 2026-09-23 it
+ * reads "Products Added at Booking" from tbl_job.product_quantity — what the
+ * CLIENT asked for — via productsAtBooking in src/lib/format.ts, so the
+ * line-count helper is gone.
  */
-function totalProducts(services: unknown): number {
-  const rows = (Array.isArray(services) ? services : []) as Array<{ job_service_status?: unknown }>;
-  return rows.filter((s) => Number(s.job_service_status) !== 0).length;
-}

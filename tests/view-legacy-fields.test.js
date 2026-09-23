@@ -27,7 +27,10 @@
  *   Material Required — read the Helper way (`? 'YES' : 'NO'`) on a key no
  *     table stores, so it printed "NO" for every job. Not carried over at all.
  *   Total No. of Products — summed quantity over every service line, soft-
- *     deleted ones included. Legacy's is the number of ACTIVE lines.
+ *     deleted ones included; legacy's was the number of ACTIVE lines. RETIRED
+ *     2026-09-23: the row is now "Products Added at Booking", which reads
+ *     tbl_job.product_quantity — what the CLIENT booked — and says NA when
+ *     nothing was captured. Neither reading of the service lines survives.
  *   Job Completion TAT — printed a bare " hrs" for an empty exp_tat.
  *   Custom Properties — read custom_properties only, so the three props the
  *     CRM Book / Confirm form stores elsewhere never showed.
@@ -55,11 +58,17 @@ function rowExpr(cardSrc, label) {
 /* A row's expression evaluated against a fake job — the real text, run. */
 const evalRow = (expr, job) => new Function('job', `return (${expr});`)(job);
 
-function loadTotalProducts() {
-  const start = SRC.indexOf('function totalProducts(');
-  assert.ok(start > -1, 'totalProducts must exist in JobModal.tsx');
-  const body = SRC.slice(start, SRC.indexOf('\n}\n', start) + 3);
-  const { outputText } = ts.transpileModule(`${body}\nmodule.exports = totalProducts;`, {
+/*
+ * The row's helper moved to src/lib/format.ts (productsAtBooking) when it
+ * stopped counting service lines, so it is loaded from there — same
+ * lift-and-execute, one file over.
+ */
+function loadProductsAtBooking() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'format.ts'), 'utf8');
+  const start = src.indexOf('export function productsAtBooking(');
+  assert.ok(start > -1, 'productsAtBooking must exist in src/lib/format.ts');
+  const body = src.slice(start, src.indexOf('\n}\n', start) + 3).replace('export function', 'function');
+  const { outputText } = ts.transpileModule(`${body}\nmodule.exports = productsAtBooking;`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   });
   const mod = { exports: {} };
@@ -76,7 +85,9 @@ test('Job Meta: Booking Date Time, Open Job Reason, Products, TAT — each from 
   assert.ok(meta.indexOf("['Booking Date Time'") < meta.indexOf("['Age'"), 'directly above Age, which it anchors');
   assert.equal(rowExpr(meta, 'Open Job Reason'), 'job.enquiry_reason_name',
     'the action_taken_reason decode getByIdCore already projects — not a second FE lookup');
-  assert.equal(rowExpr(meta, 'Total No. of Products'), 'totalProducts(job.services)');
+  assert.equal(rowExpr(meta, 'Products Added at Booking'), 'productsAtBooking(job.product_quantity)',
+    'what the client booked (tbl_job.product_quantity), not a count of service lines');
+  assert.doesNotMatch(meta, /\['Total No\. of Products'/, 'the retired line-count row must not come back');
 
   const tat = rowExpr(meta, 'Job Completion TAT');
   assert.equal(evalRow(tat, { exp_tat: '48' }), '48 hrs');
@@ -86,18 +97,15 @@ test('Job Meta: Booking Date Time, Open Job Reason, Products, TAT — each from 
   }
 });
 
-test('Total No. of Products counts ACTIVE service lines, not their quantity', () => {
-  const totalProducts = loadTotalProducts();
-  const svc = (job_service_status, quantity) => ({ job_service_status, quantity });
-  // Legacy: noOfProducts = getJobServiceList(jobId, 1).size() — lines, not units.
-  assert.equal(totalProducts([svc(1, 2), svc(1, 1)]), 2, 'two lines, whatever their quantity');
-  assert.equal(totalProducts([svc(1, 0)]), 1, 'a line with quantity 0 is still a line');
-  // Soft-deleted lines ride along on getById for the restore toggle; not products.
-  assert.equal(totalProducts([svc(1, 2), svc(0, 5)]), 1, 'a status-0 line must not count');
-  // A TINYINT(1) column arrives as a boolean through db.js typeCast.
-  assert.equal(totalProducts([svc(true, 4), svc(false, 9)]), 1);
-  assert.equal(totalProducts([]), 0);
-  assert.equal(totalProducts(undefined), 0, 'a payload without services is 0, not a crash');
+test('Products Added at Booking reads the booked quantity, and says NA when there is none', () => {
+  const productsAtBooking = loadProductsAtBooking();
+  assert.equal(productsAtBooking(2), '2');
+  assert.equal(productsAtBooking('3'), '3', 'a string from the wire still counts');
+  assert.equal(productsAtBooking(12500), '12,500', 'grouped the Indian way, like every other figure');
+  // Nothing captured must not read as a real figure an operator could quote.
+  for (const none of [0, '0', null, undefined, '', 'abc', -4]) {
+    assert.equal(productsAtBooking(none), 'NA', `${JSON.stringify(none)} must render NA`);
+  }
 });
 
 test('no Material Required row — nothing stores material_req, so it could only ever be an em dash', () => {
