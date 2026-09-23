@@ -23,11 +23,16 @@
  *   vertical  repeated, one per selected vertical   (omitted = Select All)
  *   employee  repeated, one per selected CRM name   (omitted = Select All)
  *   zm        omitted for '' / 'ALL'
- *   month     'YYYY-MM', omitted for '' / 'ALL'
  *   from, to  'YYYY-MM-DD' — the tab ALWAYS sends the effective window
  *             (resolveWindow), so a window change is a new key and refetches.
  * Lists are de-duplicated and sorted, so the same selection in any click order
  * is the same key. A list holding 'ALL' is Select All and is omitted.
+ *
+ * The server also reads a `month` ('YYYY-MM') filter, and still does; the tab
+ * no longer sends one. The Month select was folded into the Date Range picker
+ * (DateRangeFilter), which resolves every choice — its Last Month preset asks
+ * windowBounds for that month's first and last day — to a from / to pair. One
+ * window, one key, one rule.
  *
  * `v` is the tab's cache-buster (the server ignores it): it changes after an
  * upload is saved, so the 30-second useFetch cache can never serve the
@@ -39,6 +44,10 @@
  * shorter way to say Select All.
  */
 
+import {
+  lastAllowedTo as lastAllowedToWithin, monthToDate, monthWindow, widestWindow as widestWindowWithin,
+  type DateWindow,
+} from '@/lib/report-window';
 import type { Filters, OpenJobSortKey, Paging, TechnicianSortKey } from './types';
 
 const API_BASE = '/admin/quicksight/employee-performance';
@@ -61,70 +70,60 @@ export const EMPTY_FILTERS: Filters = {
   verticals: [],
   zm: ALL,
   employees: [],
-  month: ALL,
   from: '',
   to: '',
 };
 
 type Version = string | null | undefined;
 
-/* ── the window (mirrors live.service.js resolveLiveWindow) ───────────────── */
+/* ── the window (mirrors live.service.js resolveLiveWindow) ─────────────── */
+
+/*
+ * The date arithmetic itself lives in @/lib/report-window, shared with the
+ * Date Range picker (components/quicksight/DateRangeFilter) and the MTD tab:
+ * ONE implementation of "shift a calendar date", "which days does this month
+ * have", "how wide may a window be". What stays here is what belongs to THIS
+ * report — its cap and its 'ALL' sentinel — handed to those helpers. The names
+ * below keep the exact signatures the tab has always called, so moving the
+ * arithmetic out changed nothing in this folder.
+ */
 
 /** live.service.js MAX_RANGE_MONTHS: `to` must be before `from` + 3 calendar months. */
 export const MAX_RANGE_MONTHS = 3;
 
-export type DateWindow = { from: string; to: string };
-
-const pad2 = (n: number) => String(n).padStart(2, '0');
-
-/** 'YYYY-MM' shifted by n calendar months. */
-function shiftMonth(ym: string, n: number): string {
-  const [y, m] = ym.split('-').map(Number);
-  const idx = y * 12 + (m - 1) + n;
-  return `${Math.floor(idx / 12)}-${pad2((idx % 12) + 1)}`;
-}
-
-/** Days in 'YYYY-MM'. UTC arithmetic: calendar dates, never instants. */
-function daysInMonth(ym: string): number {
-  const [y, m] = ym.split('-').map(Number);
-  return new Date(Date.UTC(y, m, 0)).getUTCDate();
-}
-
-/** 'YYYY-MM-DD' shifted by n days. */
-function shiftYmd(ymd: string, n: number): string {
-  const [y, m, d] = ymd.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-}
+export type { DateWindow } from '@/lib/report-window';
 
 /** The latest `to` a window starting at `from` may have (live.service.js lastAllowedTo). */
 export function lastAllowedTo(from: string): string {
-  const ym = shiftMonth(from.slice(0, 7), MAX_RANGE_MONTHS);
-  const day = Math.min(Number(from.slice(8, 10)), daysInMonth(ym));
-  return shiftYmd(`${ym}-${pad2(day)}`, -1);
+  return lastAllowedToWithin(from, MAX_RANGE_MONTHS);
 }
 
 /**
- * The default bounds of a filter state: the chosen month (its last day capped
- * at today), else the current IST month's 1st .. today.
+ * The widest window the cap allows ending on `to` — what the picker's "All
+ * Dates" means here. The dashboard's own "All dates" is unbounded because it
+ * reads an uploaded snapshot; ours reads the live job table, where unbounded
+ * is a scan of the whole job history, so All Dates is MAX_RANGE_MONTHS ending
+ * today and the menu label says so.
+ */
+export function widestWindow(to: string): DateWindow {
+  return widestWindowWithin(to, MAX_RANGE_MONTHS);
+}
+
+/**
+ * A month's bounds, its last day capped at today: the Date Range picker's Last
+ * Month (and Month To Date) preset. 'ALL' / '' is the tab's DEFAULT window —
+ * the current IST month's 1st .. today — which is also what an empty from / to
+ * resolves to, so "no range chosen" and "Month To Date" are the same dates and
+ * the same fetch key.
  */
 export function windowBounds(month: string, today: string): DateWindow {
-  if (month && month !== ALL) {
-    const end = `${month}-${pad2(daysInMonth(month))}`;
-    return { from: `${month}-01`, to: end > today ? today : end };
-  }
-  return { from: `${today.slice(0, 7)}-01`, to: today };
+  return month && month !== ALL ? monthWindow(month, today) : monthToDate(today);
 }
 
 /** The filter state with '' from / to replaced by the default bounds — what every request sends. */
 export function resolveWindow(filters: Filters, today: string): Filters {
-  const bounds = windowBounds(filters.month, today);
+  const bounds = windowBounds(ALL, today);
   return { ...filters, from: filters.from || bounds.from, to: filters.to || bounds.to };
-}
-
-/** The last `count` IST months, newest first ('YYYY-MM'). */
-export function recentMonths(today: string, count: number): string[] {
-  const current = today.slice(0, 7);
-  return Array.from({ length: count }, (_, i) => shiftMonth(current, -i));
 }
 
 /* ── keys ─────────────────────────────────────────────────────────────────── */
@@ -139,7 +138,6 @@ function appendFilters(qs: URLSearchParams, f: Filters): void {
   sortedList(f.verticals).forEach((x) => qs.append('vertical', x));
   if (f.zm && f.zm !== ALL) qs.set('zm', f.zm);
   sortedList(f.employees).forEach((x) => qs.append('employee', x));
-  if (f.month && f.month !== ALL) qs.set('month', f.month);
   if (f.from) qs.set('from', f.from);
   if (f.to) qs.set('to', f.to);
 }

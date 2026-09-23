@@ -28,16 +28,19 @@
 /* ── filter state (the body's; serialised by api.ts filtersQuery) ─────────── */
 
 /*
- * Empty list = Select All. zm / month: '' or 'ALL' = All. from / to:
- * 'YYYY-MM-DD', or '' for the default bound — the chosen month's first / last
- * day, else the current IST month's 1st / today. api.ts resolveWindow turns
- * '' into the explicit dates every request carries.
+ * Empty list = Select All. zm: '' or 'ALL' = All. from / to: 'YYYY-MM-DD', or
+ * '' for the default bound — the current IST month's 1st / today. api.ts
+ * resolveWindow turns '' into the explicit dates every request carries.
+ *
+ * There is no `month` here any more: the Month select was folded into the Date
+ * Range picker (DateRangeFilter), which resolves every choice — its Last Month
+ * preset included — to a from / to pair. The server still accepts a `month`
+ * query param; the tab simply never sends one.
  */
 export type Filters = {
   verticals: string[];
   zm: string;
   employees: string[];
-  month: string;
   from: string;
   to: string;
 };
@@ -103,12 +106,40 @@ export type TeamPanel = {
   members: TeamMemberChip[];
 };
 
-/** Section 1 — Revenue Performance (date-ascending). */
+/*
+ * Section 1 — Revenue Performance (date-ascending).
+ *
+ * THE THREE CLOSED-JOB COLUMNS. The current dashboard splits a day's closed
+ * jobs by vertical beside the revenue, so every row carries three counts next
+ * to `completed` (aggregate.js buildSummary sums them across the selected
+ * SPOCs; compose.js CLOSED_SPLIT_FIELD decides which one a closed job lands
+ * in):
+ *
+ *   compOem  vertical 'Furniture' or 'Sports'
+ *   compRet  vertical 'Retail Maintenance'
+ *   compRel  vertical 'Relocation'
+ *
+ * They do NOT partition `completed`. A closed job in any other vertical
+ * (Easyfix, Amazon, Admin, IT, HR, oprations …) counts in `completed` and in
+ * none of the three, so completed >= compOem + compRet + compRel and the gap
+ * is real work. Nothing reading these may present them as a breakdown of a
+ * total, or invent an "Other" column by subtracting them from `completed`.
+ *
+ * `completed` stays on the row although the table no longer prints it: it is
+ * the day's closed-job count whatever the vertical, the backend sends it
+ * either way, and the KPI tiles are computed from the same figure.
+ */
 export type DailyRevenueRow = {
   date: string;
   target: number;
   revenue: number;
   completed: number;
+  /** Closed jobs in the OEM verticals — 'Furniture' and 'Sports'. */
+  compOem: number;
+  /** Closed jobs in 'Retail Maintenance'. */
+  compRet: number;
+  /** Closed jobs in 'Relocation'. */
+  compRel: number;
   /** 0–100+ */
   pct: number;
   due: number;

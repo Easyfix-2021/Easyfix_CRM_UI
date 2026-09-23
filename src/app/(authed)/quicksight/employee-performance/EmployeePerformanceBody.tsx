@@ -39,21 +39,27 @@
  * one rule that is actually biting; the Team panel and each section's empty
  * state repeat the reason in place.
  *
- * Layout follows the dashboard so MIS recognises it: filters, 7 KPI tiles,
- * 0 Team, then sections 1–10 in the original order.
+ * Layout follows the dashboard so MIS recognises it: filters, the Team member
+ * list, 7 KPI tiles, then sections 1–10 in the original order. Team sits above
+ * the tiles as of the 2026-09-20 dashboard, which moved it up beside the title.
  *
  * FILTERS:
  *   - Vertical / Employee are multi-selects; empty = Select All. Changing
  *     Vertical resets Employee to All (the dashboard rebuilds that select) and
  *     the Employee list only offers SPOCs of the selected verticals.
  *   - Zonal Manager stays a single select ('ALL' default).
- *   - THE WINDOW is live: Month picks a whole month (up to today); the Date
- *     Range picks any from / to up to today, at most 3 months (the backend's
- *     limit, checked here first so the message is clear). Default: the
- *     current IST month, 1st .. today. A range inside the chosen month keeps
- *     the month; one outside it switches Month back to All. Every request
- *     carries the effective from / to (api.ts resolveWindow), so a window
- *     change is a new key and refetches.
+ *   - THE WINDOW is live, and one control sets it: the Date Range picker
+ *     (@/components/quicksight/DateRangeFilter, shared with the MTD tab),
+ *     the 2026-09-20 dashboard's presets — Today,
+ *     Yesterday, Last 7 Days, Month To Date, Last Month, All Dates — over a
+ *     custom From / To, anchored to TODAY in IST rather than to the
+ *     dashboard's snapshot. The Month select it replaced is gone: Last Month
+ *     is the preset that used to be, and nothing else read the month filter.
+ *     Default: the current IST month, 1st .. today (Month To Date), stored as
+ *     empty bounds so it is one canonical fetch key. At most 3 months (the
+ *     backend's limit, checked in onRangeChange first so the message is
+ *     clear) and never past today. Every request carries the effective from /
+ *     to (api.ts resolveWindow), so a window change is a new key and refetches.
  *   - Any filter change closes the member dialog.
  *
  * Gating: ef-QuickSight + isQuickSightEmployeePerformanceView (the tab itself);
@@ -72,7 +78,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
-import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { showToast } from '@/components/ui/toast';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { downloadXlsx } from '@/lib/download-xlsx';
@@ -82,7 +87,7 @@ import { actionFlags } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 import {
   ACTION_KEY, ALL, EMPTY_FILTERS, LIVE_BASE, MAX_RANGE_MONTHS, TEMPLATE_FILENAME, TEMPLATE_URL, UPLOAD_KEY,
-  filtersQuery, lastAllowedTo, optionsKey, recentMonths, resolveWindow, summaryKey, windowBounds,
+  filtersQuery, lastAllowedTo, optionsKey, resolveWindow, summaryKey, widestWindow, windowBounds,
   type DateWindow,
 } from './api';
 import {
@@ -96,6 +101,7 @@ import type {
   Filters, LiveDailyCoverage, LiveMeta, LiveOptionsResponse, LiveSummaryResponse, LiveUnattributed,
   TeamMemberChip, UnattributedUser,
 } from './types';
+import { DateRangeFilter } from '@/components/quicksight/DateRangeFilter';
 import { TeamPanel } from './TeamPanel';
 import { MemberDetailDialog } from './MemberDetailDialog';
 import { UploadExcelButton } from './UploadExcelDialog';
@@ -113,9 +119,6 @@ import { SuggestionsSection } from './sections/SuggestionsSection';
 
 /* A BE 403 (requireQuickSight) arrives as one of these messages. */
 const DENIED_RE = /permission|quicksight access|access denied/i;
-
-/* How many months back the Month select offers (newest first). */
-const MONTH_CHOICES = 12;
 
 export function EmployeePerformanceBody() {
   const { me } = useMe();
@@ -166,13 +169,6 @@ export function EmployeePerformanceBody() {
     () => [{ value: ALL, label: 'All Zonal Managers' }, ...(opts?.zonalManagers ?? []).map((x) => ({ value: x, label: x }))],
     [opts],
   );
-  const monthOptions = useMemo<SearchOption[]>(
-    () => [
-      { value: ALL, label: 'All Months (Use Date Range)' },
-      ...recentMonths(today, MONTH_CHOICES).map((m) => ({ value: m, label: fmtMonthLong(m) })),
-    ],
-    [today],
-  );
   // The dashboard's fillEmployees(): only SPOCs of the selected verticals. Ticking
   // every vertical is Select All on the server (normaliseFilters), so it is here too.
   const employeeOptions = useMemo<SearchOption[]>(() => {
@@ -185,23 +181,35 @@ export function EmployeePerformanceBody() {
   }, [opts, filters.verticals]);
 
   const period = fmtDayRange(query.from, query.to);
-  const monthPicked = !!filters.month && filters.month !== ALL;
 
-  const onRangeChange = (next: DateWindow) => {
+  /*
+   * The Date Range picker's only way in — a preset or a typed custom range.
+   * Presets are inside the cap by construction; a typed range is not, so the
+   * rules live here, where the toast can say what to do about it. Returning
+   * false tells the picker the window did not change, and it keeps its menu
+   * open on the dates being fixed (a refused range is never truncated to fit).
+   */
+  const onRangeChange = (next: DateWindow): boolean => {
+    if (next.from > next.to) {
+      showToast({ variant: 'error', message: `The From date must be on or before the To date (${fmtDay(next.to)})` });
+      return false;
+    }
+    if (next.to > today) {
+      showToast({ variant: 'error', message: `The report ends at today: pick a To date on or before ${fmtDay(today)}` });
+      return false;
+    }
     const limit = lastAllowedTo(next.from);
     if (next.to > limit) {
       showToast({
         variant: 'error',
         message: `Pick at most ${MAX_RANGE_MONTHS} months: a range starting ${fmtDay(next.from)} can end on ${fmtDay(limit)} at the latest`,
       });
-      return;
+      return false;
     }
-    const month = monthPicked && next.from.startsWith(filters.month) && next.to.startsWith(filters.month)
-      ? filters.month
-      : ALL;
     // A bound is stored as '' so "the whole default window" is one canonical fetch key.
-    const bounds = windowBounds(month, today);
-    applyFilters({ month, from: next.from === bounds.from ? '' : next.from, to: next.to === bounds.to ? '' : next.to });
+    const bounds = windowBounds(ALL, today);
+    applyFilters({ from: next.from === bounds.from ? '' : next.from, to: next.to === bounds.to ? '' : next.to });
+    return true;
   };
 
   const narrowed = filtersQuery(filters) !== '';
@@ -300,16 +308,21 @@ export function EmployeePerformanceBody() {
           selectedLabel="employees"
         />
       </FilterField>
-      <FilterField label="Month">
-        <SearchSelect
-          value={filters.month || ALL}
-          onChange={(next) => applyFilters({ month: next || ALL, from: '', to: '' })}
-          options={monthOptions}
-          required
-        />
-      </FilterField>
       <FilterField label="Date Range" hint={`Up to ${MAX_RANGE_MONTHS} months, until today`}>
-        <DateRangePopover from={query.from} to={query.to} onChange={onRangeChange} maxDate={today} />
+        {/*
+          * The picker is shared with the MTD tab and holds no cap of its own:
+          * All Dates is THIS report's widest window (widestWindow, i.e.
+          * MAX_RANGE_MONTHS ending today), labelled with the range it is, and
+          * onRangeChange below is still the only thing that accepts or refuses
+          * a window.
+          */}
+        <DateRangeFilter
+          from={query.from}
+          to={query.to}
+          today={today}
+          onChange={onRangeChange}
+          allDates={{ window: widestWindow(today), label: `All Dates (Last ${MAX_RANGE_MONTHS} Months)` }}
+        />
       </FilterField>
       <div className="flex items-end">
         {narrowed && (
@@ -358,6 +371,12 @@ export function EmployeePerformanceBody() {
               </Card>
             )}
 
+            {/* Team first, then the tiles — the 2026-09-20 dashboard moved the
+                member list up beside the title, above the KPIs. Clicking a
+                member is how the rest of the report gets scoped, so it reads
+                better as the thing you choose before the numbers you read. */}
+            <TeamPanel team={s.team} activeKey={member?.key ?? null} onSelect={setMember} empty={teamEmptyState(gap)} />
+
             {/* KPI tiles — the dashboard's seven, in its order. */}
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <QsKpiTile label="Total Revenue" value={money(s.kpis.revenue)} accent={QS_COLORS[2]} icon={<IndianRupee className="size-5" />} />
@@ -368,8 +387,6 @@ export function EmployeePerformanceBody() {
               <QsKpiTile label="Target Achieved" value={pct1(s.kpis.targetAchieved)} accent={QS_COLORS[8]} icon={<Target className="size-5" />} />
               <QsKpiTile label="Team Members" value={num(s.kpis.teamSize)} accent={QS_COLORS[5]} icon={<Users className="size-5" />} />
             </div>
-
-            <TeamPanel team={s.team} activeKey={member?.key ?? null} onSelect={setMember} empty={teamEmptyState(gap)} />
 
             <RevenuePerformanceSection summary={s} />
             <OpenJobRecordSection summary={s} v={v} filters={query} />

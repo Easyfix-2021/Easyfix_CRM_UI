@@ -14,11 +14,23 @@
  *
  * Dates differ on purpose: fmtDay prints 'Sep' where the page's en-GB
  * toLocaleDateString prints 'Sept', and it never builds a Date, so no browser
- * timezone can move a 'YYYY-MM-DD' to the previous day.
+ * timezone can move a 'YYYY-MM-DD' to the previous day. fmtDay and fmtDayRange
+ * now live in @/lib/report-window (shared with the Date Range picker) and are
+ * re-exported below, unchanged.
  */
 
 import { formatDate } from '@/lib/utils';
 import type { ProductivityTone } from './types';
+
+/*
+ * fmtDay / fmtDayRange are the SHARED day formatters (@/lib/report-window),
+ * re-exported here so every `from './format'` import in this folder still
+ * resolves. They moved out with the date arithmetic when the Date Range picker
+ * became shared — a component under components/ cannot import a tab's format.ts,
+ * and a second copy of "how a day is printed" is exactly what the two tabs
+ * must not have. Everything else below is this report's own.
+ */
+export { fmtDay, fmtDayRange } from '@/lib/report-window';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -58,13 +70,6 @@ export function dec1(n: Num): string {
 /** 4.8 days — one decimal plus unit (City Avg Aging, TX Avg Open Aging). */
 export function days1(n: Num): string {
   return `${dec1(n)} days`;
-}
-
-/** 'YYYY-MM-DD' → '01 Aug 2026'. '—' when empty. */
-export function fmtDay(ymd: string | null | undefined): string {
-  if (!ymd) return '—';
-  const [y, m, d] = ymd.split('-');
-  return `${d} ${MONTHS[Number(m) - 1] ?? m} ${y}`;
 }
 
 /** 'YYYY-MM' (or a full 'YYYY-MM-DD') → 'Aug 2026'. '—' when empty. */
@@ -107,12 +112,6 @@ export function fmtMonthLongList(months: readonly string[]): string {
   const long = months.map(fmtMonthLong);
   if (long.length === 1) return long[0];
   return `${long.slice(0, -1).join(', ')} and ${long[long.length - 1]}`;
-}
-
-/** 'YYYY-MM-DD' pair → '01 Aug 2026 – 13 Sep 2026' (one date when equal). 'none' when either is empty. */
-export function fmtDayRange(from: string | null | undefined, to: string | null | undefined): string {
-  if (!from || !to) return 'none';
-  return from === to ? fmtDay(from) : `${fmtDay(from)} – ${fmtDay(to)}`;
 }
 
 /** An ISO instant (meta.jobsAsOf, an upload's uploadedAt) → '16 Sept 2026, 03:30 pm' in IST. */
