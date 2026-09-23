@@ -52,6 +52,9 @@ type City = {
   created_by_type: 'technician' | 'user' | null;
   created_by_name: string | null;
   created_date: string | null;
+  /* The city's zonal manager — inherited from its state, read-only here. */
+  state_user: number | null;
+  zonal_manager_name: string | null;
 };
 
 type ListResponse = { items: City[]; total: number };
@@ -456,6 +459,16 @@ export default function ManageCitiesPage() {
             *   Actions     11   → 9.1   (needs 9.00: the "Actions" title is
             *                             wider than its two 20px icons)
             *
+            * RE-PLANNED 2026-09-23 for TWELVE columns: Zonal Manager was added
+            * after District, and State was widened because it truncated to
+            * "Maharash…" / "Andhra Pr…" at every width. The extra 11.5% and
+            * State's +2.2 come from the count columns, which were far wider
+            * than their digits need (Technicians 14.5 → 11, Pincodes 12.4 →
+            * 9.5, Zones 9.9 → 7.5, Tier 8.2 → 6, City ID 8.2 → 6.5), plus
+            * Actions 9.1 → 7.5 — its two icons are 40px, the title is what
+            * wanted the width, and it wraps. The new total is 110, and the
+            * browser normalises percentages, so each column gets its share.
+            *
             * THE TENTHS ARE LOAD-BEARING — do not "tidy" them to integers.
             * Rounding each column up to a whole percent costs 117% against a
             * 112% budget; measured, the integer version puts State, Pincodes
@@ -465,17 +478,18 @@ export default function ManageCitiesPage() {
             */}
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '8.2%'  }} />{/* City ID */}
-              <col style={{ width: '9.8%'  }} />{/* City Name */}
-              <col style={{ width: '9.3%'  }} />{/* State */}
-              <col style={{ width: '11%'   }} />{/* District */}
-              <col style={{ width: '8.2%'  }} />{/* Tier */}
-              <col style={{ width: '9.9%'  }} />{/* Zones */}
-              <col style={{ width: '12.4%' }} />{/* Pincodes */}
-              <col style={{ width: '14.5%' }} />{/* Technicians */}
-              <col style={{ width: '9.4%'  }} />{/* Created By */}
-              <col style={{ width: '10.2%' }} />{/* Status */}
-              <col style={{ width: '9.1%'  }} />{/* Actions */}
+              <col style={{ width: '6.5%'  }} />{/* City ID */}
+              <col style={{ width: '11%'   }} />{/* City Name */}
+              <col style={{ width: '11.5%' }} />{/* State — widened: it was truncating to "Maharash…" */}
+              <col style={{ width: '10.5%' }} />{/* District */}
+              <col style={{ width: '11.5%' }} />{/* Zonal Manager — new */}
+              <col style={{ width: '6%'    }} />{/* Tier */}
+              <col style={{ width: '7.5%'  }} />{/* Zones */}
+              <col style={{ width: '9.5%'  }} />{/* Pincodes */}
+              <col style={{ width: '11%'   }} />{/* Technicians */}
+              <col style={{ width: '9%'    }} />{/* Created By */}
+              <col style={{ width: '8.5%'  }} />{/* Status */}
+              <col style={{ width: '7.5%'  }} />{/* Actions */}
             </colgroup>
             <thead>
               <tr>
@@ -496,6 +510,8 @@ export default function ManageCitiesPage() {
                 <SortHeader col={'city_name'        as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}><span className="whitespace-normal">City Name</span></SortHeader>
                 <SortHeader col={'state_name'       as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>State</SortHeader>
                 <SortHeader col={'district'         as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>District</SortHeader>
+                {/* Read-only: a city's manager comes from its state (States tab). */}
+                <SortHeader col={'zonal_manager_name' as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}><span className="whitespace-normal">Zonal Manager</span></SortHeader>
                 <SortHeader col={'tier'             as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Tier</SortHeader>
                 <SortHeader col={'zone_count'       as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Zones</SortHeader>
                 <SortHeader col={'pincode_count'    as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Pincodes</SortHeader>
@@ -514,10 +530,10 @@ export default function ManageCitiesPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No cities match the current filters.</td></tr>
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No cities match the current filters.</td></tr>
               )}
               {!loading && sorted.map((c) => (
                 <tr key={c.city_id}>
@@ -528,6 +544,9 @@ export default function ManageCitiesPage() {
                   </td>
                   <td className="!text-left truncate" title={c.district ?? ''}>
                     {c.district ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="!text-left truncate" title={c.zonal_manager_name ?? ''}>
+                    {c.zonal_manager_name ?? <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="!text-center truncate">{c.tier ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-center">{c.zone_count}</td>
