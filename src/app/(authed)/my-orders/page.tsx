@@ -30,6 +30,7 @@ import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
 import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
 import { canApproveOnClientsBehalf } from '@/lib/client-approval';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
+import { BookingQueueView } from '@/components/job/BookingQueueView';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
@@ -62,6 +63,11 @@ const PS_COLUMN_COUNT = 12;
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
 const JOBS_MAX_LIMIT = 500;
+
+// Which Unconfirmed view the operator last used ('old' | 'new'). Its own key,
+// not folded into any other stored blob, so a change to one cannot reset the
+// other — the same reasoning as the section order/collapse keys.
+const UNCONFIRMED_VIEW_KEY = 'easyfix.crm.unconfirmed.view.v1';
 
 /*
  * MY ORDERS — user-scoped view of tbl_job.
@@ -368,6 +374,22 @@ export default function MyOrdersPage() {
    * "N matching orders" header — bumped wherever a JobModal save lands.
    */
   const [sectionsReload, setSectionsReload] = useState(0);
+
+  /*
+   * Which cut of Unconfirmed is on screen. Remembered per operator so the view
+   * they work in is the one that opens, and defaulting to 'old' so nobody's
+   * screen changes under them on deploy day — ops opts into the new tab.
+   */
+  const [unconfirmedView, setUnconfirmedViewState] = useState<'old' | 'new'>('old');
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(UNCONFIRMED_VIEW_KEY) === 'new') setUnconfirmedViewState('new');
+    } catch { /* private window / blocked storage — the default is fine */ }
+  }, []);
+  function setUnconfirmedView(v: 'old' | 'new') {
+    setUnconfirmedViewState(v);
+    try { localStorage.setItem(UNCONFIRMED_VIEW_KEY, v); } catch { /* not worth failing over */ }
+  }
   /*
    * Bumped after any action that can move a job between scheduling buckets
    * (offering one sends it Not offered → Offered-waiting). The tab counts are a
@@ -939,6 +961,61 @@ export default function MyOrdersPage() {
         <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
+            /*
+             * TWO VIEWS OF THE SAME ORDERS, never both at once.
+             *
+             * "Old view" groups by appointment date (Overdue / Upcoming /
+             * Future); "Booking queue" groups by where the order is STUCK
+             * (waiting for a link, no response, delivery failed, …). A job that
+             * is Overdue in one is No response in the other, so showing them
+             * together would count it twice and neither set of headings would
+             * sum to the tab total. The switch below is the whole isolation.
+             *
+             * Old stays the default until ops has signed the new one off.
+             */
+            <>
+              <div className="flex items-center gap-1 border-b border-border px-3">
+                {([['old', 'Old view'], ['new', 'Booking queue']] as const).map(([v, label]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setUnconfirmedView(v)}
+                    className={`-mb-px border-b-2 px-4 py-2 text-[13px] font-bold ${
+                      unconfirmedView === v
+                        ? 'border-primary text-primary'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {label}
+                    {v === 'new' && (
+                      <span className="ml-1.5 align-[2px] rounded bg-primary px-1.5 py-px text-[9px] font-extrabold text-primary-foreground">
+                        NEW
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              {unconfirmedView === 'new' ? (
+                <BookingQueueView
+                  ownerId={scopedOwnerId}
+                  query={{
+                    status: TABS.find((t) => t.value === 'unconfirmed')?.status,
+                    ownerId: scopedOwnerId,
+                    q: serverQ || undefined,
+                    sortBy: sortKey || undefined,
+                    sortDir: sortKey ? sortDir : undefined,
+                  }}
+                  canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
+                  canSendMagicLink={!!canJob.isJobMagicLinkSend}
+                  userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
+                  openView={openView}
+                  openConfirm={openConfirm}
+                  sortBy={sortKey}
+                  sortDir={sortDir}
+                  onSort={toggle}
+                  onMutation={() => load(false, true)}
+                />
+              ) : (
             /* Same table, grouped into the five sections ops asked for. The
                component owns the grouping and the drag order only; every
                column, sort header and row action still comes from
@@ -988,6 +1065,8 @@ export default function MyOrdersPage() {
                */
               onMagicLinkSent={() => load(false, true)}
             />
+              )}
+            </>
           ) : isPendingScheduling ? (
           /*
             * Pending-for-Scheduling custom layout. Distinct columns vs the
