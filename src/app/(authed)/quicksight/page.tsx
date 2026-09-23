@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, type LucideIcon,
+  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, FileSpreadsheet, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -195,6 +195,14 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightCallTrackingView',
     description: 'Calls placed from the CRM — by job (who called, at which step, to whom) and by user per day.',
     Icon: PhoneCall,
+  },
+  {
+    urlBase: 'custom',
+    label: 'Custom Reports',
+    newOrder: 6,
+    actionKey: 'isQuickSightDynamicReportView',
+    description: 'Build a report from your own spreadsheet — table, optional chart, share by role or public link.',
+    Icon: FileSpreadsheet,
   },
 ];
 
