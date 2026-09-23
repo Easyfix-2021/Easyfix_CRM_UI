@@ -52,7 +52,7 @@ import { publicFetch } from '@/lib/public-fetch';
 import { InfoCard } from '@/components/public/InfoCard';
 import { OverlayShell } from '@/components/public/OverlayShell';
 import { FullPageMessage } from '@/components/public/FullPageMessage';
-import { MinDateCalendar } from '@/components/public/MinDateCalendar';
+import { MinDateCalendar } from '@/components/ui/min-date-calendar';
 
 
 type PageState =
