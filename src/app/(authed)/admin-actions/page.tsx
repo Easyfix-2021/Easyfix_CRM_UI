@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles, AudioLines,
-  Timer, KeyRound, Fingerprint, LifeBuoy, LockOpen,
+  Timer, KeyRound, Fingerprint, LifeBuoy, LockOpen, LayoutDashboard,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -54,6 +54,22 @@ const ACTIONS = [
      * Completed menu. One action key, one gate, nothing to forget.
      */
     actionKey: 'isIssueManage',
+  },
+  {
+    href: '/ops-desk',
+    icon: LayoutDashboard,
+    title: 'Ops Desk',
+    blurb: 'The live operations desk (V3 Phase 3, spec 3.2) — price additional-work claims, send them back, pick up help requests, verify a can’t-complete or cancel with the customer.',
+    // Same "no tbl_menu row" pattern as Reported Issues above — reached
+    // only from this grid and the /jobs header link, gated on one action key.
+    actionKey: 'isJobAppRequestResolve',
+  },
+  {
+    href: '/verification',
+    icon: ShieldCheck,
+    title: 'Verification',
+    blurb: 'Audit queue for completed jobs (spec 3.6) plus open can’t-complete / cancel claims — pass the audit or verify with the customer.',
+    actionKey: 'isJobAppRequestResolve',
   },
   {
     href: '/jobs/upload',

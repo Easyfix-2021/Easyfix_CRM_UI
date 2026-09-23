@@ -276,6 +276,30 @@ export function useUiFlags(): {
 }
 
 /*
+ * useTabVisible — tracks `document.visibilityState === 'visible'`.
+ *
+ * Extracted from the pattern settings/scheduled-jobs/page.tsx established
+ * (tabVisible state + a visibilitychange listener) so the Ops Desk poll
+ * (3.2, 30s) and the job-chat poll (3.4, 20s) don't each hand-roll their own
+ * copy. Pair with `pollIntervalMs` from lib/ops-desk.ts:
+ *
+ *   const tabVisible = useTabVisible();
+ *   useFetch(key, { refetchInterval: pollIntervalMs(tabVisible, 30_000) });
+ */
+export function useTabVisible(): boolean {
+  const [visible, setVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState === 'visible',
+  );
+  useEffect(() => {
+    const onVis = () => setVisible(document.visibilityState === 'visible');
+    onVis();
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+  return visible;
+}
+
+/*
  * useDebouncedValue — returns the input value debounced by `delayMs`.
  * Use this for search inputs etc. — emits the trailing value, no
  * leading-edge fire, no setTimeout cleanup boilerplate at call sites.

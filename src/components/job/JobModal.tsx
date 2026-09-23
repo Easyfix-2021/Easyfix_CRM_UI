@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
+import JobActivity from '@/components/job/JobActivity';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { collectedByCode, collectedByLabel, collectedByDisplay, collectedByText, COLLECTED_BY_JOB_OPTIONS } from '@/lib/collected-by';
@@ -39,7 +40,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { ShareChip, ReleaseShareButton, SHARE_RELEASE_ACTION } from '@/components/job/JobShareControls';
 import type { JobShare } from '@/lib/job-share';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, type JobMoneyResponse } from '@/lib/api';
+import { formatJobMoney } from '@/lib/ops-desk';
 import { formatApiError } from '@/lib/api-errors';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 // Booking-window vocabulary — the FOUR bands stored in tbl_job.time_slot plus
@@ -1202,6 +1204,11 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
    */
   const KNOWN_TABS = new Set([
     'summary', 'services', 'schedule', 'images', 'questionnaire', 'comments', 'quotations',
+    // Activity is ungated: it reads tbl_job_logs for a job the operator can
+    // already open, and scopedJob on the route is the same guard /header and
+    // /offers use. Gating it behind a permission would hide a job's history
+    // from the people who work the job.
+    'activity',
     ...(canManageJobCharges ? ['billing'] : []),
   ]);
   // The Materials tab was folded into Quotations (2026-09-21, material
@@ -1242,6 +1249,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <TabsTrigger value="questionnaire">Questionnaire</TabsTrigger>
         <TabsTrigger value="comments">Comments</TabsTrigger>
         <TabsTrigger value="quotations">Quotations</TabsTrigger>
+        <TabsTrigger value="activity">Activity</TabsTrigger>
         {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
         {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
         </TabsList>
@@ -1490,6 +1498,12 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ...(Array.isArray(job.custom_properties) ? job.custom_properties as Array<{ label?: string; name?: string; value?: unknown }> : [])
               .map((p): [string, unknown] => [String(p.label || p.name), p.value]),
           ]}/>
+          {/* Money card (spec 3.9) — Client / TX / Margin from GET
+              /admin/jobs/:id/money. Ungated, like the rest of Summary: an
+              operator already looking at this job's Services/Billing tabs can
+              see the client price there too, so hiding the roll-up here would
+              not protect anything. */}
+          <JobMoneyCard jobId={Number(job.job_id)} />
         </div>
         <JobRescheduleHistory jobId={Number(job.job_id)} refreshKey={commentsRefreshKey} />
         <JobCallHistory jobId={Number(job.job_id)} />
@@ -1632,6 +1646,16 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           jobStatus={Number(job.job_status)}
           onJobChanged={onRefresh}
         />
+      </Panel>
+
+      {/*
+        * Activity sits after Quotations and before Billing so the two panels an
+        * operator opens to answer "what happened" and "what was charged" are
+        * adjacent. Unlike Billing it is NOT wrapped in canManageJobCharges:
+        * reading a job's own history needs no charge permission.
+        */}
+      <Panel value="activity" label="Activity" layout={layout}>
+        <JobActivity jobId={job.job_id != null ? Number(job.job_id) : null} />
       </Panel>
 
       {/* Billing & Charges tab — legacy CheckIn-detail right-column
@@ -12651,6 +12675,21 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
         ) : null}
       </div>
     </div>
+  );
+}
+
+/*
+ * JobMoneyCard (spec 3.9) — "Client ₹X · TX ₹Y · Margin ₹Z" from
+ * GET /admin/jobs/:id/money. A single DlCard row rather than three, matching
+ * the Ops Desk list's own single-line "Client ₹X · TX ₹Y" so the same job
+ * reads identically on both surfaces.
+ */
+function JobMoneyCard({ jobId }: { jobId: number }) {
+  const { data, loading, error } = useFetch<JobMoneyResponse>(`/admin/jobs/${jobId}/money`);
+  return (
+    <DlCard title="Money" rows={[
+      ['Amount', loading ? 'Loading…' : error ? null : formatJobMoney(data?.client, data?.tx, data?.margin)],
+    ]}/>
   );
 }
 
