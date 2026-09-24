@@ -104,6 +104,13 @@ type JobsQuery = Record<string, string | number | undefined>;
  * So the age lives INSIDE each tile now, and the tile's own number stays the
  * whole bucket. Day N = N IST calendar days since the ticket came in.
  */
+/*
+ * The tile the page opens on, and the one Clear filter returns to: those
+ * customers have already answered and are one click from booked — the fastest
+ * work on the board.
+ */
+const DEFAULT_BUCKET: BucketKey = 'response_received';
+
 const DAYS: { key: DayKey; label: string }[] = [
   { key: '0', label: 'Day 0' },
   { key: '1', label: 'Day 1' },
@@ -116,7 +123,7 @@ const DAYS: { key: DayKey; label: string }[] = [
 const JOBS_MAX_LIMIT = 500;
 
 export function BookingQueueView({
-  query, ownerId, onMutation, onCounts, reloadSignal, ...tableProps
+  query, ownerId, onMutation, onCounts, reloadSignal, clearSignal, ...tableProps
 }: Omit<TableProps, 'rows' | 'loading'> & {
   query: JobsQuery;
   ownerId?: number;
@@ -136,13 +143,19 @@ export function BookingQueueView({
    * in the modal leaves it sitting in the tile it has just left.
    */
   reloadSignal?: number;
+  /*
+   * Bumped by the page's Clear-filter button. Drops every narrowing this view
+   * owns and returns to the tile the page opens on, so one control resets the
+   * whole screen rather than the flags alone.
+   */
+  clearSignal?: number;
 }) {
   /*
    * The page opens on RESPONSE RECEIVED (ops, 2026-09-24). Those customers have
    * already answered and are one click from being booked — the fastest work on
    * the board — whereas New is waiting on a cron nobody has to watch.
    */
-  const [bucket, setBucket] = useState<BucketKey>('response_received');
+  const [bucket, setBucket] = useState<BucketKey>(DEFAULT_BUCKET);
   /*
    * The day pill inside the selected tile, or null for the whole bucket.
    * Cleared whenever the tile changes: "Day 2" of one bucket means nothing in
@@ -219,6 +232,16 @@ export function BookingQueueView({
     setPage(0);
   }, [queryKey]);
 
+  const firstClear = useRef(true);
+  useEffect(() => {
+    if (firstClear.current) { firstClear.current = false; return; }
+    setEscalated(false);
+    setRescheduled(false);
+    setDay(null);
+    setBucket(DEFAULT_BUCKET);
+    setPage(0);
+  }, [clearSignal]);
+
   const firstReload = useRef(true);
   useEffect(() => {
     if (firstReload.current) { firstReload.current = false; return; }
@@ -257,10 +280,11 @@ export function BookingQueueView({
         * a row of vertical space saying the same thing — and ops is reading
         * this page to find jobs, not totals.
         */}
-      {/* SIX ACROSS on a wide screen. Two rows of three pushed the first job below
-          the fold at 1440x900 — ops opened the page and could not see the work.
-          Wrapping to 3 and 2 keeps it usable on smaller screens. */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+      {/* THREE ACROSS, two rows. A single row of six was tried on 2026-09-24 and
+          ops asked for this back: at six the tiles are too narrow for their
+          pills, which wrap and give back the height the row was meant to save.
+          The other compactions stay. */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         <Tile
           label="New — waiting for link" hint="Link goes out on the next hourly run"
           open={c?.open.new} days={c?.days?.new}
@@ -335,18 +359,6 @@ export function BookingQueueView({
           <FlagChip on={rescheduled} tone="warning" onClick={() => { setRescheduled((v) => !v); setPage(0); }}>
             ↻ Rescheduled by customer
           </FlagChip>
-          {/* Always present, so nobody hunts for it; muted and inert when there
-              is nothing to clear, rather than appearing and disappearing. */}
-          <button
-            type="button"
-            disabled={!anyFilter}
-            onClick={() => { setEscalated(false); setRescheduled(false); setDay(null); setPage(0); }}
-            className={`ml-auto text-xs font-semibold underline underline-offset-2 ${
-              anyFilter ? 'text-foreground hover:opacity-80' : 'cursor-default text-muted-foreground/50 no-underline'
-            }`}
-          >
-            Clear filter
-          </button>
         </div>
         <div className="overflow-x-auto">
           {/* A different column set per bucket — see BookingQueueTable. */}
@@ -442,24 +454,33 @@ function Tile({
 }) {
   const loaded = open !== undefined;
   return (
-    // The tile is a plain div, not a button: it CONTAINS buttons (the pills),
-    // and a button inside a button is invalid HTML that browsers silently
-    // reflow. The headline row is the clickable part.
-    <div className={tileClass(selected, tone)} title={hint}>
-      <button
-        type="button"
-        onClick={() => onPick(null)}
-        className="block w-full text-left"
-        aria-pressed={selected && !activeDay}
-      >
-        {/* An em dash until the count arrives: a 0 that means "not loaded yet"
-            is indistinguishable from a 0 that means "none", and on this page
-            that difference is the whole point. */}
-        <div className="text-xl font-semibold leading-none">{loaded ? open : '—'}</div>
-        {/* The hint moved to the tile's tooltip: it explained the bucket once,
-            and after the first day it was costing a line on every tile. */}
-        <div className="mt-1 text-xs font-semibold leading-tight">{label}</div>
-      </button>
+    /*
+     * THE WHOLE BOX IS THE TARGET. It used to be a button wrapped around the
+     * headline only, so the bottom half — where the pills live, and where the
+     * eye lands on a tall tile — did nothing at all. It cannot BE a button,
+     * because it contains buttons and nested buttons are invalid HTML that
+     * browsers silently reflow; so it is a div carrying the button ROLE, with
+     * the keyboard handling a button would have given for free. The pills
+     * stopPropagation so clicking one narrows to that pill instead of also
+     * re-selecting the tile and throwing the narrowing away.
+     */
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected && !activeDay}
+      onClick={() => onPick(null)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(null); }
+      }}
+      className={`${tileClass(selected, tone)} cursor-pointer`}
+      title={hint}
+    >
+      {/* An em dash until the count arrives: a 0 that means "not loaded yet" is
+          indistinguishable from a 0 that means "none", and on this page that
+          difference is the whole point. */}
+      <div className="text-xl font-semibold leading-none">{loaded ? open : '—'}</div>
+      <div className="mt-1 text-xs font-semibold leading-tight">{label}</div>
+      <div className="text-xs opacity-80">{hint}</div>
       {loaded && extra && (
         <div className="mt-1 flex flex-wrap gap-1">
           {extra.map((p) => (
@@ -489,7 +510,9 @@ function Pill({ on, onPick, children }: { on: boolean; onPick: () => void; child
   return (
     <button
       type="button"
-      onClick={onPick}
+      // Without this the click ALSO reaches the tile behind it, which selects
+      // the whole bucket and discards the pill the operator just asked for.
+      onClick={(e) => { e.stopPropagation(); onPick(); }}
       aria-pressed={on}
       className={`rounded-full px-1.5 py-px text-xs font-semibold ${
         on ? 'bg-foreground text-background' : 'border border-current/20 bg-card/70'

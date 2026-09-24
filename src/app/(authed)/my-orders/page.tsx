@@ -797,6 +797,12 @@ export default function MyOrdersPage() {
    * how a header ends up disagreeing with the tiles under it.
    */
   const [bookingQueueSubline, setBookingQueueSubline] = useState<string | null>(null);
+  /*
+   * Bumped by the Clear-filter button beside the search box. The queue owns its
+   * own filter state (tile, day, flags) — this is the page asking it to drop
+   * all of it, rather than the page trying to hold a copy and the two drifting.
+   */
+  const [queueClear, setQueueClear] = useState(0);
 
   /*
    * The local `jobAgeLabel(ts)` helper that used to live here was RETIRED
@@ -898,7 +904,8 @@ export default function MyOrdersPage() {
       {!isRetiredTab && !isPendingStart && (
       <Card>
         <CardContent className="p-3 space-y-3">
-          <div className="relative">
+          <div className="flex items-center gap-2">
+          <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             {/* Placeholder + hint are DERIVED from JOB_SEARCH_FIELDS in
                 lib/job-tabs.ts — the same array filterJobRows matches on — so
@@ -915,6 +922,25 @@ export default function MyOrdersPage() {
               onChange={(e) => setQ(e.target.value)}
               className="pl-9"
             />
+          </div>
+          {/*
+            * CLEAR FILTER lives beside the search box (ops, 2026-09-24), not
+            * down in the table's caption: it resets EVERYTHING that is
+            * narrowing the queue — the search text, the flag chips, the day
+            * pill and the selected tile — and the search box is the control
+            * people look at when they want the page back to normal. Down in
+            * the caption it could only reach the flags, which is exactly the
+            * complaint.
+            */}
+          {isUnconfirmed && (
+            <button
+              type="button"
+              onClick={() => { setQ(''); setQueueClear((n) => n + 1); }}
+              className="whitespace-nowrap rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Clear filter
+            </button>
+          )}
           </div>
           {/*
             * Pending-for-Scheduling filter bar. Rendered ONLY on that tab —
@@ -966,6 +992,7 @@ export default function MyOrdersPage() {
               ownerId={scopedOwnerId}
               onCounts={setBookingQueueSubline}
               reloadSignal={sectionsReload}
+              clearSignal={queueClear}
               query={{
                 status: TABS.find((t) => t.value === 'unconfirmed')?.status,
                 ownerId: scopedOwnerId,
