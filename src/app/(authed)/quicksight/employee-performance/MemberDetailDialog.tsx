@@ -10,7 +10,7 @@
  *   Revenue Performance  — team daily target vs team revenue for a team lead,
  *                          personal target vs A&CO achieved for a member
  *
- * Both views arrive in ONE response: GET …/member?<filters>&name=<CRM name>
+ * Both views arrive in ONE response: GET …/live/member?<filters>&name=<CRM name>
  * (aggregate.js memberDetail). Only Month and the date range change it; the
  * other filters are sent and ignored, exactly as the dashboard's dialog only
  * reads selectedDates().
@@ -65,7 +65,7 @@ export function MemberDetailDialog({
   period,
   onClose,
 }: {
-  /** meta.uploadedAt — the cache-buster in every data key. */
+  /** The tab's cache-buster (changes after an upload is saved) — in every data key. */
   v: string | null;
   filters: Filters;
   /** The open member, or null when the dialog is closed. */

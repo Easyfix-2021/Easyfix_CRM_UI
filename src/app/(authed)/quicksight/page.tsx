@@ -50,7 +50,7 @@ type ReportCardDef = {
   description: string;
   Icon: LucideIcon;
   /*
-   * Cards that BUNDLE several reports (Performance Report = 5 tabs) are visible
+   * Cards that BUNDLE several reports (Performance Report = 7 tabs) are visible
    * when the user has ANY of these keys, since each tab is gated separately
    * inside the page. `actionKey` stays the primary/representative key so
    * existing consumers of this list keep working.
@@ -82,10 +82,11 @@ const REPORTS: ReportCardDef[] = [
     Icon: ClipboardList,
   },
   {
-    // Bundles the six performance scorecards behind gliding tabs. The three
+    // Bundles the seven performance scorecards behind gliding tabs. The three
     // standalone cards below stay — this is an additional entry point, not a
     // replacement, so nobody's bookmark or grant changes. Employee Performance
-    // has NO card of its own: it lives only as the Employee tab.
+    // and MTD have NO card of their own: each lives only as its tab, so this
+    // card is the ONLY way into them and its anyOf must list their keys.
     urlBase: 'performance',
     label: 'Performance',
     newOrder: 1,
@@ -97,8 +98,9 @@ const REPORTS: ReportCardDef[] = [
       'isQuickSightStatePerformanceView',
       'isQuickSightUserPerformanceView',
       'isQuickSightEmployeePerformanceView',
+      'isQuickSightMtdView',
     ],
-    description: 'Client, City, Technician, State, User and Employee scorecards in one place.',
+    description: 'Client, City, Technician, State, User, Employee and MTD scorecards in one place.',
     Icon: Gauge,
   },
   {

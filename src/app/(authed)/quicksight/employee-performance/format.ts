@@ -14,11 +14,23 @@
  *
  * Dates differ on purpose: fmtDay prints 'Sep' where the page's en-GB
  * toLocaleDateString prints 'Sept', and it never builds a Date, so no browser
- * timezone can move a 'YYYY-MM-DD' to the previous day.
+ * timezone can move a 'YYYY-MM-DD' to the previous day. fmtDay and fmtDayRange
+ * now live in @/lib/report-window (shared with the Date Range picker) and are
+ * re-exported below, unchanged.
  */
 
 import { formatDate } from '@/lib/utils';
 import type { ProductivityTone } from './types';
+
+/*
+ * fmtDay / fmtDayRange are the SHARED day formatters (@/lib/report-window),
+ * re-exported here so every `from './format'` import in this folder still
+ * resolves. They moved out with the date arithmetic when the Date Range picker
+ * became shared — a component under components/ cannot import a tab's format.ts,
+ * and a second copy of "how a day is printed" is exactly what the two tabs
+ * must not have. Everything else below is this report's own.
+ */
+export { fmtDay, fmtDayRange } from '@/lib/report-window';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -60,13 +72,6 @@ export function days1(n: Num): string {
   return `${dec1(n)} days`;
 }
 
-/** 'YYYY-MM-DD' → '01 Aug 2026'. '—' when empty. */
-export function fmtDay(ymd: string | null | undefined): string {
-  if (!ymd) return '—';
-  const [y, m, d] = ymd.split('-');
-  return `${d} ${MONTHS[Number(m) - 1] ?? m} ${y}`;
-}
-
 /** 'YYYY-MM' (or a full 'YYYY-MM-DD') → 'Aug 2026'. '—' when empty. */
 export function fmtMonth(ym: string | null | undefined): string {
   if (!ym) return '—';
@@ -74,7 +79,42 @@ export function fmtMonth(ym: string | null | undefined): string {
   return `${MONTHS[Number(m) - 1] ?? m} ${y}`;
 }
 
-/** An ISO instant (meta.uploadedAt) → '16 Sept 2026, 03:30 pm' in IST. */
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
+  'October', 'November', 'December'];
+
+/** 'YYYY-MM' → 'September 2026' (the Month select's labels, as the dashboard's). '—' when empty. */
+export function fmtMonthLong(ym: string | null | undefined): string {
+  if (!ym) return '—';
+  const [y, m] = ym.split('-');
+  return `${MONTHS_LONG[Number(m) - 1] ?? m} ${y}`;
+}
+
+/**
+ * Ascending 'YYYY-MM' list → 'Aug 2026, Sep 2026'; more than three become
+ * 'Jun 2026 – Sep 2026 (4 months)'. 'none' when empty.
+ */
+export function fmtMonthList(months: readonly string[]): string {
+  if (months.length === 0) return 'none';
+  if (months.length <= 3) return months.map(fmtMonth).join(', ');
+  return `${fmtMonth(months[0])} – ${fmtMonth(months[months.length - 1])} (${months.length} months)`;
+}
+
+/**
+ * The same list for running text, in the Month select's long style:
+ * 'September 2026', 'August 2026 and September 2026'; more than three collapse
+ * to 'June 2026 – September 2026 (4 months)'. 'none' when empty.
+ */
+export function fmtMonthLongList(months: readonly string[]): string {
+  if (months.length === 0) return 'none';
+  if (months.length > 3) {
+    return `${fmtMonthLong(months[0])} – ${fmtMonthLong(months[months.length - 1])} (${months.length} months)`;
+  }
+  const long = months.map(fmtMonthLong);
+  if (long.length === 1) return long[0];
+  return `${long.slice(0, -1).join(', ')} and ${long[long.length - 1]}`;
+}
+
+/** An ISO instant (meta.jobsAsOf, an upload's uploadedAt) → '16 Sept 2026, 03:30 pm' in IST. */
 export function fmtStamp(iso: string | null | undefined): string {
   return formatDate(iso);
 }

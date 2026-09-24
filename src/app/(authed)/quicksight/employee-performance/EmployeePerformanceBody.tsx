@@ -5,47 +5,72 @@
  * report (rendered by quicksight/performance/page.tsx, like the other tabs'
  * bodies). The old standalone route redirects here.
  *
- * v1 NATIVE VIEW. The MIS dashboard (dashboard_automation/dashboard.html)
- * rebuilt in the CRM's own tiles, tables, filters and dialog — not the MIS
- * HTML look. The data is the snapshot MIS uploads (data.js); every number is
+ * NATIVE VIEW OVER LIVE DATA (owner decisions, final). The MIS dashboard
+ * rebuilt in the CRM's own tiles, tables, filters and dialog. Every number is
  * computed server-side by EasyFix_Backend
- * services/quicksight/employee-performance/aggregate.js, which is proven
- * identical to the dashboard. This file only chooses filters and lays out
- * what the endpoints return:
+ * services/quicksight/employee-performance (live.service.js composes the
+ * dashboard object, aggregate.js — proven identical to the dashboard — reads
+ * it). This file only chooses filters and lays out what the endpoints return:
  *
- *   GET  /meta          what is stored, by whom, when (null = nothing yet)
- *   POST /upload        data.js (gzipped here)
- *   GET  /options       filter lists
- *   GET  /summary       KPIs, team panel and sections 1, 3–5, 6 (zonal), 7–10
- *   GET  /open-jobs     section 2 table     (fetched inside OpenJobRecordSection)
- *   GET  /technicians   section 6 TX table  (fetched inside ZonalSection)
- *   GET  /member        team-member dialog  (fetched inside MemberDetailDialog)
+ *   - open jobs (every job open NOW), closed jobs and CRM counts (both inside
+ *     the selected window) come LIVE from the database;
+ *   - target list, emp detail, Secondary spoc target list, time champ data and
+ *     ivr data record come from the Excel uploaded here (UploadExcelDialog).
  *
- * Every data key carries v = meta.uploadedAt (see api.ts), so a new upload can
- * never be served from the 30-second useFetch cache.
+ *   GET  /live/options      filter lists + meta          (this file)
+ *   GET  /live/summary      KPIs, team panel, sections 1, 3–5, 6 (zonal), 7–10 + meta
+ *   GET  /live/open-jobs    section 2 table     (fetched inside OpenJobRecordSection)
+ *   GET  /live/technicians  section 6 TX table  (fetched inside ZonalSection)
+ *   GET  /live/member       team-member dialog  (fetched inside MemberDetailDialog)
+ *   GET  /live/template     the 5-sheet Excel   (Download Template)
+ *   POST /live/upload       check / save        (Upload Excel)
  *
- * Layout follows the dashboard so MIS recognises it: filters, 7 KPI tiles,
- * 0 Team, then sections 1–10 in the original order.
+ * meta (on options and summary, one build per window) drives the status line:
+ * when the jobs were read, what each upload source holds, the last upload, the
+ * Unattributed line (jobs whose SPOC / A&CO user is on no emp detail — reported,
+ * never dropped), and the note on uploads missing for the selected months.
  *
- * FILTERS (dashboard parity):
+ * WHO IS NAMED (owner's rule, ./visibility.ts): only the people on the uploaded
+ * emp detail of every month in the window. A month without that sheet names
+ * NOBODY — its jobs, revenue and CRM rows land under Unattributed, which the
+ * Total Revenue, Jobs Completed, Jobs Open and Total Jobs tiles count — so the
+ * report can be complete in those totals and name nobody at the same time.
+ * VisibilityNotes says so at the top, in ONE note naming the
+ * one rule that is actually biting; the Team panel and each section's empty
+ * state repeat the reason in place.
+ *
+ * Layout follows the dashboard so MIS recognises it: filters, the Team member
+ * list, 7 KPI tiles, then sections 1–10 in the original order. Team sits above
+ * the tiles as of the 2026-09-20 dashboard, which moved it up beside the title.
+ *
+ * FILTERS:
  *   - Vertical / Employee are multi-selects; empty = Select All. Changing
  *     Vertical resets Employee to All (the dashboard rebuilds that select) and
  *     the Employee list only offers SPOCs of the selected verticals.
- *   - Zonal Manager and Month stay single-selects ('ALL' default). Changing
- *     Month clears the date range, as the dashboard clears From / To.
- *   - The date range is clamped to the snapshot's dates (or the chosen
- *     month's), like the dashboard's min / max on its date inputs.
+ *   - Zonal Manager stays a single select ('ALL' default).
+ *   - THE WINDOW is live, and one control sets it: the Date Range picker
+ *     (@/components/quicksight/DateRangeFilter, shared with the MTD tab),
+ *     the 2026-09-20 dashboard's presets — Today,
+ *     Yesterday, Last 7 Days, Month To Date, Last Month, All Dates — over a
+ *     custom From / To, anchored to TODAY in IST rather than to the
+ *     dashboard's snapshot. The Month select it replaced is gone: Last Month
+ *     is the preset that used to be, and nothing else read the month filter.
+ *     Default: the current IST month, 1st .. today (Month To Date), stored as
+ *     empty bounds so it is one canonical fetch key. At most 3 months (the
+ *     backend's limit, checked in onRangeChange first so the message is
+ *     clear) and never past today. Every request carries the effective from /
+ *     to (api.ts resolveWindow), so a window change is a new key and refetches.
  *   - Any filter change closes the member dialog.
  *
  * Gating: ef-QuickSight + isQuickSightEmployeePerformanceView (the tab itself);
  * isQuickSightEmployeePerformanceUpload additionally shows "Download Template"
- * (the Excel for update_dashboard.bat) and "Upload Data".
+ * and "Upload Excel".
  */
 
-import { useCallback, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import {
-  Briefcase, CalendarX, CheckCircle2, Clock, FileSpreadsheet, Inbox, IndianRupee, Loader2, Percent,
-  RotateCcw, Target, TrendingUp, Upload, Users,
+  AlertTriangle, Briefcase, CalendarX, CheckCircle2, Clock, Database, EyeOff, FileSpreadsheet, IndianRupee,
+  Info, Loader2, Percent, RotateCcw, Target, TrendingUp, Users,
 } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QsKpiTile, QS_COLORS, QS_SEMANTIC } from '@/components/quicksight/charts';
@@ -53,21 +78,34 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
-import { DateRangePopover } from '@/components/ui/date-range-popover';
-import { showToast, dismissToast } from '@/components/ui/toast';
+import { showToast } from '@/components/ui/toast';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
-import { api, ApiError } from '@/lib/api';
 import { downloadXlsx } from '@/lib/download-xlsx';
+import { istToday } from '@/lib/due-date';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { cn } from '@/lib/utils';
 import {
-  ACTION_KEY, ALL, API_BASE, EMPTY_FILTERS, META_KEY, TEMPLATE_URL, UPLOAD_KEY, UPLOAD_URL,
-  filtersQuery, optionsKey, summaryKey,
+  ACTION_KEY, ALL, EMPTY_FILTERS, LIVE_BASE, MAX_RANGE_MONTHS, TEMPLATE_FILENAME, TEMPLATE_URL, UPLOAD_KEY,
+  filtersQuery, lastAllowedTo, optionsKey, resolveWindow, summaryKey, widestWindow, windowBounds,
+  type DateWindow,
 } from './api';
-import { fmtDay, fmtStamp, money, num, pct1 } from './format';
-import type { FilterOptions, Filters, SnapshotMeta, SummaryResponse, TeamMemberChip } from './types';
+import {
+  fmtDay, fmtDayRange, fmtMonth, fmtMonthList, fmtMonthLong, fmtMonthLongList, fmtStamp, money, num, pct1,
+} from './format';
+import {
+  hiddenPeopleNote, missingMonthsPhrase, rosterGap, teamEmptyState, unattributedTilesNote, uploadedRosterPhrase,
+  visibilityStory, type RosterGap,
+} from './visibility';
+import type {
+  Filters, LiveDailyCoverage, LiveMeta, LiveOptionsResponse, LiveSummaryResponse, LiveUnattributed,
+  TeamMemberChip, UnattributedUser,
+} from './types';
+import { DateRangeFilter } from '@/components/quicksight/DateRangeFilter';
 import { TeamPanel } from './TeamPanel';
 import { MemberDetailDialog } from './MemberDetailDialog';
+import { UploadExcelButton } from './UploadExcelDialog';
+import { LocalTable, type Column } from './sections/shared';
 import { RevenuePerformanceSection } from './sections/RevenuePerformanceSection';
 import { OpenJobRecordSection } from './sections/OpenJobRecordSection';
 import { ClientWiseSection } from './sections/ClientWiseSection';
@@ -82,33 +120,37 @@ import { SuggestionsSection } from './sections/SuggestionsSection';
 /* A BE 403 (requireQuickSight) arrives as one of these messages. */
 const DENIED_RE = /permission|quicksight access|access denied/i;
 
-/*
- * data.js is ~7 MB of JSON that compresses ~10x; sending it gzipped keeps the
- * upload well under every proxy body limit. A browser without
- * CompressionStream sends the file as-is (the backend accepts both).
- */
-async function gzipFile(file: File): Promise<Blob> {
-  if (typeof CompressionStream === 'undefined') return file;
-  return new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob();
-}
-
 export function EmployeePerformanceBody() {
   const { me } = useMe();
   const flags = actionFlags(me, [ACTION_KEY, UPLOAD_KEY]);
   const canView = flags[ACTION_KEY];
   const canUpload = canView && flags[UPLOAD_KEY];
 
-  const meta = useFetch<SnapshotMeta | null>(canView ? META_KEY : null);
-  const snapshot = meta.data;
-  const v = snapshot?.uploadedAt ?? null;
+  // The IST day the tab opened on: the default window ends here and no later date can be picked.
+  const [today] = useState(istToday);
+  // Bumped when an upload is saved, so every data key changes and nothing pre-upload is served from cache.
+  const [revision, setRevision] = useState(0);
+  const v = `r${revision}`;
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [member, setMember] = useState<TeamMemberChip | null>(null);
 
-  const options = useFetch<FilterOptions>(canView ? optionsKey(v) : null);
-  const summary = useFetch<SummaryResponse>(canView ? summaryKey(v, filters) : null);
+  // What every request sends: the filters with the window made explicit.
+  const query = useMemo(() => resolveWindow(filters, today), [filters, today]);
+  const win: DateWindow = { from: query.from, to: query.to };
+
+  const optsKey = canView ? optionsKey(v, win) : null;
+  const sumKey = canView ? summaryKey(v, query) : null;
+  const options = useFetch<LiveOptionsResponse>(optsKey);
+  const summary = useFetch<LiveSummaryResponse>(sumKey);
   const opts = options.data;
   const s = summary.data;
+  const meta = s?.meta ?? opts?.meta ?? null;
+  // useFetch keeps the previous response on screen while a new key loads.
+  const stale = !!s && (summary.refreshing || summary.dataKey !== sumKey);
+  // Who this window can name at all: the notes, the Team panel and every
+  // section's empty text come from it. Empty (and silent) until meta arrives.
+  const gap = rosterGap(s?.meta ?? null, s?.team.members.length);
 
   /* ── filter state ───────────────────────────────────────────────────────── */
 
@@ -127,10 +169,6 @@ export function EmployeePerformanceBody() {
     () => [{ value: ALL, label: 'All Zonal Managers' }, ...(opts?.zonalManagers ?? []).map((x) => ({ value: x, label: x }))],
     [opts],
   );
-  const monthOptions = useMemo<SearchOption[]>(
-    () => [{ value: ALL, label: 'All Months' }, ...(opts?.months ?? []).map((m) => ({ value: m.value, label: m.label }))],
-    [opts],
-  );
   // The dashboard's fillEmployees(): only SPOCs of the selected verticals. Ticking
   // every vertical is Select All on the server (normaliseFilters), so it is here too.
   const employeeOptions = useMemo<SearchOption[]>(() => {
@@ -142,62 +180,47 @@ export function EmployeePerformanceBody() {
       .map((e) => ({ value: e.value, label: e.label }));
   }, [opts, filters.verticals]);
 
-  // The range the dashboard's date inputs allow: the chosen month's dates, or the whole snapshot.
-  const monthOpt = filters.month !== ALL ? opts?.months.find((m) => m.value === filters.month) : undefined;
-  const boundFrom = (monthOpt ? monthOpt.from : opts?.dateFrom) ?? '';
-  const boundTo = (monthOpt ? monthOpt.to : opts?.dateTo) ?? '';
-  const rangeFrom = filters.from || boundFrom;
-  const rangeTo = filters.to || boundTo;
-  const period = rangeFrom && rangeTo ? `${fmtDay(rangeFrom)} – ${fmtDay(rangeTo)}` : 'No Dates In Range';
+  const period = fmtDayRange(query.from, query.to);
 
-  const onRangeChange = (next: { from: string; to: string }) => {
-    const from = boundFrom && next.from < boundFrom ? boundFrom : next.from;
-    const to = boundTo && next.to > boundTo ? boundTo : next.to;
-    if (from > to) {
-      showToast({ variant: 'error', message: `Pick dates between ${fmtDay(boundFrom)} and ${fmtDay(boundTo)}` });
-      return;
+  /*
+   * The Date Range picker's only way in — a preset or a typed custom range.
+   * Presets are inside the cap by construction; a typed range is not, so the
+   * rules live here, where the toast can say what to do about it. Returning
+   * false tells the picker the window did not change, and it keeps its menu
+   * open on the dates being fixed (a refused range is never truncated to fit).
+   */
+  const onRangeChange = (next: DateWindow): boolean => {
+    if (next.from > next.to) {
+      showToast({ variant: 'error', message: `The From date must be on or before the To date (${fmtDay(next.to)})` });
+      return false;
     }
-    // A bound is stored as '' so "the whole range" is one canonical fetch key.
-    applyFilters({ from: from === boundFrom ? '' : from, to: to === boundTo ? '' : to });
+    if (next.to > today) {
+      showToast({ variant: 'error', message: `The report ends at today: pick a To date on or before ${fmtDay(today)}` });
+      return false;
+    }
+    const limit = lastAllowedTo(next.from);
+    if (next.to > limit) {
+      showToast({
+        variant: 'error',
+        message: `Pick at most ${MAX_RANGE_MONTHS} months: a range starting ${fmtDay(next.from)} can end on ${fmtDay(limit)} at the latest`,
+      });
+      return false;
+    }
+    // A bound is stored as '' so "the whole default window" is one canonical fetch key.
+    const bounds = windowBounds(ALL, today);
+    applyFilters({ from: next.from === bounds.from ? '' : next.from, to: next.to === bounds.to ? '' : next.to });
+    return true;
   };
 
   const narrowed = filtersQuery(filters) !== '';
 
-  /* ── upload ─────────────────────────────────────────────────────────────── */
-
-  const fileInput = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-
-  const onFilePicked = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // picking the same file again must still fire
-    if (!file) return;
-    setUploading(true);
-    const toastId = showToast({ variant: 'loading', message: 'Uploading dashboard data…' });
-    try {
-      const body = await gzipFile(file);
-      const fd = new FormData();
-      fd.append('file', body, body === file ? file.name : `${file.name}.gz`);
-      const next = await api.post<SnapshotMeta>(UPLOAD_URL, fd);
-      invalidateFetch((k) => k.startsWith(API_BASE));
-      meta.refetch();
-      // A new snapshot can hold other months and people: start again from Select All.
-      setFilters(EMPTY_FILTERS);
-      setMember(null);
-      showToast({ variant: 'success', message: `Data updated: ${fmtDay(next.dateFrom)} – ${fmtDay(next.dateTo)}` });
-    } catch (err) {
-      showToast({ variant: 'error', message: err instanceof ApiError ? err.message : 'Upload failed' });
-    } finally {
-      dismissToast(toastId);
-      setUploading(false);
-    }
-  };
+  /* ── uploads ────────────────────────────────────────────────────────────── */
 
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const onDownloadTemplate = async () => {
     setDownloadingTemplate(true);
     try {
-      await downloadXlsx({ url: TEMPLATE_URL, filename: 'employee-performance-template.xlsx' });
+      await downloadXlsx({ url: TEMPLATE_URL, filename: TEMPLATE_FILENAME });
     } catch (err) {
       showToast({ variant: 'error', message: err instanceof Error ? err.message : 'Download failed' });
     } finally {
@@ -205,54 +228,59 @@ export function EmployeePerformanceBody() {
     }
   };
 
+  // A saved upload changes targets, teams and productivity: drop every live
+  // response and move to new keys (the dialog has already toasted).
+  const onUploadSaved = useCallback(() => {
+    invalidateFetch((k) => k.startsWith(LIVE_BASE));
+    setRevision((r) => r + 1);
+    setMember(null);
+  }, []);
+
   /* ── page state ─────────────────────────────────────────────────────────── */
 
-  const fetchError = meta.error ?? options.error ?? summary.error;
+  const fetchError = options.error ?? summary.error;
   const accessDenied = (!!me && !canView) || (!!fetchError && DENIED_RE.test(fetchError));
   const genericError = fetchError && !accessDenied ? fetchError : null;
-  // Wait for `me` (so the empty state never flashes while auth loads), for /meta,
-  // and — once a snapshot exists — for the first options + summary.
-  const loading = !me || meta.loading || (!!snapshot && (!opts || !s));
+  // Wait for `me` (so nothing flashes while auth loads) and the first options + summary.
+  const loading = !me || (canView && !fetchError && (!opts || !s));
 
-  /* ── filters slot: status line + filter grid ────────────────────────────── */
+  /* ── filters slot: status lines + filter grid ───────────────────────────── */
 
   const statusLine = (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-        <span>
-          {snapshot ? (
-            <>
-              Data <span className="font-medium text-foreground">{fmtDay(snapshot.dateFrom)} – {fmtDay(snapshot.dateTo)}</span>
-              {' · '}{snapshot.employeeCount} employees{' · '}
-              Updated {fmtStamp(snapshot.uploadedAt)}{snapshot.uploadedBy.name ? ` by ${snapshot.uploadedBy.name}` : ''}
-            </>
-          ) : meta.loading ? 'Checking for uploaded data…' : 'No data uploaded yet'}
-        </span>
-        {s && summary.refreshing && (
-          <span className="inline-flex items-center gap-1 text-xs">
-            <Loader2 className="size-3 animate-spin" />Updating…
-          </span>
+    <div className="space-y-1 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1 text-muted-foreground">
+          <StatusRow icon={<Database className="size-4" />}>
+            {meta ? (
+              <>
+                Jobs &amp; CRM data live from the database
+                {' · '}as of <span className="font-medium text-foreground">{fmtStamp(meta.jobsAsOf)}</span>
+              </>
+            ) : 'Jobs & CRM data live from the database'}
+            {(loading || stale) && canView && !fetchError && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs">
+                <Loader2 className="size-3 animate-spin" />
+                Reading {period}… the first load of a date range can take up to a minute
+              </span>
+            )}
+          </StatusRow>
+          {meta && <UploadsRow meta={meta} />}
+        </div>
+        {canUpload && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={onDownloadTemplate} disabled={downloadingTemplate}>
+              <FileSpreadsheet className="size-4" />{downloadingTemplate ? 'Downloading…' : 'Download Template'}
+            </Button>
+            <UploadExcelButton onSaved={onUploadSaved} />
+          </div>
         )}
       </div>
-      {canUpload && (
-        <div className="flex flex-wrap items-center gap-2">
-          {/* The Excel MIS fills before running update_dashboard.bat. */}
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={onDownloadTemplate} disabled={downloadingTemplate}>
-            <FileSpreadsheet className="size-4" />{downloadingTemplate ? 'Downloading…' : 'Download Template'}
-          </Button>
-          <input ref={fileInput} type="file" accept=".js,.json" className="hidden" onChange={onFilePicked} />
-          {/* gap-1.5 like DownloadButton — the Button base class sets no gap itself. */}
-          <Button size="sm" className="gap-1.5" onClick={() => fileInput.current?.click()} disabled={uploading}>
-            <Upload className="size-4" />{uploading ? 'Uploading…' : 'Upload Data'}
-          </Button>
-        </div>
-      )}
+      {/* Full width, so its user table is not squeezed beside the buttons. */}
+      {meta && <UnattributedRow unattributed={meta.unattributed} />}
     </div>
   );
 
-  // Controls only once there is something to filter: no empty selects for a
-  // missing snapshot (denied viewers never reach this slot at all).
-  const filterGrid = snapshot && opts && (
+  const filterGrid = (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <FilterField label="Vertical">
         <SearchMultiSelect
@@ -280,16 +308,21 @@ export function EmployeePerformanceBody() {
           selectedLabel="employees"
         />
       </FilterField>
-      <FilterField label="Month">
-        <SearchSelect
-          value={filters.month || ALL}
-          onChange={(next) => applyFilters({ month: next || ALL, from: '', to: '' })}
-          options={monthOptions}
-          required
+      <FilterField label="Date Range" hint={`Up to ${MAX_RANGE_MONTHS} months, until today`}>
+        {/*
+          * The picker is shared with the MTD tab and holds no cap of its own:
+          * All Dates is THIS report's widest window (widestWindow, i.e.
+          * MAX_RANGE_MONTHS ending today), labelled with the range it is, and
+          * onRangeChange below is still the only thing that accepts or refuses
+          * a window.
+          */}
+        <DateRangeFilter
+          from={query.from}
+          to={query.to}
+          today={today}
+          onChange={onRangeChange}
+          allDates={{ window: widestWindow(today), label: `All Dates (Last ${MAX_RANGE_MONTHS} Months)` }}
         />
-      </FilterField>
-      <FilterField label="Date Range">
-        <DateRangePopover from={rangeFrom} to={rangeTo} onChange={onRangeChange} maxDate={boundTo || undefined} />
       </FilterField>
       <div className="flex items-end">
         {narrowed && (
@@ -301,6 +334,7 @@ export function EmployeePerformanceBody() {
     </div>
   );
 
+  // Denied viewers never reach this slot at all.
   const filtersSlot = canView ? (
     <div className="space-y-3">
       {statusLine}
@@ -320,33 +354,28 @@ export function EmployeePerformanceBody() {
         accessDenied={accessDenied}
         isEmpty={false}
       >
-        {!snapshot || !v ? (
-          <Card>
-            <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-              <Inbox className="size-8 text-muted-foreground" />
-              <div className="space-y-1">
-                <div className="text-base font-semibold">No Data Uploaded Yet</div>
-                <p className="max-w-lg text-sm text-muted-foreground">
-                  {canUpload
-                    ? 'Click Upload Data to add the latest data.'
-                    : 'The report appears here once MIS uploads the latest data.'}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        ) : s ? (
-          <div className="space-y-4">
+        {s ? (
+          <div className={cn('space-y-4 transition-opacity', stale && 'opacity-60')} aria-busy={stale}>
+            <VisibilityNotes gap={gap} canUpload={canUpload} />
+            <MissingUploadsNote meta={s.meta} canUpload={canUpload} />
+
             {s.dates.count === 0 && (
               <Card>
                 <CardContent className="flex items-start gap-3 p-4 text-sm">
                   <CalendarX className="mt-0.5 size-5 shrink-0 text-warning-strong" />
                   <p className="text-muted-foreground">
-                    <span className="font-medium text-foreground">No Uploaded Dates In The Selected Range.</span>{' '}
-                    Revenue, closed-job and productivity figures show zero; open-job figures are a current snapshot and still show.
+                    <span className="font-medium text-foreground">No Dates In The Selected Range.</span>{' '}
+                    Revenue, closed-job and productivity figures show zero; open jobs are every job open now and still show.
                   </p>
                 </CardContent>
               </Card>
             )}
+
+            {/* Team first, then the tiles — the 2026-09-20 dashboard moved the
+                member list up beside the title, above the KPIs. Clicking a
+                member is how the rest of the report gets scoped, so it reads
+                better as the thing you choose before the numbers you read. */}
+            <TeamPanel team={s.team} activeKey={member?.key ?? null} onSelect={setMember} empty={teamEmptyState(gap)} />
 
             {/* KPI tiles — the dashboard's seven, in its order. */}
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -359,14 +388,12 @@ export function EmployeePerformanceBody() {
               <QsKpiTile label="Team Members" value={num(s.kpis.teamSize)} accent={QS_COLORS[5]} icon={<Users className="size-5" />} />
             </div>
 
-            <TeamPanel team={s.team} activeKey={member?.key ?? null} onSelect={setMember} />
-
             <RevenuePerformanceSection summary={s} />
-            <OpenJobRecordSection summary={s} v={v} filters={filters} />
+            <OpenJobRecordSection summary={s} v={v} filters={query} />
             <ClientWiseSection summary={s} />
             <CityWiseSection summary={s} />
             <TatSdaSection summary={s} />
-            <ZonalSection summary={s} v={v} filters={filters} />
+            <ZonalSection summary={s} v={v} filters={query} />
             <ProductivitySection summary={s} />
             <PerformanceSection summary={s} />
             <ShortSummarySection summary={s} />
@@ -375,16 +402,332 @@ export function EmployeePerformanceBody() {
         ) : null}
       </ReportPageScaffold>
 
-      <MemberDetailDialog v={v} filters={filters} member={member} period={period} onClose={closeMember} />
+      <MemberDetailDialog v={v} filters={query} member={member} period={period} onClose={closeMember} />
     </>
   );
 }
 
-function FilterField({ label, children }: { label: string; children: ReactNode }) {
+function FilterField({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-muted-foreground">{label}</label>
+      <label className="flex items-baseline justify-between gap-2 text-xs font-medium text-muted-foreground">
+        {label}
+        {hint && <span className="font-normal">{hint}</span>}
+      </label>
       {children}
     </div>
+  );
+}
+
+function StatusRow({ icon, tone, children }: { icon: ReactNode; tone?: 'warn'; children: ReactNode }) {
+  return (
+    <div className={cn('flex items-start gap-2', tone === 'warn' && 'text-warning-strong')}>
+      <span className="mt-0.5 shrink-0" aria-hidden>{icon}</span>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+/** '1 closed job' / '2 closed jobs' — counts in running text. */
+function count(n: number, noun: string): string {
+  return `${num(n)} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+/* ── status: what the uploads hold ────────────────────────────────────────── */
+
+function UploadsRow({ meta }: { meta: LiveMeta }) {
+  const { storage, coverage, lastBatch } = meta.uploads;
+  if (storage === 'missing' || !coverage) {
+    return (
+      <StatusRow icon={<FileSpreadsheet className="size-4" />} tone="warn">
+        Uploaded sheets: upload storage is not set up on this server yet
+      </StatusRow>
+    );
+  }
+  return (
+    <StatusRow icon={<FileSpreadsheet className="size-4" />}>
+      Uploaded sheets: TimeChamp {fmtDayRange(coverage.timechamp.from, coverage.timechamp.to)}
+      {', '}IVR {fmtDayRange(coverage.ivr.from, coverage.ivr.to)}
+      {', '}Emp detail {fmtMonthList(coverage.empDetail.months)}
+      {', '}Targets {fmtMonthList(coverage.primaryTargets.months)}
+      {', '}Secondary targets {fmtMonthList(coverage.secondaryTargets.months)}
+      {' · '}
+      {lastBatch ? (
+        <>
+          last upload <span className="font-medium text-foreground">{fmtStamp(lastBatch.uploadedAt)}</span>
+          {lastBatch.uploadedBy.name ? ` by ${lastBatch.uploadedBy.name}` : ''}
+        </>
+      ) : 'nothing uploaded yet'}
+    </StatusRow>
+  );
+}
+
+/* ── status: the Unattributed line ────────────────────────────────────────── */
+
+/*
+ * Every reason sources.service.js resolvePeople() can put on an Unattributed
+ * user, in the order it tests them. 'not-on-every-roster' is the multi-month
+ * intersection and so the commonest of the seven: it fires for everybody the
+ * moment the window spans months, which is most of them.
+ *
+ * The two that blank a whole window — 'roster-not-uploaded' (no sheet for the
+ * month) and 'not-on-every-roster' (a sheet that does not list them every
+ * month) — are the ones the reader can act on, and they need different actions:
+ * upload a sheet, or pick a single month.
+ */
+const REASON_LABEL: Record<string, string> = {
+  'no-user': 'No user on the job',
+  'outside-window': 'Outside the date range',
+  'roster-not-uploaded': 'Emp detail not uploaded for the month',
+  'unknown-user': 'User not found',
+  'not-internal': 'Not an internal user',
+  'not-on-roster': 'Not on the month’s emp detail',
+  'not-on-every-roster': 'Not on every selected month’s emp detail',
+};
+
+/* The two roster reasons, which blank the tab rather than dropping one row. */
+const ROSTER_NOT_UPLOADED = 'roster-not-uploaded';
+const NOT_ON_EVERY_ROSTER = 'not-on-every-roster';
+
+/**
+ * A reason as the "Why" column prints it. A reason the backend adds before this
+ * map catches up degrades to its own words ('not-on-every-roster' → 'Not on
+ * every roster') — readable English in a user-facing cell, never a machine slug.
+ */
+function reasonLabel(reason: string): string {
+  const known = REASON_LABEL[reason];
+  if (known) return known;
+  const words = reason.replace(/[-_]+/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : '—';
+}
+
+const UNATTRIBUTED_COLUMNS: ReadonlyArray<Column<UnattributedUser>> = [
+  { key: 'name', label: 'CRM User', sticky: true, render: (r) => (r.name ? `${r.name}${r.userId != null ? ` (#${r.userId})` : ''}` : '—') },
+  { key: 'reasons', label: 'Why', wrap: true, render: (r) => r.reasons.map(reasonLabel).join('; ') },
+  { key: 'months', label: 'Months', render: (r) => r.months.map(fmtMonth).join(', ') },
+  { key: 'closedJobs', label: 'Closed Jobs', align: 'right', render: (r) => num(r.closedJobs) },
+  { key: 'revenue', label: 'Revenue', align: 'right', render: (r) => money(r.revenue) },
+  { key: 'openJobs', label: 'Open Jobs', align: 'right', render: (r) => num(r.openJobs) },
+  { key: 'acoJobs', label: 'A&CO Jobs', align: 'right', render: (r) => num(r.acoJobs) },
+  { key: 'acoRevenue', label: 'A&CO Revenue', align: 'right', render: (r) => money(r.acoRevenue) },
+  { key: 'crmRows', label: 'CRM Rows', align: 'right', render: (r) => num(r.crmRows) },
+];
+
+function UnattributedRow({ unattributed: u }: { unattributed: LiveUnattributed }) {
+  const [open, setOpen] = useState(false);
+  const parts: string[] = [];
+  if (u.closedJobs > 0 || u.revenue !== 0) parts.push(`${money(u.revenue)} revenue`, count(u.closedJobs, 'closed job'));
+  if (u.openJobs > 0) parts.push(count(u.openJobs, 'open job'));
+  if (u.acoJobs > 0) parts.push(`${count(u.acoJobs, 'A&CO job')} (${money(u.acoRevenue)})`);
+  if (u.crm.rows > 0) parts.push(count(u.crm.rows, 'CRM row'));
+  if (parts.length === 0) return null;
+  // When a roster rule is the WHOLE story, say which one: the fix differs
+  // (upload the sheet / pick a single month), and every other reason is a
+  // per-row accident rather than something the reader can act on.
+  const reasons = new Set(u.users.flatMap((x) => x.reasons));
+  const rosterOnly = reasons.size > 0
+    && [...reasons].every((r) => r === ROSTER_NOT_UPLOADED || r === NOT_ON_EVERY_ROSTER);
+  const noSheet = reasons.has(ROSTER_NOT_UPLOADED);
+  const notEveryMonth = reasons.has(NOT_ON_EVERY_ROSTER);
+  let why = 'not counted on any employee';
+  if (rosterOnly && noSheet && notEveryMonth) {
+    why = 'not on any employee because emp detail is missing for some of these months and does not list them for all of the rest';
+  } else if (rosterOnly && noSheet) {
+    why = 'not on any employee because emp detail is not uploaded for these months';
+  } else if (rosterOnly) {
+    why = 'not on any employee because they are not on every selected month’s emp detail';
+  }
+
+  return (
+    <div className="space-y-2">
+      <StatusRow icon={<AlertTriangle className="size-4" />} tone="warn">
+        <span className="font-medium">{u.label || 'Unattributed'}:</span> {parts.join(' · ')}
+        {' — '}{why}
+        {u.users.length > 0 && (
+          <>
+            {' · '}
+            <button
+              type="button"
+              className="font-medium underline underline-offset-2 hover:no-underline"
+              aria-expanded={open}
+              onClick={() => setOpen((x) => !x)}
+            >
+              {open ? 'Hide users' : `Show ${count(u.users.length, 'user')}`}
+            </button>
+          </>
+        )}
+      </StatusRow>
+      {open && (
+        <LocalTable
+          rows={u.users}
+          columns={UNATTRIBUTED_COLUMNS}
+          rowKey={(r, i) => `${r.userId ?? 'none'}-${i}`}
+          emptyText="No users"
+          pageSize={u.users.length > 10 ? 10 : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ── the notes on who this window can name ────────────────────────────────── */
+
+/*
+ * The owner's visibility rules, explained where they bite (./visibility.ts):
+ *
+ *   - a month with no emp detail uploaded shows NO employee name. Nothing is
+ *     invented from the CRM's job SPOCs, and no earlier month's team is
+ *     inherited;
+ *   - a window over several months lists only the people on EVERY one of those
+ *     months' sheets.
+ *
+ * Both leave the job and revenue tiles complete — Unattributed keeps the work —
+ * while no table names a person and the ones that belong to a person (revenue
+ * against target, productivity) go empty, which without a word of explanation
+ * reads as a broken report. Same NoteCard treatment, and the same grid, as the
+ * upload notes below it.
+ *
+ * ONE NOTE, NOT TWO. A window with a sheet for some of its months and none for
+ * the others trips both rules at once, and the second of them then reports the
+ * whole uploaded roster as "on some months but not all" — an accusation against
+ * a rule that never ran, for a blackout the missing sheet had already caused.
+ * visibilityStory() picks the single true story instead, and the missing sheet
+ * wins because uploading it is what brings the names back.
+ *
+ * The missing-sheet story is gated on gap.blank — no name listed anywhere — so
+ * it never claims an emptiness the reader can see is not there. The
+ * intersection story is not: people can be hidden while the rest of the team is
+ * listed, and that is exactly when it needs saying.
+ */
+function VisibilityNotes({ gap, canUpload }: { gap: RosterGap; canUpload: boolean }) {
+  const story = visibilityStory(gap);
+  if (story === 'none') return null;
+  // The people this window has a sheet for and still cannot name. Present only
+  // in the mixed case, which is also the case the old copy got wrong.
+  const kept = uploadedRosterPhrase(gap);
+
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {story === 'missing-sheet' ? (
+        <NoteCard
+          icon={<Users className="size-5 shrink-0 text-warning-strong" />}
+          title={kept ? 'No Employee Names For The Selected Dates' : `No Employee Names For ${fmtMonthLongList(gap.missingMonths)}`}
+        >
+          {kept && (
+            <>
+              {fmtMonthLongList(gap.missingMonths)} {gap.missingMonths.length === 1 ? 'has' : 'have'} no emp detail, and
+              a window names only the people on every one of its months’ sheets — so not even {kept} can be listed.{' '}
+            </>
+          )}
+          Upload the emp detail sheet for {kept ? fmtMonthLongList(gap.missingMonths) : missingMonthsPhrase(gap)} to
+          see names{canUpload ? ' (Download Template → Upload Excel).' : '.'}{' '}
+          {unattributedTilesNote(' below')}
+        </NoteCard>
+      ) : (
+        <NoteCard
+          icon={<EyeOff className="size-5 shrink-0 text-muted-foreground" />}
+          title="Listed Only When On Every Month’s Emp Detail"
+        >
+          {hiddenPeopleNote(gap)} Pick a single month to see that month’s full team.{' '}
+          {unattributedTilesNote(' below')}
+        </NoteCard>
+      )}
+    </div>
+  );
+}
+
+/* ── the note on uploads missing for the selected months ──────────────────── */
+
+/* A daily source against the window: null when it covers it end to end (as far as min / max can tell). */
+function dailyGap(label: string, c: LiveDailyCoverage, win: DateWindow): string | null {
+  if (!c.from || !c.to || c.to < win.from || c.from > win.to) return `${label}: nothing uploaded for these dates`;
+  const gaps: string[] = [];
+  if (c.from > win.from) gaps.push(`starts ${fmtDay(c.from)}`);
+  if (c.to < win.to) gaps.push(`only up to ${fmtDay(c.to)}`);
+  return gaps.length ? `${label}: ${gaps.join(', ')}` : null;
+}
+
+function MissingUploadsNote({ meta, canUpload }: { meta: LiveMeta; canUpload: boolean }) {
+  const { storage, coverage, hidden } = meta.uploads;
+  const win = { from: meta.from, to: meta.to };
+
+  if (storage === 'missing' || !coverage) {
+    return (
+      <NoteCard icon={<Info className="size-5 shrink-0 text-info-strong" />} title="Excel Uploads Are Not Set Up Yet">
+        Job and CRM numbers are live and complete. Targets, teams, TimeChamp and IVR figures need the upload storage,
+        which is not set up on this server yet.
+      </NoteCard>
+    );
+  }
+
+  const lines: string[] = [];
+  for (const m of meta.months) {
+    const missing: string[] = [];
+    if (!m.rosterUploaded) missing.push('emp detail');
+    if (!coverage.primaryTargets.months.includes(m.month)) missing.push('target list');
+    if (!coverage.secondaryTargets.months.includes(m.month)) missing.push('Secondary spoc target list');
+    if (missing.length) lines.push(`${fmtMonth(m.month)}: ${missing.join(', ')}`);
+  }
+  for (const gap of [dailyGap('time champ data', coverage.timechamp, win), dailyGap('ivr data record', coverage.ivr, win)]) {
+    if (gap) lines.push(gap);
+  }
+
+  const hiddenLines = ([
+    ['time champ data', hidden.timechamp],
+    ['ivr data record', hidden.ivr],
+    ['target list', hidden.primaryTargets],
+    ['Secondary spoc target list', hidden.secondaryTargets],
+  ] as const)
+    .filter(([, h]) => h.rows > 0)
+    .map(([label, h]) => ({
+      text: `${label}: ${count(h.rows, 'row')} for ${num(h.names.length)} ${h.names.length === 1 ? 'person' : 'people'}`,
+      names: h.names.join(', '),
+    }));
+
+  if (lines.length === 0 && hiddenLines.length === 0) return null;
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {lines.length > 0 && (
+        <NoteCard
+          icon={<FileSpreadsheet className="size-5 shrink-0 text-warning-strong" />}
+          title="Uploads Missing For The Selected Dates"
+        >
+          <ul className="list-disc space-y-0.5 pl-4">
+            {lines.map((l) => <li key={l}>{l}</li>)}
+          </ul>
+          <p className="mt-1">
+            Job and CRM numbers are live and complete; targets, teams and productivity fill in once these are uploaded
+            {canUpload ? ' (Download Template → Upload Excel).' : '.'}
+          </p>
+        </NoteCard>
+      )}
+      {hiddenLines.length > 0 && (
+        <NoteCard
+          icon={<EyeOff className="size-5 shrink-0 text-muted-foreground" />}
+          title="Hidden Until Added To Emp Detail"
+        >
+          <ul className="list-disc space-y-0.5 pl-4">
+            {hiddenLines.map((h) => <li key={h.text} title={h.names}>{h.text}</li>)}
+          </ul>
+          <p className="mt-1">
+            These uploaded rows are saved, but the people are not on that month’s emp detail, so they are not counted.
+          </p>
+        </NoteCard>
+      )}
+    </div>
+  );
+}
+
+function NoteCard({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <Card>
+      <CardContent className="flex items-start gap-3 p-4 text-sm">
+        <span className="mt-0.5" aria-hidden>{icon}</span>
+        <div className="min-w-0 text-muted-foreground">
+          <div className="font-medium text-foreground">{title}</div>
+          {children}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

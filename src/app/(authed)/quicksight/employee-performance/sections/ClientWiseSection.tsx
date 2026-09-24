@@ -14,7 +14,7 @@
 
 import type { ClientRow, PendingReasonRow } from '../types';
 import { dec1, num } from '../format';
-import { LocalTable, SectionCard, SubHeading, type Column, type SummaryProps } from './shared';
+import { LocalTable, SectionCard, SubHeading, emptyTableText, type Column, type SummaryProps } from './shared';
 
 const CLIENT_COLUMNS: ReadonlyArray<Column<ClientRow>> = [
   { key: 'client', label: 'Client Name' },
@@ -50,7 +50,7 @@ export function ClientWiseSection({ summary }: SummaryProps) {
           rows={summary.clients}
           columns={CLIENT_COLUMNS}
           rowKey={(r) => r.client}
-          emptyText="No Data For The Selected Filters"
+          emptyText={emptyTableText(summary, 'No Data For The Selected Filters')}
           pageSize={10}
         />
       </div>
@@ -60,7 +60,7 @@ export function ClientWiseSection({ summary }: SummaryProps) {
           rows={summary.pendingReasons}
           columns={PENDING_COLUMNS}
           rowKey={(r, i) => `${r.dueTo}␟${r.reason}␟${i}`}
-          emptyText="No Open Jobs For The Selected Filters"
+          emptyText={emptyTableText(summary, 'No Open Jobs For The Selected Filters')}
           pageSize={10}
         />
       </div>

@@ -14,15 +14,19 @@
 import { useMemo } from 'react';
 import { ChartCard, QS_SEMANTIC, QsDonut } from '@/components/quicksight/charts';
 import { money, num, pct1 } from '../format';
-import { MiniStat, SectionCard, type SummaryProps } from './shared';
+import { MiniStat, SectionCard, emptyTableText, type SummaryProps } from './shared';
 
 const CHART_HEIGHT = 240;
 const JOB_COLORS = [QS_SEMANTIC.good, QS_SEMANTIC.warn];
 const REVENUE_COLORS = [QS_SEMANTIC.good, QS_SEMANTIC.neutral];
 
+/* text-center / px-4: the roster explanation is a sentence, not two words, and wraps here. */
 function ChartEmpty({ children }: { children: string }) {
   return (
-    <div className="flex items-center justify-center text-sm text-muted-foreground" style={{ height: CHART_HEIGHT }}>
+    <div
+      className="flex items-center justify-center px-4 text-center text-sm text-muted-foreground"
+      style={{ height: CHART_HEIGHT }}
+    >
       {children}
     </div>
   );
@@ -62,7 +66,7 @@ export function PerformanceSection({ summary }: SummaryProps) {
             {p.completed > 0 || p.open > 0 ? (
               <QsDonut data={jobsData} nameKey="name" valueKey="value" height={CHART_HEIGHT} colors={JOB_COLORS} />
             ) : (
-              <ChartEmpty>No Jobs For The Selected Filters</ChartEmpty>
+              <ChartEmpty>{emptyTableText(summary, 'No Jobs For The Selected Filters')}</ChartEmpty>
             )}
           </div>
         </ChartCard>
@@ -77,7 +81,7 @@ export function PerformanceSection({ summary }: SummaryProps) {
             {p.revenue > 0 || p.target > 0 ? (
               <QsDonut data={revenueData} nameKey="name" valueKey="value" height={CHART_HEIGHT} colors={REVENUE_COLORS} />
             ) : (
-              <ChartEmpty>No Revenue For The Selected Filters</ChartEmpty>
+              <ChartEmpty>{emptyTableText(summary, 'No Revenue For The Selected Filters')}</ChartEmpty>
             )}
           </div>
         </ChartCard>
