@@ -406,6 +406,14 @@ export default function JobsPage() {
     rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '',
   });
   /*
+   * The four free-text filters, debounced as ONE key (2026-09-24) so typing a
+   * 10-digit mobile fires one refetch, not ten multi-second list+COUNT pairs.
+   * Only the refetch TRIGGER is debounced: load() still reads live `filters`,
+   * so whatever is on screen when it fires is what gets sent.
+   */
+  const textFiltersKey = useDebouncedValue(
+    [filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin].join('\u0000'), 300);
+  /*
    * ── ONE FILTER PANEL FOR EVERYONE (2026-09-16) ────────────────────────────
    *
    * This page used to host the Pending-for-Scheduling card above the Filter Job
@@ -905,7 +913,7 @@ export default function JobsPage() {
       filters.clientId, filters.cityId, filters.stateId,
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
-      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      textFiltersKey,
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
       filters.stages,
