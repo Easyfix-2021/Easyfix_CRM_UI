@@ -286,3 +286,21 @@ export function productsAtBooking(qty: unknown): string {
   const n = Number(qty);
   return Number.isFinite(n) && n > 0 ? n.toLocaleString('en-IN') : 'NA';
 }
+
+/*
+ * What KIND of file a tbl_job_image / tbl_job_media row holds, from its stored
+ * name. The column takes whatever was uploaded: photos, the feedback PDF, and —
+ * since the technician app and the public form started accepting them — videos.
+ * A video pushed through <img> can never render: the browser fires onError and
+ * the tile reads "Lost", which is what ops saw on Schedule & Assign and on the
+ * booking dialog. Classify first, then pick the right element.
+ */
+export function fileKindFromName(name: unknown): 'image' | 'video' | 'pdf' | 'other' {
+  const n = String(name ?? '').trim().toLowerCase();
+  if (!n) return 'other';
+  if (/\.pdf$/.test(n)) return 'pdf';
+  if (/\.(mp4|mov|m4v|webm|avi|mkv|3gp|3gpp|mpeg|mpg|ogv|qt)$/.test(n)) return 'video';
+  if (/\.(jpe?g|png|gif|webp|bmp|heic|heif|tiff?|avif|svg)$/.test(n)) return 'image';
+  // No extension: legacy rows stored a bare name, and those are all photos.
+  return /\.[a-z0-9]{1,5}$/.test(n) ? 'other' : 'image';
+}

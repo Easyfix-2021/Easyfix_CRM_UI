@@ -9,7 +9,7 @@ import type { JobOffer } from '@/lib/api';
 import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
-import { formatServiceAddress, productsAtBooking } from '@/lib/format';
+import { fileKindFromName, formatServiceAddress, productsAtBooking } from '@/lib/format';
 import { collectedByText } from '@/lib/collected-by';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
@@ -297,17 +297,24 @@ export function ScheduleAssignUplifted({
       const id = String((raw as Record<string, unknown>).image_id ?? '');
       const cat = String((raw as Record<string, unknown>).image_category ?? '');
       const name = String((raw as Record<string, unknown>).image ?? '');
+      /*
+       * 3. A VIDEO is not an image either. tbl_job_image now also holds videos
+       *    (technician app, public form), and an <img> on an .mp4 fires onError
+       *    — the broken tile ops reported. Classified by name, then rendered as
+       *    a video tile that opens in a new tab, like tbl_job_media videos.
+       */
+      const fileKind = fileKindFromName(name);
       return id
         ? {
           id,
-          kind: 'image' as const,
-          label: name || cat || 'Photo',
-          meta: cat || 'Photo',
+          kind: (fileKind === 'video' ? 'video' : 'image') as 'image' | 'video',
+          label: name || cat || (fileKind === 'video' ? 'Video' : 'Photo'),
+          meta: cat || (fileKind === 'video' ? 'Video' : 'Photo'),
           url: authed(`${apiBase}/admin/jobs/images/${id}/file`),
-          isPdf: /\.pdf$/i.test(name),
+          isPdf: fileKind === 'pdf' || fileKind === 'other',
         }
         : null;
-    }).filter(Boolean) as Array<{ id: string; kind: 'image'; label: string; meta: string; url: string; isPdf: boolean }>;
+    }).filter(Boolean) as Array<{ id: string; kind: 'image' | 'video'; label: string; meta: string; url: string; isPdf: boolean }>;
     const vids = (probe?.videos ?? []).map((v) => ({
       id: String(v.media_id), kind: 'video' as const,
       label: `Video ${v.media_id}`, meta: v.source || 'Customer',
