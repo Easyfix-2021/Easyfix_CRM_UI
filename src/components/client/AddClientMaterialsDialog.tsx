@@ -1,14 +1,25 @@
 'use client';
 
 /*
- * "Add Materials" modal — replaces the old two-step flow (a picker dialog
- * that opened a second, single-material pricing dialog) with one modal:
- * pick a material, a priced card appears below, pick another, and so on.
- * One POST /admin/clients/:clientId/material-rates/batch writes everything
- * the user picked in a single transaction (see routes/admin/clients.js).
+ * "Add Materials" modal — pick a MATERIAL-BRAND PAIR from the master-rows
+ * endpoint (label like "Adapter 5A - Havells"), a priced card appears below,
+ * pick another, and so on. One POST /admin/clients/:clientId/material-rates/
+ * batch writes everything the user picked in a single transaction (see
+ * routes/admin/clients.js).
  *
- * Each card renders the SAME pricing editor ClientMaterialRateDialog uses
- * for editing a single row — ClientMaterialPriceEditor — so there is one
+ * 2026-09-24 tx_share redesign (owner-approved): the picker used to be "pick
+ * a whole material, then choose No Brand / Per Brand with a free brand
+ * multi-select" — that's gone. Every pickable option is now a single fixed
+ * pair (brand_id null = No Brand) already priced at the master rate; pairs
+ * already on the client's card (any material+brand combo present in ANY of
+ * its existing groups) never appear in the search results. Two picked pairs
+ * that share a material_id (e.g. the same material in two brands) fold into
+ * ONE `materials[]` entry with two groups on save — the batch endpoint's
+ * shape is unchanged, only how many groups per material this dialog can
+ * produce.
+ *
+ * Each card renders the SAME row editor ClientMaterialRateDialog uses for
+ * editing an existing group — ClientMaterialPriceEditor — so there is one
  * editor implementation, not two copies.
  */
 
@@ -22,72 +33,84 @@ import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useCancelConfirm } from '@/lib/use-cancel-confirm';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { useDebouncedValue, useFetch } from '@/lib/hooks';
 import { cn } from '@/lib/utils';
+import { existingPairKeys, hideExistingPairs, pairKey } from '@/lib/material-rate-pairs';
 import {
-  ClientMaterialPriceEditor, editorValueToGroupsPayload, freshClientMaterialPriceEditorValue,
-  isClientMaterialPriceEditorValid, type ClientMaterialPriceEditorValue,
+  ClientMaterialPriceEditor, clientMaterialRateRowToGroupPayload, freshClientMaterialRateRowValue,
+  isClientMaterialRateRowValid, type ClientMaterialRateRowValue,
 } from './ClientMaterialPriceEditor';
-import type { ClientMaterialRateOption } from './client-material-rate-types';
+import type { ClientMaterialRateItem, MasterMaterialRateRow, MasterMaterialRateRowsResponse } from './client-material-rate-types';
 
-type PickedMaterial = {
-  material: ClientMaterialRateOption;
-  value: ClientMaterialPriceEditorValue;
-};
+type PickedRow = { masterRow: MasterMaterialRateRow; value: ClientMaterialRateRowValue };
 
 export function AddClientMaterialsDialog({
-  open, onClose, clientId, materialOptions, onAdded,
+  open, onClose, clientId, existingRates, onAdded,
 }: {
   open: boolean;
   onClose: () => void;
   clientId: number;
-  /* Materials not yet on this client's card — the same list the old picker
-     used, filtered here as each one is picked. */
-  materialOptions: ClientMaterialRateOption[];
+  /* The client's current material rates — used only to hide pairs already
+     on the card from the search results below. */
+  existingRates: ClientMaterialRateItem[];
   /* Called after a successful batch save — the caller re-runs its own
-     afterMaterialMutation (refetch + invalidate the options key) and closes. */
+     afterMaterialMutation (refetch) and closes. */
   onAdded: (count: number) => void;
 }) {
-  const [picked, setPicked] = useState<PickedMaterial[]>([]);
-  const [pickValue, setPickValue] = useState<string | number | ''>('');
+  const [picked, setPicked] = useState<PickedRow[]>([]);
+  const [query, setQuery] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pickedIds = useMemo(() => new Set(picked.map((p) => p.material.material_id)), [picked]);
+  const dq = useDebouncedValue(query, 300);
+  const searchKey = open
+    ? `/admin/clients/${clientId}/material-rates/master-rows?limit=20${dq.trim() ? `&search=${encodeURIComponent(dq.trim())}` : ''}`
+    : null;
+  const { data: searchData, loading: searchLoading, error: searchError } = useFetch<MasterMaterialRateRowsResponse>(searchKey);
+
+  const existingKeys = useMemo(() => existingPairKeys(existingRates), [existingRates]);
+  const pickedKeys = useMemo(() => new Set(picked.map((p) => pairKey(p.masterRow.material_id, p.masterRow.brand_id))), [picked]);
   const remainingOptions = useMemo(
-    () => materialOptions.filter((m) => !pickedIds.has(m.material_id)),
-    [materialOptions, pickedIds],
+    () => hideExistingPairs(searchData?.items ?? [], existingKeys).filter((r) => !pickedKeys.has(pairKey(r.material_id, r.brand_id))),
+    [searchData, existingKeys, pickedKeys],
   );
 
-  function pickMaterial(v: string) {
-    const opt = materialOptions.find((m) => String(m.material_id) === v);
-    setPickValue('');
+  function pickPair(v: string) {
+    const opt = remainingOptions.find((r) => pairKey(r.material_id, r.brand_id) === v);
+    setQuery('');
     if (!opt) return;
-    setPicked((prev) => [...prev, { material: opt, value: freshClientMaterialPriceEditorValue() }]);
+    setPicked((prev) => [...prev, { masterRow: opt, value: freshClientMaterialRateRowValue(Number(opt.price)) }]);
   }
 
-  function removeCard(materialId: number) {
-    setPicked((prev) => prev.filter((p) => p.material.material_id !== materialId));
+  function removeCard(key: string) {
+    setPicked((prev) => prev.filter((p) => pairKey(p.masterRow.material_id, p.masterRow.brand_id) !== key));
   }
 
-  function patchCard(materialId: number, value: ClientMaterialPriceEditorValue) {
-    setPicked((prev) => prev.map((p) => (p.material.material_id === materialId ? { ...p, value } : p)));
+  function patchCard(key: string, value: ClientMaterialRateRowValue) {
+    setPicked((prev) => prev.map((p) => (pairKey(p.masterRow.material_id, p.masterRow.brand_id) === key ? { ...p, value } : p)));
   }
 
-  const invalidIds = useMemo(
-    () => new Set(picked.filter((p) => !isClientMaterialPriceEditorValid(p.value)).map((p) => p.material.material_id)),
+  const invalidKeys = useMemo(
+    () => new Set(picked.filter((p) => !isClientMaterialRateRowValid(p.value)).map((p) => pairKey(p.masterRow.material_id, p.masterRow.brand_id))),
     [picked],
   );
-  const canSave = picked.length > 0 && invalidIds.size === 0;
+  const canSave = picked.length > 0 && invalidKeys.size === 0;
 
   async function handleSave() {
     if (!canSave) return;
     setError(null);
     setSubmitting(true);
     try {
-      const materials = picked.map((p) => ({
-        material_id: p.material.material_id,
-        groups: editorValueToGroupsPayload(p.value),
-      }));
+      // Fold picked pairs sharing a material_id into one materials[] entry —
+      // "one group per row" at the pick level, unchanged batch shape.
+      const byMaterial = new Map<number, ReturnType<typeof clientMaterialRateRowToGroupPayload>[]>();
+      for (const p of picked) {
+        const group = clientMaterialRateRowToGroupPayload(p.masterRow.brand_id != null ? [p.masterRow.brand_id] : [], p.value);
+        const arr = byMaterial.get(p.masterRow.material_id) ?? [];
+        arr.push(group);
+        byMaterial.set(p.masterRow.material_id, arr);
+      }
+      const materials = [...byMaterial.entries()].map(([material_id, groups]) => ({ material_id, groups }));
       await api.post(`/admin/clients/${clientId}/material-rates/batch`, { materials });
       showToast({ variant: 'success', message: `${picked.length} material${picked.length === 1 ? '' : 's'} added.` });
       onAdded(picked.length);
@@ -112,25 +135,27 @@ export function AddClientMaterialsDialog({
 
         <div className="px-6 pt-4">
           <SearchSelect
-            value={pickValue}
-            onChange={pickMaterial}
-            options={remainingOptions.map((m) => ({ value: m.material_id, label: m.material_name }))}
-            placeholder="Add a material…"
-            emptyText="No more materials available"
+            value=""
+            onChange={pickPair}
+            onQueryChange={setQuery}
+            options={remainingOptions.map((r) => ({ value: pairKey(r.material_id, r.brand_id), label: r.label }))}
+            placeholder={searchLoading ? 'Loading…' : 'Search material · brand…'}
+            emptyText={searchError ? 'Lookup failed' : 'Type to search materials'}
           />
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           {picked.length === 0 ? (
             <div className="text-sm text-muted-foreground italic py-6 text-center">
-              Add materials from the list above.
+              Search and pick a material · brand from the list above.
             </div>
           ) : (
-            picked.map(({ material, value }) => {
-              const isInvalid = invalidIds.has(material.material_id);
+            picked.map(({ masterRow, value }) => {
+              const key = pairKey(masterRow.material_id, masterRow.brand_id);
+              const isInvalid = invalidKeys.has(key);
               return (
                 <div
-                  key={material.material_id}
+                  key={key}
                   className={cn(
                     'rounded-lg border p-4 space-y-3',
                     isInvalid ? 'border-urgent bg-urgent-tint/20' : 'border-border',
@@ -138,7 +163,7 @@ export function AddClientMaterialsDialog({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-medium text-sm flex items-center gap-2">
-                      {material.material_name}
+                      {masterRow.label}
                       {isInvalid && (
                         <span className="inline-flex items-center gap-1 text-urgent-strong text-xs">
                           <AlertTriangle className="size-3.5" /> Needs a price
@@ -149,12 +174,13 @@ export function AddClientMaterialsDialog({
                       icon={Trash2}
                       label="Remove"
                       intent="danger"
-                      onClick={() => removeCard(material.material_id)}
+                      onClick={() => removeCard(key)}
                     />
                   </div>
                   <ClientMaterialPriceEditor
                     value={value}
-                    onChange={(next) => patchCard(material.material_id, next)}
+                    onChange={(next) => patchCard(key, next)}
+                    masterStatePrices={masterRow.state_prices}
                   />
                 </div>
               );

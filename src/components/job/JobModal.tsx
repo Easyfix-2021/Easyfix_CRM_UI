@@ -51,6 +51,7 @@ import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatus
 import { maskMobile, formatServiceAddress, productsAtBooking, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { groupByQuotationNo } from '@/lib/quotation-groups';
+import { computeApprovedTotal, defaultTxShare } from '@/lib/tx-share';
 // Material-request-flow-v2 (2026-09-21) — Add Material dialog reuses the
 // same master-material search + brand-groups shape Settings > Manage
 // Materials already established, rather than a second material picker.
@@ -1691,6 +1692,9 @@ export type QuotationRow = Record<string, unknown> & {
   action_on?: string | null;
   unit?: number | string | null;
   approved_charge?: number | string | null;
+  /* Tx Share per unit (2026-09-24 contract) — the client-rate group's Tx
+     Share snapshotted onto the quotation line, same idea as client_charge. */
+  tx_share?: number | string | null;
   /*
    * Material request flow v2 (2026-09-21) — derived line state, owned by the
    * backend's services/quotation-line-state.js (one predicate table, SQL +
@@ -3761,6 +3765,31 @@ export function AddQuotationLineDialog({ open, jobId, onClose, onAdded }: {
   }, [detail]);
   // A different material invalidates whatever brand was picked for the last one.
   useEffect(() => { setBrandId(''); }, [materialId]);
+
+  /*
+   * Master price for the picked material/brand pair — the group whose
+   * `brands` includes the picked brandId, or the No-Brand group when the
+   * material has no brands at all. Master materials carry no Tx Share of
+   * their own (that only exists on client rate groups), so the suggested
+   * Approved Amount always uses `defaultTxShare` here — see src/lib/tx-share.ts.
+   */
+  const masterUnitPrice = useMemo(() => {
+    if (!detail) return null;
+    const group = brandId
+      ? detail.groups.find((g) => g.brands.some((b) => b.brand_id === brandId))
+      : detail.groups.find((g) => g.brands.length === 0);
+    return group?.price != null ? Number(group.price) : null;
+  }, [detail, brandId]);
+
+  // Prefill Approved Amount as (master price + Tx Share) × qty whenever the
+  // resolved price or quantity changes — still freely editable afterwards.
+  useEffect(() => {
+    if (masterUnitPrice == null) return;
+    const qn = Number(quantity) || 0;
+    const suggested = computeApprovedTotal(masterUnitPrice, defaultTxShare(masterUnitPrice), qn);
+    setApprovedAmount(suggested > 0 ? suggested.toFixed(2) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [masterUnitPrice, quantity]);
 
   function clearInvalid(field: string) {
     setInvalid((prev) => {
