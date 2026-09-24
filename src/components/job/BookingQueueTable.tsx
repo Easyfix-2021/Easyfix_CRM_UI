@@ -14,24 +14,28 @@ import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
 /*
  * BookingQueueTable — a DIFFERENT set of columns per bucket.
  *
- * ── WHY NOT ONE TABLE FOR ALL SIX ─────────────────────────────────────────
+ * ── ONE TABLE, TWO COLUMNS THAT CHANGE ───────────────────────────────────
  *
- * The Unconfirmed tab has always shown one 14-column table to every bucket, so
- * most rows carry columns that are structurally empty for them: an order
- * waiting for its first link has no attempts, no delivery failure and no
- * customer answer, and an order sitting with the client has no next call. Ops
- * reads past the blanks to find the two facts that matter. Each bucket is a
- * different question, so each gets the columns that answer it:
+ * Ops reviewed every bucket's table and settled it (2026-09-24): the SAME
+ * thirteen columns in the SAME order everywhere, and only BUCKET and NEXT
+ * ACTION differ. That is a better answer than the per-bucket column sets this
+ * file first carried — an executive moving between tiles keeps one layout and
+ * reads the two cells that actually differ, instead of re-finding every column.
  *
- *   new         when will the link go, and where did the order come from
- *   response    WHAT the customer asked for — it decides who picks it up
- *   no_response attempts so far, what the last one was, what today's is
- *   failed      why it failed and the number we hold — usually the fix
- *   no_link     attempts, minus everything about links (call-only client)
- *   client      who owes us something, and for how long
+ * So the per-bucket knowledge in here is now exactly two functions:
+ *   bucketCell()     what this bucket is called, plus its own sub-line
+ *                    (the day with the client, the kind of answer)
+ *   nextActionCell() what to do about it, computed - never typed
  *
- * Six columns are shared by every bucket (Job #, Age, Client, City,
- * Appointment, Action) so a reader's eye keeps its anchors when switching.
+ *   New                 New                 -> Queued · next hourly run
+ *   Response received   Rescheduled         -> reason, then the date asked for
+ *                       Cancelled           -> reason
+ *                       Ready for SKU       -> Book ticket
+ *   No response         No response         -> Call - 1st / 2nd / final attempt
+ *   Delivery failed     Delivery failed     -> the same call ladder: the link
+ *                       (reason on hover)      never arrived, so the next step
+ *                                              is a call either way
+ *   Client queue        With client · Day N -> blank; it is not our move
  *
  * Every cell renderer is shared with the rest of the CRM — click-to-call, the
  * magic-link popup, the status chips, the age formatter — so this file decides
@@ -80,78 +84,33 @@ export type BucketKey =
   | 'response_ready' | 'response_reschedule' | 'response_cancel';
 
 type Col =
-  | 'job' | 'age' | 'ticket' | 'client' | 'city' | 'appt' | 'customer' | 'action'
-  | 'linkStatus' | 'source' | 'asked' | 'reason' | 'answeredAt'
-  | 'attempts' | 'lastAttempt' | 'nextAction'
-  | 'whyFailed' | 'mobileOnFile'
-  | 'withClient' | 'blocker' | 'spoc' | 'attemptsMade'
-  | 'coverage' | 'bucket' | 'remarks';
+  | 'job' | 'age' | 'ticket' | 'client' | 'cityCoverage' | 'appt' | 'customer'
+  | 'bucket' | 'nextAction' | 'remarks' | 'spoc' | 'source' | 'action';
 
 /*
- * The column set per bucket. The three Response sub-filters are the same
- * table as their parent tile — a pill narrows the rows, it does not change
- * what a row is.
+ * ONE order, every bucket. Sequence fixed by ops.
  */
-const COLUMNS: Record<string, Col[]> = {
-  new:               ['job', 'age', 'ticket', 'client', 'city', 'appt', 'customer', 'linkStatus', 'source', 'action'],
-  response_received: ['job', 'age', 'client', 'city', 'appt', 'asked', 'reason', 'answeredAt', 'customer', 'action'],
-  /*
-   * No response, as ops specified it (2026-09-24). Attempts and Last attempt
-   * moved OUT of their own columns — the attempt count now rides inside Next
-   * action ("Call — 2nd attempt · 1 of 3"), which is the sentence an executive
-   * reads anyway, and the space goes to Remarks, which they were opening the
-   * job to read.
-   */
-  no_response:       ['job', 'ticket', 'age', 'client', 'coverage', 'appt', 'bucket', 'nextAction', 'remarks', 'action'],
-  delivery_failed:   ['job', 'age', 'client', 'city', 'appt', 'whyFailed', 'mobileOnFile', 'attempts', 'nextAction', 'action'],
-  no_link_needed:    ['job', 'age', 'client', 'city', 'appt', 'attempts', 'lastAttempt', 'nextAction', 'customer', 'action'],
-  client_queue:      ['job', 'age', 'withClient', 'client', 'city', 'blocker', 'spoc', 'attemptsMade', 'lastAttempt', 'action'],
-};
+const COLUMNS: Col[] = [
+  'job', 'age', 'ticket', 'client', 'cityCoverage', 'appt', 'customer',
+  'bucket', 'nextAction', 'remarks', 'spoc', 'source', 'action',
+];
 
 const HEAD: Record<Col, string> = {
-  job: 'Job #', age: 'Age', ticket: 'Ticket created', client: 'Client', city: 'City',
-  appt: 'Appointment · Slot', customer: 'Customer', action: 'Action',
-  linkStatus: 'Link status', source: 'Source',
-  asked: 'Customer asked for', reason: 'Reason', answeredAt: 'Answered at',
-  attempts: 'Attempts', lastAttempt: 'Last attempt', nextAction: 'Next action',
-  coverage: 'Coverage', bucket: 'Bucket', remarks: 'Remarks',
-  whyFailed: 'Why it failed', mobileOnFile: 'Mobile on file',
-  withClient: 'With client', blocker: 'Blocker', spoc: 'Client SPOC', attemptsMade: 'Attempts made',
+  job: 'Job #', age: 'Age', ticket: 'Ticket created', client: 'Client',
+  cityCoverage: 'City · Coverage', appt: 'Appointment · Slot', customer: 'Customer',
+  bucket: 'Bucket', nextAction: 'Next action', remarks: 'Remarks',
+  spoc: 'Client SPOC', source: 'Source', action: 'Action',
 };
 
 /** Three attempt-days and the order stops being ours. Mirrors the backend. */
 const ATTEMPTS_TO_TRANSFER = 3;
 
-/*
- * "Next action" is COMPUTED, never typed by anyone — the handover doc is
- * explicit about that. It is a function of the bucket and the attempts so far,
- * so two operators reading two rows are told the same thing about the same
- * situation.
- */
-function nextActionText(bucket: string, attempts: number): string {
-  if (bucket === 'new') return 'Link auto-sending';
-  const n = attempts + 1;
-  if (attempts >= ATTEMPTS_TO_TRANSFER) return 'Transferring to client';
-  if (n >= ATTEMPTS_TO_TRANSFER) return 'Final call — transfers after this';
-  return n === 1 ? 'Call — 1st attempt' : 'Call — 2nd attempt';
+/** What the customer asked for, when they answered the link. */
+function answerKind(j: BookingQueueRow): 'reschedule' | 'cancel' | 'ready' {
+  if (j.pending_request_type === 'reschedule') return 'reschedule';
+  if (j.pending_request_type === 'cancel') return 'cancel';
+  return 'ready';
 }
-
-const BUCKET_LABEL: Record<string, string> = {
-  new: 'New', response_received: 'Response received', no_response: 'No response',
-  delivery_failed: 'Delivery failed', no_link_needed: 'No link needed',
-  client_queue: 'Client queue',
-};
-
-/* Day 0/1/2/3+ since the ticket came in — the same clock the tile's pills use. */
-function ageDayLabel(j: BookingQueueRow): string | null {
-  const d = daysSince(j.ticket_created_date_time ?? j.created_date_time);
-  if (d === null) return null;
-  return d >= 3 ? 'Day 3+' : `Day ${d}`;
-}
-
-const KIND_LABEL: Record<string, string> = {
-  link: 'WhatsApp link', sms: 'Unreachable SMS', call: 'Call, no answer',
-};
 
 /** Days between an IST date string and today — the "with client" clock. */
 function daysSince(value?: string | null): number | null {
@@ -161,6 +120,107 @@ function daysSince(value?: string | null): number | null {
   const day = 24 * 60 * 60 * 1000;
   const diff = Math.floor((Date.now() - then.getTime()) / day);
   return diff < 0 ? 0 : diff;
+}
+
+const ANSWER_LABEL = { reschedule: 'Rescheduled', cancel: 'Cancelled', ready: 'Ready for SKU' } as const;
+const ANSWER_TONE = { reschedule: 'amber', cancel: 'red', ready: 'emerald' } as const;
+
+/*
+ * BUCKET — what this order is, in its own words.
+ *
+ * One of the two cells that differ per tile. Response received names the
+ * ANSWER rather than the tile, because "Rescheduled" and "Cancelled" need
+ * different people and a row saying "Response received" tells neither of them
+ * anything. Client queue names the day it has been with the client, which is
+ * the only number on that tile that moves.
+ */
+function bucketCell(bucket: string, j: BookingQueueRow) {
+  if (bucket === 'response_received') {
+    const kind = answerKind(j);
+    return <StatusChip tone={ANSWER_TONE[kind]} size="sm">{ANSWER_LABEL[kind]}</StatusChip>;
+  }
+  if (bucket === 'client_queue') {
+    const d = daysSince(j.transferred_at);
+    return (
+      <>
+        <StatusChip tone="slate" size="sm">With client</StatusChip>
+        {d !== null && (
+          <div className="text-xs text-muted-foreground">{d >= 3 ? 'Day 3+' : `Day ${d}`}</div>
+        )}
+      </>
+    );
+  }
+  if (bucket === 'delivery_failed') {
+    /* The failure reason has no column of its own in the shared layout, so it
+       rides on the chip — the row still answers "why" without a column every
+       other bucket would leave blank. */
+    return (
+      <StatusChip
+        tone="red"
+        size="sm"
+        title={j.magic_link_delivery_reason || 'WhatsApp could not deliver this message'}
+      >
+        Delivery failed
+      </StatusChip>
+    );
+  }
+  if (bucket === 'no_link_needed') return <StatusChip tone="violet" size="sm">No link needed</StatusChip>;
+  if (bucket === 'no_response') return <StatusChip tone="amber" size="sm">No response</StatusChip>;
+  return <StatusChip tone="slate" size="sm">New</StatusChip>;
+}
+
+/*
+ * NEXT ACTION — what to do about it. COMPUTED, never typed by anyone: the
+ * handover doc is explicit, and two operators reading two identical rows must
+ * be told the same thing.
+ */
+function nextActionCell(bucket: string, j: BookingQueueRow) {
+  const attempts = Number(j.attempts_count ?? 0);
+
+  if (bucket === 'new') {
+    return <span className="text-xs font-semibold">Queued · next hourly run</span>;
+  }
+
+  if (bucket === 'response_received') {
+    const kind = answerKind(j);
+    if (kind === 'ready') return <span className="text-xs font-semibold">Book ticket</span>;
+    return (
+      <>
+        {/* The customer's own words for why. For a reschedule the date they
+            asked for sits underneath: without it the row still shows the OLD
+            appointment and somebody re-books the time the customer rejected. */}
+        <span className="text-xs font-semibold">{j.pending_request_reason || (kind === 'cancel' ? 'Cancellation requested' : 'Reschedule requested')}</span>
+        {kind === 'reschedule' && j.pending_request_preferred_datetime && (
+          <div className="text-xs text-warning-strong">
+            asked for {formatDate(j.pending_request_preferred_datetime)}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  /* Not our move — ops asked for this to stay blank until the client-queue
+     rules are defined. An em dash, not an empty cell, so a reader can tell
+     "nothing to do" from "nothing loaded". */
+  if (bucket === 'client_queue') return <span className="text-xs text-muted-foreground">—</span>;
+
+  /*
+   * The call ladder, shared by No response, Delivery failed and No link
+   * needed. Same rule for all three because the next step is a call in every
+   * one of them; only how they arrived differs, and the attempt count already
+   * carries that (an undelivered link never counted, so a Delivery-failed
+   * order's first call really is attempt 1).
+   */
+  const n = attempts + 1;
+  const label = attempts >= ATTEMPTS_TO_TRANSFER ? 'Transferring to client'
+    : n >= ATTEMPTS_TO_TRANSFER ? 'Call — final attempt'
+      : n === 1 ? 'Call — 1st attempt' : 'Call — 2nd attempt';
+  return (
+    <>
+      <span className="text-xs font-semibold">{label}</span>
+      <div className="text-xs text-muted-foreground">{attempts} of {ATTEMPTS_TO_TRANSFER} attempts</div>
+    </>
+  );
 }
 
 export function BookingQueueTable({
@@ -178,7 +238,7 @@ export function BookingQueueTable({
   onMagicLinkSent?: () => void;
 }) {
   const key = bucket.startsWith('response') ? 'response_received' : bucket;
-  const cols = COLUMNS[key] ?? COLUMNS.no_response;
+  const cols = COLUMNS;
   /*
    * The popup is controlled and renders ONCE, outside the table — mounting one
    * per row would build a dialog for every order on screen. Null closes it and
@@ -187,7 +247,6 @@ export function BookingQueueTable({
   const [linkRow, setLinkRow] = React.useState<BookingQueueRow | null>(null);
 
   function cell(c: Col, j: BookingQueueRow) {
-    const attempts = Number(j.attempts_count ?? 0);
     switch (c) {
       case 'job':
         return (
@@ -202,22 +261,24 @@ export function BookingQueueTable({
         return <span className="text-xs">{formatDate(j.ticket_created_date_time ?? j.created_date_time)}</span>;
       case 'client':
         return j.client_name ?? '—';
-      case 'city':
-        return j.city_name ?? '—';
+      case 'cityCoverage':
+        return (
+          <>
+            <div>{j.city_name ?? '—'}</div>
+            {/* Coverage is not computed yet (ops: "keep all local for now"), so
+                it is labelled as a placeholder rather than dressed up as an
+                answer — a chip that is always LOCAL should not look measured. */}
+            <StatusChip tone="emerald" size="sm" title="Coverage is not computed yet — every order shows LOCAL">
+              LOCAL
+            </StatusChip>
+          </>
+        );
       case 'appt':
         return (
           <>
             <div>{formatDate(j.requested_date_time)}</div>
             {displaySlot(j.requested_date_time, j.time_slot) && (
               <div className="text-xs text-muted-foreground">{displaySlot(j.requested_date_time, j.time_slot)}</div>
-            )}
-            {/* A reschedule REQUEST does not move the live slot, so the date the
-                customer asked for rides underneath it — without this the row
-                looks unchanged and somebody re-books the old time. */}
-            {j.pending_request_type === 'reschedule' && j.pending_request_preferred_datetime && (
-              <div className="text-xs font-semibold text-warning-strong">
-                asked: {formatDate(j.pending_request_preferred_datetime)}
-              </div>
             )}
           </>
         );
@@ -228,129 +289,34 @@ export function BookingQueueTable({
             <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
           </>
         );
-      case 'linkStatus':
-        return j.magic_link_sent_at
-          ? <StatusChip tone="sky" size="sm">Sent {formatDate(j.magic_link_sent_at)}</StatusChip>
-          : <StatusChip tone="slate" size="sm">Queued · next hourly run</StatusChip>;
-      case 'source':
-        return <span className="text-xs text-muted-foreground">{j.source_type ?? '—'}</span>;
-      case 'asked': {
-        /*
-         * The chip alone says the customer asked for something; the two lines
-         * under it say WHAT, which is the part that decides who picks the order
-         * up. Ops asked for the reason and the requested time to sit here,
-         * under the chip, rather than in a column further right where a reader
-         * has to join them back up.
-         */
-        const tone = j.pending_request_type === 'cancel' ? 'red'
-          : j.pending_request_type === 'reschedule' ? 'amber' : 'emerald';
-        const label = j.pending_request_type === 'cancel' ? 'Cancel'
-          : j.pending_request_type === 'reschedule' ? 'Reschedule' : 'Ready for SKU';
-        return (
-          <>
-            <StatusChip tone={tone} size="sm">{label}</StatusChip>
-            {j.pending_request_reason && (
-              <div className="mt-0.5 text-xs text-muted-foreground">{j.pending_request_reason}</div>
-            )}
-            {j.pending_request_preferred_datetime && (
-              <div className="text-xs font-semibold text-warning-strong">
-                asked for {formatDate(j.pending_request_preferred_datetime)}
-              </div>
-            )}
-          </>
-        );
-      }
-      case 'reason':
-        return <span className="text-xs text-muted-foreground">{j.pending_request_reason ?? '—'}</span>;
-      case 'answeredAt':
-        return <span className="text-xs">{j.customer_submitted_at ? formatDate(j.customer_submitted_at) : '—'}</span>;
-      case 'attempts':
-      case 'attemptsMade':
-        return (
-          <StatusChip tone={attempts >= ATTEMPTS_TO_TRANSFER ? 'red' : attempts === 2 ? 'amber' : 'slate'} size="sm">
-            {attempts} of {ATTEMPTS_TO_TRANSFER}
-          </StatusChip>
-        );
-      case 'lastAttempt':
-        return j.last_attempt_at ? (
-          <>
-            <div className="text-xs">{KIND_LABEL[j.last_attempt_kind ?? ''] ?? '—'}</div>
-            <div className="text-xs text-muted-foreground">{formatDate(j.last_attempt_at)}</div>
-          </>
-        ) : <span className="text-xs text-muted-foreground">—</span>;
-      case 'nextAction':
-        return (
-          <>
-            <span className="text-xs font-semibold">{nextActionText(key, attempts)}</span>
-            {/* The attempt count rides under the instruction rather than in a
-                column of its own — it is the reason the instruction says what
-                it says, and three days of it hands the order to the client. */}
-            {key !== 'new' && (
-              <div className="text-xs text-muted-foreground">{attempts} of {ATTEMPTS_TO_TRANSFER} attempts</div>
-            )}
-          </>
-        );
-      case 'coverage':
-        /* Coverage is not computed yet (ops: "keep all local for now"). It is
-           labelled as a placeholder rather than dressed up as a real answer —
-           a LOCAL chip that is always LOCAL should not look measured. */
-        return <StatusChip tone="emerald" size="sm" title="Coverage is not computed yet — every order shows LOCAL">LOCAL</StatusChip>;
       case 'bucket':
-        return (
-          <>
-            <div className="text-xs font-semibold">{BUCKET_LABEL[key] ?? key}</div>
-            {ageDayLabel(j) && <div className="text-xs text-muted-foreground">{ageDayLabel(j)}</div>}
-          </>
-        );
+        return bucketCell(key, j);
+      case 'nextAction':
+        return nextActionCell(key, j);
       case 'remarks':
         return (
           <span className="block max-w-[15rem] truncate text-xs text-muted-foreground" title={j.latest_comment ?? undefined}>
             {j.latest_comment || '—'}
           </span>
         );
-      case 'whyFailed':
-        return (
-          <span className="text-xs text-destructive">
-            {j.magic_link_delivery_reason || 'WhatsApp could not deliver this message'}
-          </span>
-        );
-      case 'mobileOnFile':
-        return <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />;
-      case 'withClient': {
-        const d = daysSince(j.transferred_at);
-        return (
-          <StatusChip tone={d !== null && d >= 3 ? 'red' : 'slate'} size="sm">
-            {d === null ? '—' : d >= 3 ? 'Day 3+' : `Day ${d}`}
-          </StatusChip>
-        );
-      }
-      case 'blocker':
-        /* The only blocker the system can state today. The other five from the
-           handover doc (PO required, site not ready, entry permission, product
-           return, credit hold) are not recorded anywhere yet — showing a
-           dropdown of them would be inventing data. */
-        return <StatusChip tone="amber" size="sm">Customer unreachable</StatusChip>;
       case 'spoc':
         return (
           <>
             <div className="text-xs">{j.client_spoc_name ?? '—'}</div>
-            {j.client_spoc && <div className="text-xs text-muted-foreground">{j.client_spoc}</div>}
+            {/* spocJobId dials the SPOC recorded on THIS job, through the same
+                click-to-call flow as the customer number — so a SPOC call is
+                logged and auditable exactly like a customer call. */}
+            <CallableMobile spocJobId={j.job_id} mobile={j.client_spoc} />
           </>
         );
+      case 'source':
+        return <span className="text-xs text-muted-foreground">{j.source_type ?? '—'}</span>;
       case 'action':
         return (
           <div className="inline-flex items-center justify-end gap-0.5">
-            {/* Confirm & Schedule is where booking AND the Unreachable outcome
-                live, so the calling buckets reach both through it rather than
-                this table growing its own copy of either. */}
             {canConfirm && key !== 'client_queue' && (
               <IconButton icon={CalendarCheck} intent="default" label="Confirm & schedule" onClick={() => openConfirm(j.job_id)} />
             )}
-            {/* Send / re-send the link. Opens the SAME popup the Old view uses
-                (cap, override, masked number and all) — this table owns the
-                button, never the sending rules. Offered where sending is the
-                actual next step: nothing has gone out yet, or the last one
-                could not be delivered and somebody has fixed the number. */}
             {canSendMagicLink && (key === 'new' || key === 'delivery_failed') && (
               <IconButton
                 icon={Send}
