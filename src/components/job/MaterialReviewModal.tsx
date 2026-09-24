@@ -57,6 +57,7 @@ import { actionFlags } from '@/lib/permissions';
 import { cn, formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { AddQuotationLineDialog, type QuotationRow } from './JobModal';
 import { groupByQuotationNo } from '@/lib/quotation-groups';
+import { computeApprovedTotal } from '@/lib/tx-share';
 
 type JobDetails = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -66,12 +67,23 @@ type JobDetails = Record<string, unknown> & {
   easyfixer_name?: string | null; requested_date_time?: string | null;
 };
 
-type MaterialLineState = { rejected: boolean; amount: string };
+/*
+ * 2026-09-24 tx_share redesign (owner-approved): Quoted is now an EDITABLE
+ * whole-rupee UNIT price (was a read-only computed total); Tx Share (per
+ * unit) is read-only, sourced from the quotation row; Approved is the LINE
+ * total, defaulting to (quoted + txShare) × qty (src/lib/tx-share.ts's
+ * `computeApprovedTotal`) and recomputed every time Quoted changes —
+ * editable afterwards, same "kept until the next driving-field change" rule
+ * Tx Share itself follows on the client rate-card editor.
+ */
+type MaterialLineState = { rejected: boolean; quotedUnit: string; amount: string };
 
-function quotedLineAmount(r: QuotationRow): number {
-  return (Number(r.unit) || 0) * (Number(r.unit_price) || 0);
+function originalUnitPrice(r: QuotationRow): number {
+  return Math.round(Number(r.unit_price) || 0);
 }
-
+function txSharePerUnit(r: QuotationRow): number {
+  return Number(r.tx_share) || 0;
+}
 // client_charge is the rate-card unit price snapshotted at quote time — null
 // means no rate existed and must render "—", never ₹0 (see JobModal's
 // original note; a genuine non-null 0 rate is distinct and renders as 0.00).
@@ -133,7 +145,13 @@ export function MaterialReviewModal({
       if (missing.length === 0) return prev;
       const next = { ...prev };
       for (const r of missing) {
-        next[Number(r.id)] = { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
+        const unit = originalUnitPrice(r);
+        const qty = Number(r.unit) || 0;
+        next[Number(r.id)] = {
+          rejected: false,
+          quotedUnit: String(unit),
+          amount: computeApprovedTotal(unit, txSharePerUnit(r), qty).toFixed(2),
+        };
       }
       return next;
     });
@@ -143,7 +161,13 @@ export function MaterialReviewModal({
 
   if (!jobId) return null;
 
-  const quotedTotal = materialRows.reduce((sum, r) => sum + quotedLineAmount(r), 0);
+  // "Quoted Total" uses the LIVE (possibly edited) quoted unit prices, not
+  // the original unit_price snapshot — the column is editable now.
+  const quotedTotal = materialRows.reduce((sum, r) => {
+    const st = lineState[Number(r.id)];
+    const unit = st ? Number(st.quotedUnit) || 0 : originalUnitPrice(r);
+    return sum + unit * (Number(r.unit) || 0);
+  }, 0);
   const rateCardTotal = materialRows.reduce((sum, r) => sum + (rateCardLineAmount(r) ?? 0), 0);
   const approvedTotal = materialRows.reduce((sum, r) => {
     const st = lineState[Number(r.id)];
@@ -151,17 +175,35 @@ export function MaterialReviewModal({
     const n = Number(st.amount);
     return sum + (Number.isFinite(n) ? n : 0);
   }, 0);
-  // Send is blocked while any non-rejected row has a blank, non-numeric or
-  // negative amount — half-filled table can't go out.
+  // Send is blocked while any non-rejected row has a blank/invalid Quoted
+  // (must be a whole rupee, ≥0) or Approved (must be a non-negative number) —
+  // half-filled table can't go out.
   const hasInvalidLine = materialRows.some((r) => {
     const st = lineState[Number(r.id)];
     if (!st || st.rejected) return false;
-    const n = Number(st.amount);
-    return st.amount.trim() === '' || !Number.isFinite(n) || n < 0;
+    const qn = Number(st.quotedUnit);
+    const quotedInvalid = st.quotedUnit.trim() === '' || !Number.isInteger(qn) || qn < 0;
+    const an = Number(st.amount);
+    const amountInvalid = st.amount.trim() === '' || !Number.isFinite(an) || an < 0;
+    return quotedInvalid || amountInvalid;
   });
 
   function setLine(id: number, patch: Partial<MaterialLineState>) {
     setLineState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }
+
+  // Quoted changed → Approved (LINE total) is unconditionally recomputed as
+  // (quoted + txShare) × qty; a manual Approved edit survives until the NEXT
+  // Quoted change (same rule Tx Share follows on the rate-card editor).
+  function setQuotedUnit(r: QuotationRow, raw: string) {
+    const id = Number(r.id);
+    const n = Number(raw);
+    const qty = Number(r.unit) || 0;
+    setLineState((prev) => {
+      const cur = prev[id] ?? { rejected: false, quotedUnit: String(originalUnitPrice(r)), amount: '' };
+      const amount = Number.isFinite(n) ? computeApprovedTotal(n, txSharePerUnit(r), qty).toFixed(2) : cur.amount;
+      return { ...prev, [id]: { ...cur, quotedUnit: raw, amount } };
+    });
   }
 
   async function submit(decision: 'approve' | 'reject') {
@@ -187,9 +229,14 @@ export function MaterialReviewModal({
         ? materialRows.map((r) => {
             const id = Number(r.id);
             const st = lineState[id];
-            return st?.rejected
-              ? { line_id: id, decision: 'reject' as const }
-              : { line_id: id, decision: 'approve' as const, approved_amount: Number(st?.amount) };
+            if (st?.rejected) return { line_id: id, decision: 'reject' as const };
+            const quotedChanged = Number(st?.quotedUnit) !== originalUnitPrice(r);
+            return {
+              line_id: id,
+              decision: 'approve' as const,
+              approved_amount: Number(st?.amount),
+              ...(quotedChanged ? { quoted_unit_price: Number(st?.quotedUnit) } : {}),
+            };
           })
         : undefined;
       await api.post(`/admin/jobs/${jobId}/material-review`, {
@@ -270,6 +317,7 @@ export function MaterialReviewModal({
                     <th className="!text-right">Qty</th>
                     <th className="!text-right">Rate Card (₹)</th>
                     <th className="!text-right">Quoted (₹)</th>
+                    <th className="!text-right">Tx Share (₹)</th>
                     <th className="!text-right">Approved (₹)</th>
                     <th className="!text-center">Reject</th>
                   </tr>
@@ -277,30 +325,49 @@ export function MaterialReviewModal({
                 <tbody>
                   {materialGroups.flatMap((g) => [
                     <tr key={`grp-${g.quotationNo ?? 'draft'}`} className="bg-muted/30">
-                      <td colSpan={6} className="!text-left text-xs font-medium text-muted-foreground px-2 py-1.5">
+                      <td colSpan={7} className="!text-left text-xs font-medium text-muted-foreground px-2 py-1.5">
                         {g.quotationNo != null ? `Quotation ${g.quotationNo}` : 'Draft (Not Sent)'}
                       </td>
                     </tr>,
                     ...g.rows.map((r) => {
                       const id = Number(r.id);
-                      const st = lineState[id] ?? { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
+                      const unit = originalUnitPrice(r);
+                      const qty = Number(r.unit) || 0;
+                      const txShare = txSharePerUnit(r);
+                      const st = lineState[id] ?? {
+                        rejected: false,
+                        quotedUnit: String(unit),
+                        amount: computeApprovedTotal(unit, txShare, qty).toFixed(2),
+                      };
+                      const qn = Number(st.quotedUnit);
+                      const quotedInvalid = !st.rejected
+                        && (st.quotedUnit.trim() === '' || !Number.isInteger(qn) || qn < 0);
                       const amountInvalid = !st.rejected
                         && (st.amount.trim() === '' || !Number.isFinite(Number(st.amount)) || Number(st.amount) < 0);
                       const rateCardAmt = rateCardLineAmount(r);
-                      const quotedAmt = quotedLineAmount(r);
-                      // Ops sees at a glance where the technician quoted
-                      // above the rate card. No highlight when there is no
-                      // rate card to compare.
-                      const isOverRate = rateCardAmt != null && quotedAmt > rateCardAmt;
+                      const quotedLineTotal = (Number.isFinite(qn) ? qn : 0) * qty;
+                      // Ops sees at a glance where the current Quoted total
+                      // sits above the rate card. No highlight when there is
+                      // no rate card to compare.
+                      const isOverRate = rateCardAmt != null && quotedLineTotal > rateCardAmt;
                       return (
                         <tr key={id}>
                           <td className="!text-left">{String(r.name ?? '—')}</td>
                           <td className="!text-right font-mono text-xs">{String(r.unit ?? '')}</td>
                           <td className="!text-right font-mono text-xs">{rateCardAmt != null ? rateCardAmt.toFixed(2) : '—'}</td>
-                          <td className={cn('!text-right font-mono text-xs', isOverRate && 'bg-urgent-tint text-urgent-strong rounded px-1')}>
-                            {quotedAmt.toFixed(2)}
-                            {isOverRate && <span className="ml-1 font-semibold">(+₹{(quotedAmt - (rateCardAmt as number)).toFixed(2)})</span>}
+                          <td className={cn('!text-right', isOverRate && 'bg-urgent-tint rounded px-1')}>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={st.quotedUnit}
+                              onChange={(e) => setQuotedUnit(r, e.target.value)}
+                              disabled={st.rejected}
+                              aria-invalid={quotedInvalid}
+                              className={cn('font-mono text-xs h-8 w-24 ml-auto', quotedInvalid && 'border-urgent')}
+                            />
                           </td>
+                          <td className="!text-right font-mono text-xs">{txShare.toFixed(2)}</td>
                           <td className="!text-right">
                             <Input
                               type="number"
@@ -330,6 +397,7 @@ export function MaterialReviewModal({
                     <td className="!text-left" colSpan={2}>Total</td>
                     <td className="!text-right font-mono text-xs">{rateCardTotal.toFixed(2)}</td>
                     <td className="!text-right font-mono text-xs">{quotedTotal.toFixed(2)}</td>
+                    <td />
                     <td className="!text-right font-mono text-xs">{approvedTotal.toFixed(2)}</td>
                     <td />
                   </tr>
