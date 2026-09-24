@@ -1010,9 +1010,8 @@ export default function MyOrdersPage() {
                   userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
                   openView={openView}
                   openConfirm={openConfirm}
-                  sortBy={sortKey}
-                  sortDir={sortDir}
-                  onSort={toggle}
+                  /* No sortable headers here: each bucket has its own columns,
+                     and the queue is newest-first by design. */
                   onMutation={() => load(false, true)}
                 />
               ) : (

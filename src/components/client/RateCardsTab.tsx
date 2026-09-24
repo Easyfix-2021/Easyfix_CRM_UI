@@ -50,7 +50,8 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { cn } from '@/lib/utils';
 import { ClientMaterialRateDialog } from './ClientMaterialRateDialog';
 import { AddClientMaterialsDialog } from './AddClientMaterialsDialog';
-import type { ClientMaterialRateGroup, ClientMaterialRateItem, ClientMaterialRateOption } from './client-material-rate-types';
+import { defaultTxShare } from '@/lib/tx-share';
+import type { ClientMaterialRateGroup, ClientMaterialRateItem } from './client-material-rate-types';
 
 type RateCardRow = {
   /*
@@ -97,7 +98,7 @@ type RateCardImportSummary = { new: number; update: number; unchanged: number; b
  * Material/Brand/Price/State rows. `material_id` is null when the material
  * name itself didn't resolve to a catalog row.
  */
-type MaterialPlanLine = { brand?: string | null; state?: string | null; price: number };
+type MaterialPlanLine = { brand?: string | null; state?: string | null; price: number; tx_share?: number | null };
 type MaterialPlanItem = {
   material: string;
   material_id: number | null;
@@ -204,19 +205,12 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
 
   // ── Materials section (sub-project C) ──────────────────────────────────
   const materialRatesKey = `/admin/clients/${clientId}/material-rates`;
-  const materialOptionsKey = `/admin/clients/${clientId}/material-rates/options`;
   const {
     data: materialRates, loading: materialsLoading, error: materialsError, refetch: refetchMaterialRates,
   } = useFetch<ClientMaterialRateItem[]>(materialRatesKey);
-  // useFetchOnce (not useFetch) so the invalidateFetch() call after every
-  // mutation actually refreshes this picker's options — per
-  // feedback_crm_ui_fetch_hooks, invalidateFetch alone doesn't re-trigger a
-  // plain useFetch subscriber; only useFetchOnce listens for it.
-  const { data: materialOptions } = useFetchOnce<ClientMaterialRateOption[]>(materialOptionsKey);
   const [addMaterialsDialogOpen, setAddMaterialsDialogOpen] = useState(false);
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
-  const [materialDialogTarget, setMaterialDialogTarget] = useState<ClientMaterialRateOption | null>(null);
-  const [materialDialogEditing, setMaterialDialogEditing] = useState<ClientMaterialRateItem | null>(null);
+  const [materialDialogItem, setMaterialDialogItem] = useState<ClientMaterialRateItem | null>(null);
   const [materialBusyId, setMaterialBusyId] = useState<number | null>(null);
 
   function groupLabel(g: ClientMaterialRateGroup): string {
@@ -229,11 +223,9 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   }
   function afterMaterialMutation() {
     refetchMaterialRates();
-    invalidateFetch((k) => k === materialOptionsKey);
   }
   function openEditMaterial(item: ClientMaterialRateItem) {
-    setMaterialDialogTarget({ material_id: item.material_id, material_name: item.material_name });
-    setMaterialDialogEditing(item);
+    setMaterialDialogItem(item);
     setMaterialDialogOpen(true);
   }
   async function removeMaterial(item: ClientMaterialRateItem) {
@@ -276,7 +268,11 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
         groups: item.groups.map((g) => ({
           brand_ids: g.brands.map((b) => b.brand_id),
           price: flaggedIds.has(g.group_id) && g.master_price_today != null ? g.master_price_today : g.price,
-          states: g.states.map((s) => ({ state_ids: s.state_ids, price: s.price })),
+          // Not a user-driven price edit — carry the group's own Tx Share
+          // through unchanged rather than resetting it to 20% of the new
+          // price (that reset rule is for the interactive editor only).
+          tx_share: g.tx_share,
+          states: g.states.map((s) => ({ state_ids: s.state_ids, price: s.price, tx_share: s.tx_share })),
         })),
       };
       await api.put(`/admin/clients/${clientId}/material-rates/${item.material_id}`, body);
@@ -612,6 +608,8 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                 <tr>
                   <th className="!text-left">Material</th>
                   <th className="!text-left">Brand Groups</th>
+                  <th className="!text-right">Price</th>
+                  <th className="!text-right">Tx Share</th>
                   <th className="!text-center">States</th>
                   <th className="!text-center">Master</th>
                   {canEdit && <th></th>}
@@ -629,9 +627,22 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                         <td className="!text-left">
                           <div className="space-y-0.5">
                             {item.groups.map((g) => (
-                              <div key={g.group_id}>
-                                <span className="font-medium">{groupLabel(g)}</span>
-                                <span className="text-muted-foreground"> — &#8377;{fmt2(Number(g.price))}</span>
+                              <div key={g.group_id}>{groupLabel(g)}</div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="!text-right">
+                          <div className="space-y-0.5">
+                            {item.groups.map((g) => (
+                              <div key={g.group_id} className="font-mono">&#8377;{fmt2(Number(g.price))}</div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="!text-right">
+                          <div className="space-y-0.5">
+                            {item.groups.map((g) => (
+                              <div key={g.group_id} className="font-mono">
+                                &#8377;{fmt2(g.tx_share != null ? Number(g.tx_share) : defaultTxShare(Number(g.price)))}
                               </div>
                             ))}
                           </div>
@@ -659,7 +670,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                       </tr>
                       {flagged.length > 0 && (
                         <tr key={`${item.material_id}-flag`} className="bg-warning-tint/40">
-                          <td colSpan={canEdit ? 5 : 4} className="!text-left px-3 py-2">
+                          <td colSpan={canEdit ? 7 : 6} className="!text-left px-3 py-2">
                             <div className="flex items-start gap-2">
                               <AlertTriangle className="size-3.5 mt-0.5 text-warning-strong shrink-0" />
                               <div className="space-y-1">
@@ -694,7 +705,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           open={addMaterialsDialogOpen}
           onClose={() => setAddMaterialsDialogOpen(false)}
           clientId={clientId}
-          materialOptions={materialOptions ?? []}
+          existingRates={materialRates ?? []}
           onAdded={() => {
             setAddMaterialsDialogOpen(false);
             afterMaterialMutation();
@@ -702,13 +713,12 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
         />
       )}
 
-      {materialDialogOpen && materialDialogTarget && (
+      {materialDialogOpen && materialDialogItem && (
         <ClientMaterialRateDialog
           open={materialDialogOpen}
           onClose={() => setMaterialDialogOpen(false)}
           clientId={clientId}
-          material={materialDialogTarget}
-          editing={materialDialogEditing}
+          item={materialDialogItem}
           onSaved={onMaterialSaved}
         />
       )}
@@ -845,34 +855,42 @@ function MaterialUploadPreview({ materials }: { materials: MaterialPlanItem[] })
     return <div className="text-xs text-muted-foreground italic px-1">No materials found in this file.</div>;
   }
   return (
-    <div className="max-h-64 overflow-auto border rounded divide-y divide-border">
-      {materials.map((m, i) => (
-        <div key={`${m.material}-${i}`} className="p-2 space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-sm">{m.material}</span>
-            <StatusChip tone={outcomeTone(m.outcome)} size="sm">{m.outcome}</StatusChip>
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        The &quot;Tx Share&quot; column is optional — leave it blank to default to 20% of Price.
+      </p>
+      <div className="max-h-64 overflow-auto border rounded divide-y divide-border">
+        {materials.map((m, i) => (
+          <div key={`${m.material}-${i}`} className="p-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-sm">{m.material}</span>
+              <StatusChip tone={outcomeTone(m.outcome)} size="sm">{m.outcome}</StatusChip>
+            </div>
+            {m.lines.length > 0 && (
+              <table className="data-table w-full text-xs">
+                <thead>
+                  <tr><th className="!text-left">Brand</th><th className="!text-left">State</th><th className="!text-right">Price</th><th className="!text-right">Tx Share</th></tr>
+                </thead>
+                <tbody>
+                  {m.lines.map((l, li) => (
+                    <tr key={li}>
+                      <td className="!text-left">{l.brand?.trim() ? l.brand : 'No Brand'}</td>
+                      <td className="!text-left">{l.state?.trim() ? l.state : 'All States'}</td>
+                      <td className="!text-right font-mono">&#8377;{fmt2(Number(l.price) || 0)}</td>
+                      <td className="!text-right font-mono">
+                        &#8377;{fmt2(l.tx_share != null ? Number(l.tx_share) : defaultTxShare(Number(l.price) || 0))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {m.errors && m.errors.length > 0 && (
+              <div className="text-xs text-urgent-strong">{m.errors.join('; ')}</div>
+            )}
           </div>
-          {m.lines.length > 0 && (
-            <table className="data-table w-full text-xs">
-              <thead>
-                <tr><th className="!text-left">Brand</th><th className="!text-left">State</th><th className="!text-right">Price</th></tr>
-              </thead>
-              <tbody>
-                {m.lines.map((l, li) => (
-                  <tr key={li}>
-                    <td className="!text-left">{l.brand?.trim() ? l.brand : 'No Brand'}</td>
-                    <td className="!text-left">{l.state?.trim() ? l.state : 'All States'}</td>
-                    <td className="!text-right font-mono">&#8377;{fmt2(Number(l.price) || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {m.errors && m.errors.length > 0 && (
-            <div className="text-xs text-urgent-strong">{m.errors.join('; ')}</div>
-          )}
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
