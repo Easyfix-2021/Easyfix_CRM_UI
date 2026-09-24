@@ -22,21 +22,23 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const toIso = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
 export function MinDateCalendar({
-  value, minDate, onChange, placeholder = 'Select A Date',
+  value, minDate, onChange, placeholder = 'Select A Date', disabled,
 }: {
   value: string;
-  minDate: string;
+  /** Days before this 'YYYY-MM-DD' are disabled. Omitted = nothing is blocked. */
+  minDate?: string;
   onChange: (iso: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) {
-  const [minY, minM] = minDate.split('-').map(Number);
-  const start = (value || minDate).split('-').map(Number);
+  const [minY, minM] = (minDate || '').split('-').map(Number);
+  const start = (value || minDate || new Date().toISOString().slice(0, 10)).split('-').map(Number);
   const [open, setOpen] = React.useState(false);
   const [view, setView] = React.useState({ y: start[0], m: start[1] - 1 });
 
   const firstDow = new Date(view.y, view.m, 1).getDay();
   const days = new Date(view.y, view.m + 1, 0).getDate();
-  const atFloorMonth = view.y < minY || (view.y === minY && view.m <= minM - 1);
+  const atFloorMonth = !!minDate && (view.y < minY || (view.y === minY && view.m <= minM - 1));
   const shift = (delta: number) => {
     const d = new Date(view.y, view.m + delta, 1);
     setView({ y: d.getFullYear(), m: d.getMonth() });
@@ -54,43 +56,44 @@ export function MinDateCalendar({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 rounded-md border border-ink-300 bg-card px-3 py-2 text-base text-left focus:outline-none focus:ring-2 focus:ring-primary"
+        disabled={disabled}
+        className="flex w-full items-center gap-2 rounded-md border border-input bg-card px-3 py-2 text-base text-left focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <Calendar className="h-4 w-4 shrink-0 text-ink-500" />
-        <span className={value ? 'text-ink-900' : 'text-ink-500'}>{label}</span>
+        <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className={value ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
       </button>
-      {open && (
-        <div className="mt-2 rounded-md border border-ink-300 bg-card p-3 select-none">
+      {open && !disabled && (
+        <div className="mt-2 rounded-md border border-input bg-card p-3 select-none">
           <div className="mb-2 flex items-center justify-between">
             <button
               type="button"
               onClick={() => shift(-1)}
               disabled={atFloorMonth}
               aria-label="Previous Month"
-              className="rounded p-1.5 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-30"
+              className="rounded p-1.5 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <div className="text-sm font-semibold text-ink-900">
+            <div className="text-sm font-semibold text-foreground">
               {new Date(view.y, view.m, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
             </div>
             <button
               type="button"
               onClick={() => shift(1)}
               aria-label="Next Month"
-              className="rounded p-1.5 hover:bg-ink-50"
+              className="rounded p-1.5 hover:bg-muted"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-          <div className="mb-1 grid grid-cols-7 text-center text-xs font-medium text-ink-500">
+          <div className="mb-1 grid grid-cols-7 text-center text-xs font-medium text-muted-foreground">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => <div key={d}>{d}</div>)}
           </div>
           <div className="grid grid-cols-7 gap-1">
             {Array.from({ length: firstDow }, (_, i) => <div key={`b${i}`} />)}
             {Array.from({ length: days }, (_, i) => {
               const iso = toIso(view.y, view.m, i + 1);
-              const blocked = iso < minDate;
+              const blocked = !!minDate && iso < minDate;
               const selected = iso === value;
               return (
                 <button
@@ -102,10 +105,10 @@ export function MinDateCalendar({
                   className={
                     'h-9 rounded-full text-sm transition-colors '
                     + (blocked
-                      ? 'cursor-not-allowed text-ink-300 line-through'
+                      ? 'cursor-not-allowed text-muted-foreground/50 line-through'
                       : selected
                         ? 'bg-success text-white'
-                        : 'text-ink-900 hover:bg-ink-50')
+                        : 'text-foreground hover:bg-muted')
                   }
                 >
                   {i + 1}

@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Select } from '@/components/ui/select';
 import { DateTimeSlotPicker, TimeSelect } from '@/components/ui/date-time-slot-picker';
+import { MinDateCalendar } from '@/components/ui/min-date-calendar';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -47,8 +48,9 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
-import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
+import { maskMobile, formatServiceAddress, productsAtBooking, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
+import { groupByQuotationNo } from '@/lib/quotation-groups';
 // Material-request-flow-v2 (2026-09-21) — Add Material dialog reuses the
 // same master-material search + brand-groups shape Settings > Manage
 // Materials already established, rather than a second material picker.
@@ -1441,7 +1443,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 )}
               </span>
             )],
-            ['Total No. of Products', totalProducts(job.services)],
+            /* What the CLIENT booked (tbl_job.product_quantity), not how many
+               service lines the job carries — see productsAtBooking. */
+            ['Products Added at Booking', productsAtBooking(job.product_quantity)],
             // exp_tat is a varchar of hours; '' and NULL are both "not set".
             ['Job Completion TAT', job.exp_tat ? `${String(job.exp_tat)} hrs` : null],
             // Additional Comments / technician-facing notes (efr_special_notes) —
@@ -1697,6 +1701,13 @@ export type QuotationRow = Record<string, unknown> & {
    */
   state?: string | null;
   client_status?: number | string | null;
+  /*
+   * Owner amendment 2026-09-22: each technician "Send for Approval" creates
+   * a separate quotation (lines sharing one sent_on). 1..n ascending, null
+   * for drafts (sent_on IS NULL). Absent entirely on an older backend —
+   * `groupByQuotationNo` treats that the same as null.
+   */
+  quotation_no?: number | string | null;
 };
 
 /*
@@ -2467,6 +2478,9 @@ function JobQuotationsTab({ jobId, jobStatus, onJobChanged }: {
    */
   const lineTotal = (r: QuotationRow) => (Number(r.unit_price) || 0) * (Number(r.unit ?? r.quantity) || 0);
   const total = rows.reduce((sum, r) => sum + lineTotal(r), 0);
+  // Owner amendment 2026-09-22: one quotation per "Send for Approval" — group
+  // rows by quotation_no (ascending), drafts (null/undefined) last.
+  const groups = useMemo(() => groupByQuotationNo(rows), [rows]);
 
   return (
     <div className="space-y-3">
@@ -2502,57 +2516,69 @@ function JobQuotationsTab({ jobId, jobStatus, onJobChanged }: {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
-                const type = String(r.type ?? r.quotation_type ?? '—');
-                const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
-                const stateMeta = quotationLineStateMeta(r);
-                // Approve/Reject only on review_pending — a draft hasn't been
-                // sent yet, and every other state is already actioned (spec:
-                // "PATCH /admin/quotations/:id/approve|reject — only on
-                // review_pending lines, else 409").
-                const isReviewPending = r.state === 'review_pending';
-                const busy = busyId === Number(r.id);
-                return (
-                  <tr key={r.id}>
-                    <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
-                    <td className="!text-left text-xs">
-                      <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
+              {(() => {
+                let counter = 0;
+                return groups.flatMap((g) => [
+                  <tr key={`grp-${g.quotationNo ?? 'draft'}`} className="bg-muted/30">
+                    <td colSpan={9} className="!text-left text-xs font-medium text-muted-foreground px-2 py-1.5">
+                      {g.quotationNo != null ? `Quotation ${g.quotationNo}` : 'Draft (Not Sent)'}
                     </td>
-                    <td className="!text-left">{name}</td>
-                    <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
-                    <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
-                    <td className="!text-right font-mono text-xs">
-                      {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
-                    </td>
-                    <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
-                    <td className="!text-center text-xs">
-                      <span className={cn('inline-block rounded px-1.5 py-0.5', stateMeta.toneCls)}>{stateMeta.label}</span>
-                    </td>
-                    <td className="!text-right">
-                      {isReviewPending && can.isQuotationApprove ? (
-                        <div className="inline-flex gap-1 justify-end">
-                          <button
-                            type="button"
-                            className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
-                            onClick={() => approveRow(r)}
-                            disabled={busy}
-                          >
-                            {busy ? '…' : 'Approve'}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
-                            onClick={() => rejectRow(r)}
-                            disabled={busy}
-                          >
-                            {busy ? '…' : 'Reject'}
-                          </button>
-                        </div>
-                      ) : <span className="text-xs text-muted-foreground">—</span>}
-                    </td>
-                  </tr>
-                );
-              })}
+                  </tr>,
+                  ...g.rows.map((r) => {
+                    counter += 1;
+                    const i = counter;
+                    const type = String(r.type ?? r.quotation_type ?? '—');
+                    const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
+                    const stateMeta = quotationLineStateMeta(r);
+                    // Approve/Reject only on review_pending — a draft hasn't
+                    // been sent yet, and every other state is already
+                    // actioned (spec: "PATCH /admin/quotations/:id/approve|
+                    // reject — only on review_pending lines, else 409").
+                    const isReviewPending = r.state === 'review_pending';
+                    const busy = busyId === Number(r.id);
+                    return (
+                      <tr key={r.id}>
+                        <td className="!text-center text-xs text-muted-foreground">{i}</td>
+                        <td className="!text-left text-xs">
+                          <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
+                        </td>
+                        <td className="!text-left">{name}</td>
+                        <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
+                        <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
+                        <td className="!text-right font-mono text-xs">
+                          {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
+                        </td>
+                        <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
+                        <td className="!text-center text-xs">
+                          <span className={cn('inline-block rounded px-1.5 py-0.5', stateMeta.toneCls)}>{stateMeta.label}</span>
+                        </td>
+                        <td className="!text-right">
+                          {isReviewPending && can.isQuotationApprove ? (
+                            <div className="inline-flex gap-1 justify-end">
+                              <button
+                                type="button"
+                                className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
+                                onClick={() => approveRow(r)}
+                                disabled={busy}
+                              >
+                                {busy ? '…' : 'Approve'}
+                              </button>
+                              <button
+                                type="button"
+                                className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
+                                onClick={() => rejectRow(r)}
+                                disabled={busy}
+                              >
+                                {busy ? '…' : 'Reject'}
+                              </button>
+                            </div>
+                          ) : <span className="text-xs text-muted-foreground">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  }),
+                ]);
+              })()}
             </tbody>
           </table>
         </div>
@@ -3186,7 +3212,13 @@ export function ServicesTabBody({ job, onMutated, onDirtyChange, lockCategory }:
           </div>
         </div>
       )}
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-between gap-2">
+        {/* What the CLIENT booked (tbl_job.product_quantity) — beside the
+            services themselves, which are what will be done for it. */}
+        <span className="text-xs">
+          <span className="text-muted-foreground">Products Added at Booking </span>
+          <span className="font-medium">{productsAtBooking(job.product_quantity)}</span>
+        </span>
         {/* Show Inactive toggle remains on the right of the table. The
             old "+ Add Service" trigger lived here too; it's now in the
             inline panel above so this row only carries the toggle. */}
@@ -9781,18 +9813,25 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 */}
               <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Requested Date *">
-                  <Input
-                    required
-                    type="date"
-                    min={todayIso}
+                  {/* MinDateCalendar, not <input type="date" min>: iOS Safari's
+                      native picker ignores `min`, so on an iPhone every past
+                      day stayed tappable and a back-dated job could be created
+                      (job CREATE has no server-side past-date guard — only
+                      assign / offer / reschedule do). Emptiness is still gated
+                      by `section2Complete`, which requires requested_date_time,
+                      exactly as it already is for the SearchSelect-based time
+                      control beside it (its `required` never drove native
+                      validation either). */}
+                  <MinDateCalendar
+                    minDate={todayIso}
                     value={requestedDate}
-                    onChange={(e) => {
-                      set('requested_date', e.target.value);
+                    onChange={(d) => {
+                      set('requested_date', d);
                       // If the new date is in the future, allow any
                       // previously-picked time (no past-today gate);
                       // if it's today and the existing time is now past,
                       // clear so the operator must re-pick a valid one.
-                      if (e.target.value === todayIso && requestedTime && requestedTime < minTimeToday) {
+                      if (d === todayIso && requestedTime && requestedTime < minTimeToday) {
                         set('requested_time', '');
                       }
                     }}
@@ -12657,15 +12696,9 @@ function renderDlValue(v: unknown): React.ReactNode {
 }
 
 /*
- * Total No. of Products (Job Meta) — the number of ACTIVE service LINES, not
- * their summed quantity: legacy's noOfProducts is jobServiceList.size() over
- * getJobServiceList(jobId, 1), the active lines (JobAction.java). On QA the
- * two readings differ for 7,825 of the 380,870 jobs with an active line.
- * getById also returns soft-deleted lines (job_service_status 0) for the
- * Services tab's restore toggle. The retired JobTransactionView summed quantity
- * over every line, those included. Same active test as the Services tab.
+ * The Job Meta row that used to read "Total No. of Products" counted ACTIVE
+ * service LINES (legacy JobAction.java's noOfProducts). Since 2026-09-23 it
+ * reads "Products Added at Booking" from tbl_job.product_quantity — what the
+ * CLIENT asked for — via productsAtBooking in src/lib/format.ts, so the
+ * line-count helper is gone.
  */
-function totalProducts(services: unknown): number {
-  const rows = (Array.isArray(services) ? services : []) as Array<{ job_service_status?: unknown }>;
-  return rows.filter((s) => Number(s.job_service_status) !== 0).length;
-}

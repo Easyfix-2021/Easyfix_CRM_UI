@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Upload, Trash2, FileText, Loader2 } from 'lucide-react';
-import { api, ApiError, type JobDocument, type JobDocumentCategory } from '@/lib/api';
+import { api, ApiError, JOB_DOCUMENT_CATEGORY_LABEL, type JobDocument, type JobDocumentCategory } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -253,7 +253,7 @@ export function JobDocumentsCard({
       <DocumentWidget
         jobId={jobId}
         category="JobSheet"
-        title="Job Sheet"
+        title={JOB_DOCUMENT_CATEGORY_LABEL.JobSheet}
         docs={jobSheet}
         canManage={canManage}
         onMutated={onMutated}
@@ -261,7 +261,7 @@ export function JobDocumentsCard({
       <DocumentWidget
         jobId={jobId}
         category="PurchaseOrder"
-        title="Purchase Order"
+        title={JOB_DOCUMENT_CATEGORY_LABEL.PurchaseOrder}
         docs={purchaseOrder}
         canManage={canManage}
         onMutated={onMutated}
