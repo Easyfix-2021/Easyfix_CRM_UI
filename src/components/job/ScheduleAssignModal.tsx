@@ -372,38 +372,64 @@ export function ScheduleAssignModal({
     // Read BEFORE the refetch below replaces the list: these are the offers the
     // reschedule just expired.
     const expired = (offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length;
-    if (expired > 0) {
-      setReofferNeeded(true);
-      /*
-       * Say what happened and hand over the next step in one place (ops,
-       * 2026-09-17): the order's new time, and a button that goes straight to
-       * the available technicians. "Later" keeps the console where it is — the
-       * strip and the close check still remind them.
-       */
-      void confirmAction({
-        title: 'Order rescheduled',
-        icon: <CalendarClock className="h-5 w-5" />,
-        iconAccent: 'sky',
-        description: (
-          <div className="space-y-1.5 text-sm">
-            <p>Order rescheduled for <b>{newAppointment ? formatDate(newAppointment) : 'the new time'}</b>.</p>
-            <p>{expired} offer{expired === 1 ? '' : 's'} expired — offer it again for the new time.</p>
-          </div>
-        ),
-        confirmLabel: 'Proceed to re-offer',
-        cancelLabel: 'Later',
-      }).then((go) => {
-        if (go) techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
+    if (expired > 0) setReofferNeeded(true);
+
+    /*
+     * Re-rank FIRST, then prompt. The order matters: the prompt's only job is
+     * to hand the operator to the technician list, so that list has to be on
+     * its way in before they can arrive at it.
+     *
+     * The invalidate is the fix for a BLANK technician list after a reschedule
+     * (ops, 2026-09-20). `refetch()` alone can be answered out of useFetch's
+     * 30s module cache, which resolves in a microtask — React batches it with
+     * the `refreshing = true` that precedes it, so `refreshing` may never be
+     * OBSERVED as true. The veil below only lifts once it has seen the refetch
+     * start, so it stayed up forever and the list rendered as an empty loader.
+     * Evicting the entry makes the refetch a real round trip; the timeout in
+     * the veil effect covers the case anyway.
+     */
     rescheduleRefetchStarted.current = false;
     setRescheduling(true); // veil the stale date/list until the refetch settles
+    invalidateFetch((k) =>
+      k.startsWith(`/admin/jobs/${jobId}/candidates`)
+      || k === `/admin/jobs/${jobId}/header`
+      || k === `/admin/jobs/${jobId}`);
     top.refetch();
     offers.refetch();
     invalidateFetch((k) =>
       k.startsWith(`/admin/jobs/${jobId}/comments`)
       || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
     setRemarksReloadKey((n) => n + 1);
+
+    /*
+     * Say what happened and hand over the next step in one place (ops,
+     * 2026-09-17, extended 2026-09-20): the order's new time, what it cost in
+     * live offers, and a button that goes straight to the available
+     * technicians. Shown after EVERY reschedule from this console, not only
+     * when offers expired — this bucket is unallocated work, so the next step
+     * is always "offer it", and ops asked to be taken to the list. "Later"
+     * keeps the console where it is; the strip and the close check still remind
+     * them.
+     */
+    void confirmAction({
+      title: 'Order rescheduled',
+      icon: <CalendarClock className="h-5 w-5" />,
+      iconAccent: 'sky',
+      description: (
+        <div className="space-y-1.5 text-sm">
+          <p>Order rescheduled for <b>{newAppointment ? formatDate(newAppointment) : 'the new time'}</b>.</p>
+          <p>
+            {expired > 0
+              ? `${expired} offer${expired === 1 ? '' : 's'} expired — offer it again for the new time.`
+              : 'Offer it to technicians for the new time.'}
+          </p>
+        </div>
+      ),
+      confirmLabel: expired > 0 ? 'Proceed to re-offer' : 'Proceed to offer',
+      cancelLabel: 'Later',
+    }).then((go) => {
+      if (go) techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
   const staleOwnerName = probe?.fk_easyfixter_id != null
     ? (probe.easyfixer_name || `Efr #${probe.fk_easyfixter_id}`)
@@ -660,7 +686,16 @@ export function ScheduleAssignModal({
   useEffect(() => {
     if (!rescheduling) return;
     if (top.loading || top.refreshing) { rescheduleRefetchStarted.current = true; return; }
-    if (rescheduleRefetchStarted.current) setRescheduling(false);
+    if (rescheduleRefetchStarted.current) { setRescheduling(false); return; }
+    /*
+     * Belt and braces (ops, 2026-09-20). A refetch answered from cache can
+     * settle without `refreshing` ever being rendered as true, so the latch
+     * above never sets and the veil never lifts — the technician list then sits
+     * behind a permanent loader, which is what ops saw as a blank screen after
+     * "Proceed to re-offer". Never let the veil outlive the reschedule.
+     */
+    const t = setTimeout(() => setRescheduling(false), 1500);
+    return () => clearTimeout(t);
   }, [rescheduling, top.loading, top.refreshing]);
 
   /*

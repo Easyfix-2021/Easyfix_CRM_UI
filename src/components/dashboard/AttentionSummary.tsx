@@ -153,8 +153,21 @@ const TILES: Tile[] = [
   },
 ];
 
-export function AttentionSummary() {
-  const fetched = useFetch<Resp>('/admin/jobs/attention-summary');
+/*
+ * `filterQs` (2026-09-23) — the dashboard filter bar's serialised query, built
+ * by dashFilterQs() in components/dashboard/DashboardFilters. Empty when
+ * nothing is selected, and the fetch key then stays exactly
+ * '/admin/jobs/attention-summary' — the URL this card has always used.
+ *
+ * A PROP rather than this card reading the URL itself: the page owns the filter
+ * state, and two components independently parsing the same params is precisely
+ * how the cards above and the tiles here would come to describe different
+ * slices on one screen.
+ */
+export function AttentionSummary({ filterQs = '' }: { filterQs?: string } = {}) {
+  const fetched = useFetch<Resp>(
+    filterQs ? `/admin/jobs/attention-summary?${filterQs}` : '/admin/jobs/attention-summary',
+  );
   const data: Resp = fetched.data ?? {
     runningLate: 0,
     estimateApproved: 0,

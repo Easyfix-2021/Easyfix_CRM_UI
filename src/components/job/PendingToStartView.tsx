@@ -56,7 +56,7 @@
  * (the page already writes `q` from its own box, and two writers of one param
  * would clobber each other).
  *
- * Reuses (never re-implements): the parent's openView / openReassign handlers +
+ * Reuses (never re-implements): the parent's openView handler +
  * canJob permission flags, useFetch, PendingSchedulingFilters and its ps* URL
  * helpers, StatusChip + PendingStartLiveStatus, CallableMobile (Client SPOC
  * spocJobId pattern), TechRequestActions, ResendPinButton, TablePagination,
@@ -65,7 +65,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Search, RefreshCw, MapPin, Eye, PanelsTopLeft } from 'lucide-react';
+import { Search, MapPin, Eye, PanelsTopLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -198,7 +198,6 @@ export type PendingToStartViewProps = {
   /* Reused page handlers — do NOT re-implement their logic. */
   /* Read-only viewer, same page-owned modal the other tabs' Eye opens. */
   openView: (jobId: number) => void;
-  openReassign: (jobId: number) => void;
   // Opens the page-owned LiveLocationPopover for a row's assigned technician.
   // The popover only polls (every 15s) WHILE OPEN, so this stays on-demand —
   // there's no eager per-row location fetch on this unified backend.
@@ -206,7 +205,7 @@ export type PendingToStartViewProps = {
   /* Job Stage Access keeps this user inside the bucket — the strip then says so. */
   scopeClamped?: boolean;
   /* Opens the job console for a row. The row icon renders only when provided. */
-  onOpenConsole?: (jobId: number) => void;
+  onOpenConsole?: (jobId: number, jobStatus: number) => void;
 };
 
 export function PendingToStartView({
@@ -214,7 +213,6 @@ export function PendingToStartView({
   isAdmin,
   canJob,
   openView,
-  openReassign,
   onShowLocation,
   scopeClamped = false,
   onOpenConsole,
@@ -371,7 +369,6 @@ export function PendingToStartView({
         isAdmin={isAdmin}
         canJob={canJob}
         onView={openView}
-        onReassign={openReassign}
         onShowLocation={onShowLocation}
         onRequestActioned={bumpReload}
         onOpenConsole={onOpenConsole}
@@ -392,13 +389,12 @@ type PendingStartTableProps = {
   isAdmin: boolean;
   canJob: Record<string, boolean>;
   onView: (jobId: number) => void;
-  onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
   /* View-wide reload after an Approve / Reject. Not this table's own
    * refetch(): an approved cancellation leaves the tab entirely and the tab
    * counts move with it, so the signal has to be the view's. */
   onRequestActioned: () => void;
-  onOpenConsole?: (jobId: number) => void;
+  onOpenConsole?: (jobId: number, jobStatus: number) => void;
 };
 
 // The selected tab's rows — ONE /admin/jobs?status=1 call + pagination.
@@ -412,7 +408,6 @@ function PendingStartTable({
   isAdmin,
   canJob,
   onView,
-  onReassign,
   onShowLocation,
   onRequestActioned,
   onOpenConsole,
@@ -694,7 +689,7 @@ function PendingStartTable({
                       {onOpenConsole && (
                         <button
                           type="button"
-                          onClick={() => onOpenConsole(j.job_id)}
+                          onClick={() => onOpenConsole(j.job_id, j.job_status)}
                           className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Open job console"
                           aria-label="Open job console"
@@ -745,17 +740,14 @@ function PendingStartTable({
                         <Eye className="h-3.5 w-3.5" />
                       </button>
                       {/* Since 2026-09-11 (per ops) the technician checks in
-                          from the app; this row has no control for it. */}
-                      {canJob.isJobReassign && (
-                        <button
-                          type="button"
-                          onClick={() => onReassign(j.job_id)}
-                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                          title="Reassign Technician — pick a different tech from the ranked list"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                          from the app; this row has no control for it.
+
+                          The standalone Reassign icon went on 2026-09-20 (ops).
+                          Reassigning now starts from the job console icon above
+                          — "Change technician" there opens the same ranked list,
+                          and its Current tab is the same classic screen this
+                          icon used to open, so nothing became unreachable. One
+                          door into a job, not two. */}
                       {/*
                         * Resend Customer PIN — matching /my-orders. The
                         * technician's escape hatch when the customer never got

@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildStatusParams, jobStageOptionsFor, bucketOptionsFor, tabSelectionFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
+import {
+  useJobActionParams, useJobActionNav, isJobModalAction, useGuardedJobAction,
+} from '@/lib/job-action-url';
 import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
@@ -406,6 +408,17 @@ export default function JobsPage() {
     rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '',
   });
   /*
+   * The four free-text filters, debounced as ONE key (2026-09-24) so typing a
+   * 10-digit mobile fires one refetch, not ten multi-second list+COUNT pairs.
+   * Only the refetch TRIGGER is debounced: load() still reads live `filters`,
+   * so whatever is on screen when it fires is what gets sent.
+   */
+  // Customer name/no. is withheld below 3 chars (2026-09-24): the backend's
+  // Joi rejects it, and a 1-2 char name term full-scans every job anyway.
+  const customerQParam = filters.customerQ.trim().length >= 3 ? filters.customerQ.trim() : '';
+  const textFiltersKey = useDebouncedValue(
+    [customerQParam, filters.clientRef, filters.efrMobile, filters.pin].join('\u0000'), 300);
+  /*
    * ── ONE FILTER PANEL FOR EVERYONE (2026-09-16) ────────────────────────────
    *
    * This page used to host the Pending-for-Scheduling card above the Filter Job
@@ -543,7 +556,7 @@ export default function JobsPage() {
       filters.clientId, filters.cityId, filters.stateId,
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
-      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      customerQParam, filters.clientRef, filters.efrMobile, filters.pin,
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.stages.join(','),
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
@@ -729,7 +742,7 @@ export default function JobsPage() {
         dateType: (filters.dateType && (filters.startDate || filters.endDate))
           ? filters.dateType
           : undefined,
-        customerQ: filters.customerQ || undefined,
+        customerQ: customerQParam || undefined,
         clientRef: filters.clientRef || undefined,
         efrMobile: filters.efrMobile || undefined,
         pin: filters.pin || undefined,
@@ -905,7 +918,7 @@ export default function JobsPage() {
       filters.clientId, filters.cityId, filters.stateId,
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
-      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      textFiltersKey,
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
       filters.stages,
@@ -950,8 +963,32 @@ export default function JobsPage() {
   // matching dialog. Legacy `?view=N` / `?new=1` URLs are auto-promoted
   // by `useJobActionParams` so old shared links keep working.
   // (`searchParams`/`router`/`pathname` are declared up in the state block.)
-  const { jobId: urlJobId, action: urlAction } = useJobActionParams();
+  const { jobId: urlJobId } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
+  /*
+   * ── URL → SCREEN GUARD (ops, 2026-09-20, reworked 2026-09-21) ───────────
+   *
+   * Manage Jobs lists EVERY status and opens the same two write consoles as My
+   * Orders, so it had the same hole: `?jobId=<completed job>&action=schedule`
+   * opened Schedule & Assign — Edit Services included — on a job whose service
+   * lines are its billing lines.
+   *
+   * The screen follows the job's status: 9 → Confirm & Schedule,
+   * 0 → Schedule & Assign, 1 → the assign console, anything else → read-only
+   * View. Same hook, same map (lib/job-action-url) as My Orders, so the two
+   * pages cannot drift. Only the WRITE consoles are policed — view / checkin /
+   * audit / edit / create are untouched, which matters most here: Audit &
+   * Complete opens `audit` on status 3/5 and must keep working.
+   *
+   * The memos below read `openAction`, never the raw URL, so the refused
+   * console never mounts — no flash of a screen the operator should not see,
+   * and no close-then-open. Every row on this page carries its own status, so
+   * a click costs no request; only a pasted link probes.
+   */
+  const rowStatus = urlJobId == null
+    ? undefined
+    : (data?.items ?? []).find((r) => r.job_id === urlJobId)?.job_status;
+  const { action: openAction, jobId: openJobId } = useGuardedJobAction(rowStatus);
   /*
    * ALLOW-LIST (isJobModalAction), not an exclusion list. This memo used to
    * exclude assign / reassign by name and cast the rest with `as JobModalMode`.
@@ -963,11 +1000,11 @@ export default function JobsPage() {
    * assign / reassign.
    */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
-    if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
-    if (urlAction === 'create')       return { open: true, mode: 'create' };
-    if (urlJobId == null)             return { open: false, mode: 'create' };
-    return { open: true, mode: urlAction, id: urlJobId };
-  }, [urlAction, urlJobId]);
+    if (!isJobModalAction(openAction)) return { open: false, mode: 'create' };
+    if (openAction === 'create')       return { open: true, mode: 'create' };
+    if (openJobId == null)             return { open: false, mode: 'create' };
+    return { open: true, mode: openAction, id: openJobId };
+  }, [openAction, openJobId]);
 
   /*
    * Deep-link tab support: /jobs?tab=<value> preselects that tab on mount.
@@ -1075,11 +1112,11 @@ export default function JobsPage() {
    * than rendering an empty JobModal.
    */
   const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
-    if (urlAction === 'reassign' && urlJobId != null) {
-      return { open: true, jobId: urlJobId, mode: 'reassign' };
+    if (openAction === 'reassign' && openJobId != null) {
+      return { open: true, jobId: openJobId, mode: 'reassign' };
     }
     return { open: false, jobId: null, mode: 'reassign' };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
   /*
    * ScheduleAssignModal state, derived from `?action=schedule` — the
@@ -1092,11 +1129,11 @@ export default function JobsPage() {
    * no dialog on this page to land on.
    */
   const scheduleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
-    if (urlAction === 'schedule' && urlJobId != null) {
-      return { open: true, jobId: urlJobId };
+    if (openAction === 'schedule' && openJobId != null) {
+      return { open: true, jobId: openJobId };
     }
     return { open: false, jobId: null };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
   /*
    * Filter-respecting XLSX export. Mirrors the EscalatedJobsModal
@@ -1171,7 +1208,7 @@ export default function JobsPage() {
         clientId: filters.clientId, cityId: filters.cityId, stateId: filters.stateId,
         ownerId: filters.ownerId, easyfixerId: filters.easyfixerId,
         startDate: filters.startDate, endDate: filters.endDate, dateType: effectiveDateType,
-        customerQ: filters.customerQ, clientRef: filters.clientRef,
+        customerQ: customerQParam, clientRef: filters.clientRef,
         efrMobile: filters.efrMobile, pin: filters.pin,
         categoryId: filters.categoryId, verticalId: filters.verticalId,
         rating: filters.rating, reopen: filters.reopen, dueTo: filters.dueTo,
@@ -1523,7 +1560,7 @@ export default function JobsPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Customer Name / No.</label>
-                <Input placeholder="-- All --" value={filters.customerQ} onChange={(e) => setFilters({ ...filters, customerQ: e.target.value })} />
+                <Input placeholder="Min 3 characters" value={filters.customerQ} onChange={(e) => setFilters({ ...filters, customerQ: e.target.value })} />
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Client</label>
@@ -2536,7 +2573,7 @@ export default function JobsPage() {
             startDate: filters.startDate,
             endDate: filters.endDate,
             dateType: (filters.dateType && (filters.startDate || filters.endDate)) ? filters.dateType : undefined,
-            customerQ: filters.customerQ,
+            customerQ: customerQParam || undefined,
             clientRef: filters.clientRef,
             efrMobile: filters.efrMobile,
             pin: filters.pin,

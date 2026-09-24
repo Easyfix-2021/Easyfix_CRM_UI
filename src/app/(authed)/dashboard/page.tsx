@@ -1,6 +1,6 @@
 'use client';
 import * as React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -8,12 +8,17 @@ import {
   Play, CheckCircle2, ShieldCheck, MessageSquare,
   type LucideIcon,
 } from 'lucide-react';
-import { useFetchOnce } from '@/lib/hooks';
+import { useFetch } from '@/lib/hooks';
+import {
+  DashboardFilters, readDashFilterParams, writeDashFilterParams, dashFilterQs,
+  type DashFilters,
+} from '@/components/dashboard/DashboardFilters';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { NoticeStrip } from '@/components/notice/NoticeStrip';
 import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents';
 import { AttentionSummary } from '@/components/dashboard/AttentionSummary';
 import { MarqueeOnHover } from '@/components/dashboard/MarqueeOnHover';
+import { Card, CardContent } from '@/components/ui/card';
 
 /*
  * Dashboard fetches now go through `useFetchOnce` (lib/hooks.ts) —
@@ -245,27 +250,61 @@ export default function DashboardPage() {
 
   function closeModal() {
     setModal((m) => ({ ...m, open: false }));
-    // Strip the ?new=1 so a refresh doesn't auto-reopen the modal and
-    // the URL goes back to a clean /dashboard.
-    if (searchParams.get('new')) router.replace('/dashboard');
+    /*
+     * Strip the ?new=1 so a refresh doesn't auto-reopen the modal — but keep
+     * every OTHER param. A hard-coded '/dashboard' here would also wipe the
+     * filter bar's dfClient/dfCity/dfPm/dfZm, so closing the Book Call modal
+     * would silently reset an operator's filters.
+     */
+    if (searchParams.get('new')) {
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete('new');
+      const qs = next.toString();
+      router.replace(qs ? `/dashboard?${qs}` : '/dashboard');
+    }
   }
 
   /*
-   * /admin/jobs/counts goes through `useFetchOnce` (lib/hooks.ts) — the
-   * hook keys by URL so this SHARES its cache entry with the Navbar's
-   * identical call. One round-trip serves both. The setStats translation
-   * happens in the useEffect below.
+   * ── THE FILTER BAR'S STATE ────────────────────────────────────────────────
    *
-   * /admin/jobs?limit=8 (Recent Jobs) was retired 2026-05-22 in favour
-   * of the AttentionSummary card, which has its own /attention-summary
-   * fetch wired internally.
+   * The URL is the state: an operator can bookmark their own slice, and the
+   * back button behaves. Parsed from the live searchParams rather than mirrored
+   * into a second useState — one source of truth, so a bookmark and a click
+   * produce the same screen.
    */
-  const countsFetch = useFetchOnce<{
+  const filters = useMemo(
+    () => readDashFilterParams(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
+  const filterQs = useMemo(() => dashFilterQs(filters), [filters]);
+
+  function applyFilters(next: DashFilters) {
+    const params = writeDashFilterParams(new URLSearchParams(searchParams.toString()), next);
+    const qs = params.toString();
+    // replace(), not push() — twiddling four multi-selects should not bury the
+    // page the operator came from under a dozen history entries.
+    router.replace(qs ? `/dashboard?${qs}` : '/dashboard');
+  }
+
+  /*
+   * /admin/jobs/counts — `useFetch`, not `useFetchOnce` (changed 2026-09-23).
+   *
+   * Both hooks key by URL through the same module-level dedupe + 30s cache, so
+   * the UNFILTERED key is still the literal '/admin/jobs/counts' the Navbar
+   * asks for and the two still share one round-trip on a default page load.
+   *
+   * The swap is about what happens on a filter change. useFetchOnce never
+   * raises `loading` again once it has data, so changing a filter would leave
+   * the PREVIOUS counts on screen with no skeleton and no hint — the operator
+   * reads a stale number as the filtered one. useFetch exposes `refreshing`
+   * for exactly this, and the cards below dim on it.
+   */
+  const countsFetch = useFetch<{
     total: number;
     byStatus: Record<string, number>;
     bookedUnassigned: number;
     bookedAssigned: number;
-  }>('/admin/jobs/counts');
+  }>(filterQs ? `/admin/jobs/counts?${filterQs}` : '/admin/jobs/counts');
 
   useEffect(() => {
     if (countsFetch.loading) return;
@@ -328,6 +367,27 @@ export default function DashboardPage() {
       <NoticeStrip />
 
       {/*
+        * Filter bar — Client / City / Project Manager / Zonal Manager.
+        *
+        * Sits HERE, between the strip and the cards+rail row, because this is
+        * the only seam where a full-width sibling can live without disturbing
+        * the card/rail height coupling below (the rail is h-full off the
+        * cards' 268px). As a direct child of the root `space-y-4` it inherits
+        * the page rhythm and reads as "everything under me is filtered" —
+        * which is exactly true: the eight cards AND the attention tiles.
+        *
+        * Card + p-3 rather than p-4: this is the house filter-row wrapper (see
+        * ReportPageScaffold / the Pending-to-Start host), and the tighter
+        * padding is what keeps the attention tiles above the fold on a 1080p
+        * screen once the Notice Board is showing live notices.
+        */}
+      <Card>
+        <CardContent className="p-3">
+          <DashboardFilters value={filters} onChange={applyFilters} />
+        </CardContent>
+      </Card>
+
+      {/*
         * Two-column layout below the strip (2026-05-28 refactor):
         *   - Left column (flex-1): the 8 status funnel cards
         *     reflowed to 2×4.
@@ -353,7 +413,21 @@ export default function DashboardPage() {
           * marquee-on-overflow behaviour inside each card handles the
           * card dimensions gracefully as the available width shifts.
           */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0">
+        {/*
+          * `refreshing` dims the grid while a filter change is in flight.
+          * useFetch deliberately KEEPS the previous payload mounted on a key
+          * change (no unmount, no layout jump), which is right — but on this
+          * screen the previous payload is eight numbers an operator reads as
+          * the answer to the filter they just picked. The dim is the only
+          * thing saying "not these yet"; without it the stale counts are
+          * indistinguishable from the real ones.
+          */}
+        <div
+          className={`grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0 transition-opacity ${
+            countsFetch.refreshing ? 'opacity-50' : ''
+          }`}
+          aria-busy={countsFetch.refreshing}
+        >
           {FLOW.map((card) => (
             <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
           ))}
@@ -382,7 +456,7 @@ export default function DashboardPage() {
        * list, they need "what action is mine right now?". The 6
        * tiles each click through to a filtered job queue.
        */}
-      <AttentionSummary />
+      <AttentionSummary filterQs={filterQs} />
 
       {/* Book New Call modal — mounted here (not on /jobs) so the
           booking flow keeps the dashboard context behind it. Saving a

@@ -1,7 +1,8 @@
 'use client';
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useFetch } from './hooks';
 
 /*
  * URL-driven Job action state — shared by /jobs and /my-orders.
@@ -90,6 +91,64 @@ const JOBMODAL_ACTION_SET: ReadonlySet<string> = new Set(JOBMODAL_ACTIONS);
 /** Narrows a URL action to one JobModal can actually render. */
 export function isJobModalAction(action: JobAction | null | undefined): action is JobModalAction {
   return action != null && JOBMODAL_ACTION_SET.has(action);
+}
+
+/*
+ * ── WHICH SCREEN BELONGS TO WHICH job_status (ops, 2026-09-20) ───────────────
+ *
+ * The action tokens above are just URL text, so anyone can paste
+ * `?jobId=<completed job>&action=schedule` and land a WRITE console on a job
+ * that has no business being written to — Edit Services being the one that
+ * actually costs money, since a job's service lines are its billing lines.
+ *
+ * The status → stage map already exists (lib/job-stages.ts, mirrored by the
+ * backend's lib/job-stages.js); this is the same contract expressed as "which
+ * modal may open". Ops stated it as:
+ *   job_status 9  → Confirm & Schedule
+ *   job_status 0  → Schedule & Assign
+ *   job_status 1  → the assign/reassign console
+ *   anything else → read-only View
+ *
+ * ONLY THE WRITE CONSOLES ARE GUARDED. view / checkin / audit / edit / create
+ * are deliberately absent: they are either read-only or owned by flows that
+ * already gate themselves (Audit & Complete opens `audit` on status 3/5), and
+ * silently re-routing them would break working links.
+ *
+ * This is DEFENCE IN DEPTH, not the defence. The server refuses the dangerous
+ * write on its own — job-services-editor.service.js re-reads job_status on the
+ * LOCKED row and 409s a completed job — which is what makes a job completed
+ * mid-edit safe too. The guard here stops the operator ever reaching a console
+ * that cannot work, instead of letting them fill a form that will be rejected.
+ */
+const STATUS_ACTIONS: ReadonlyArray<{ status: number; canonical: JobAction; allowed: readonly JobAction[] }> = [
+  { status: 9, canonical: 'confirm',  allowed: ['confirm'] },
+  { status: 0, canonical: 'schedule', allowed: ['schedule', 'assign'] },
+  { status: 1, canonical: 'console',  allowed: ['console', 'reassign'] },
+];
+
+/** The write consoles this guard polices. Everything else is left alone. */
+const GUARDED_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>(['confirm', 'schedule', 'assign', 'reassign', 'console']);
+
+/** Is this action one the status guard polices? */
+export function isGuardedJobAction(action: JobAction | null | undefined): boolean {
+  return action != null && GUARDED_ACTIONS.has(action);
+}
+
+/** The screen a job at `status` belongs on. Read-only View is the catch-all. */
+export function actionForJobStatus(status: number): JobAction {
+  return STATUS_ACTIONS.find((r) => r.status === status)?.canonical ?? 'view';
+}
+
+/**
+ * May `action` open for a job at `status`?
+ *
+ * Unguarded actions always may. An unknown status only permits the unguarded
+ * ones, so a status this CRM has not met yet degrades to View rather than
+ * opening a console for it.
+ */
+export function isActionAllowedForStatus(action: JobAction, status: number): boolean {
+  if (!GUARDED_ACTIONS.has(action)) return true;
+  return (STATUS_ACTIONS.find((r) => r.status === status)?.allowed ?? []).includes(action);
 }
 
 export interface JobActionParams {
@@ -218,4 +277,77 @@ export function useJobActionNav() {
   }, [router, buildUrl]);
 
   return { openJobAction, closeJobAction };
+}
+
+/**
+ * The URL's action, but only once it is safe to honour — and the job id with it.
+ *
+ * Call this INSTEAD of reading `useJobActionParams().action` when deciding which
+ * modal to open, and derive every modal memo from what comes back. `action` is:
+ *   - the URL's action, immediately, for anything unguarded (view / checkin /
+ *     audit / edit / create) — no probe, no delay, nothing changes for them;
+ *   - the URL's action for a guarded console the job's status permits;
+ *   - `null` while a guarded console's status is still unknown, and while the
+ *     re-route to the right screen is in flight.
+ *
+ * WHY IT RETURNS THE ACTION INSTEAD OF JUST RE-ROUTING (ops, 2026-09-21). The
+ * first version let the page open the console the URL asked for and re-routed
+ * afterwards, so a completed job under `?action=schedule` gave the operator:
+ * wrong console mounts, spinner, toast, unmount, right screen mounts, spinner.
+ * Two loads and a flash of a screen they should never have seen. Deciding
+ * BEFORE anything mounts makes it one open and no close.
+ *
+ * `knownStatus` is what keeps that from costing a round trip. A row the page has
+ * already loaded carries its own job_status, so a CLICK resolves in the same
+ * render — no probe, no wait, no flash. Only a pasted link for a job that is not
+ * on the page falls back to the probe, and that probe is `/admin/jobs/:id`: the
+ * very read the console would do on mount anyway, so nothing waits longer than
+ * it already did. The spinner just moves outside the modal instead of inside it.
+ *
+ * A stale row is safe to trust here. If it says 0 and the job has since moved to
+ * 1, Schedule & Assign opens, sees the truth on its own probe, goes read-only
+ * and tells the list to refetch — the behaviour it already had. The server is
+ * the authority either way.
+ */
+export function useGuardedJobAction(knownStatus?: number | null): JobActionParams {
+  const { jobId, action } = useJobActionParams();
+  const { openJobAction } = useJobActionNav();
+
+  const guarded = action != null && isGuardedJobAction(action) && jobId != null;
+
+  /*
+   * No probe at all unless a guarded action's status is genuinely unknown. The
+   * key is the same one both consoles read, so when it IS needed useFetch
+   * dedupes it with the console's own request.
+   */
+  const key = guarded && knownStatus == null ? `/admin/jobs/${jobId}` : null;
+  const probe = useFetch<{ job_id?: number; job_status?: number }>(key, { enabled: !!key });
+  /*
+   * `dataKey` is the whole safety of the fallback: useFetch RETAINS the previous
+   * key's payload while the next loads (a key change sets `refreshing`, not
+   * `loading`), so reading `.data` directly would decide this job's screen from
+   * another job's status.
+   */
+  const probed = key && probe.dataKey === key ? probe.data?.job_status : undefined;
+
+  const status = knownStatus ?? probed;
+  const allowed = !guarded || (status != null && action != null && isActionAllowedForStatus(action, Number(status)));
+
+  /*
+   * Re-route once per (job, action). Without the latch an action the target
+   * screen is itself not allowed to hold would ping-pong between two URLs.
+   * `replace`, via openJobAction on an already-open action, so Back still
+   * returns to the list rather than to the screen we refused to show.
+   */
+  const reroutedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!guarded || allowed || action == null || jobId == null || status == null) return;
+    const once = `${jobId}:${action}`;
+    if (reroutedRef.current === once) return;
+    reroutedRef.current = once;
+    openJobAction(actionForJobStatus(Number(status)), jobId);
+  }, [guarded, allowed, action, jobId, status, openJobAction]);
+
+  // Nothing mounts until the answer is known, and never the refused screen.
+  return allowed ? { action, jobId } : { action: null, jobId: null };
 }

@@ -276,19 +276,43 @@ export function ScheduleAssignUplifted({
     ? formatDate(new Date(new Date(String(job.created_date_time).replace(' ', 'T')).getTime() + TAT_HOURS * 3600_000).toISOString())
     : '—';
 
+  /*
+   * ATTACHMENTS — the same two rules JobModal's Images tab already follows
+   * (ops, 2026-09-20: every thumbnail here rendered broken).
+   *
+   * 1. `?token=<jwt>`. An <img src> sends NO Authorization header, so the file
+   *    endpoint reads the JWT off the query string instead — see the backend's
+   *    routes/admin/jobs.js /images/:imageId/file and middleware/auth.js. Without
+   *    it every tile is a 401, which the browser paints as a broken image while
+   *    the filename underneath still renders: exactly what ops saw.
+   * 2. PDFs are not images. tbl_job_image holds the feedback PDF alongside the
+   *    photos, and pushing it through <img> can never work — Chrome's opaque
+   *    response blocking refuses it. Flag it so the tile shows a document
+   *    instead, as JobModal's JobImageTile does.
+   */
   const media = useMemo(() => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+    const authed = (u: string) => (token ? `${u}${u.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : u);
     const imgs = (probe?.images ?? []).map((raw) => {
       const id = String((raw as Record<string, unknown>).image_id ?? '');
       const cat = String((raw as Record<string, unknown>).image_category ?? '');
       const name = String((raw as Record<string, unknown>).image ?? '');
       return id
-        ? { id, kind: 'image' as const, label: name || cat || 'Photo', meta: cat || 'Photo', url: `${apiBase}/admin/jobs/images/${id}/file` }
+        ? {
+          id,
+          kind: 'image' as const,
+          label: name || cat || 'Photo',
+          meta: cat || 'Photo',
+          url: authed(`${apiBase}/admin/jobs/images/${id}/file`),
+          isPdf: /\.pdf$/i.test(name),
+        }
         : null;
-    }).filter(Boolean) as Array<{ id: string; kind: 'image'; label: string; meta: string; url: string }>;
+    }).filter(Boolean) as Array<{ id: string; kind: 'image'; label: string; meta: string; url: string; isPdf: boolean }>;
     const vids = (probe?.videos ?? []).map((v) => ({
       id: String(v.media_id), kind: 'video' as const,
       label: `Video ${v.media_id}`, meta: v.source || 'Customer',
-      url: `${apiBase}/admin/jobs/videos/${v.media_id}/file`,
+      url: authed(`${apiBase}/admin/jobs/videos/${v.media_id}/file`),
+      isPdf: false,
     }));
     return [...imgs, ...vids];
   }, [probe?.images, probe?.videos, apiBase]);
@@ -489,14 +513,17 @@ export function ScheduleAssignUplifted({
               </span>
               <span className="inline-flex rounded-full border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">OTA pending</span>
             </p>
-            <p className="text-xs text-muted-foreground">
-              {/* The backend's own rules, stated so nobody has to guess what
-                  the chips predict (services/mobile-performance.service.js):
-                  SDA = check-in on the ORIGINAL appointment's date;
-                  OTA = check-in within 60 min of the appointment time. */}
-              {apptMoved
-                ? `Check-in on ${formatDate(originalAppt).split(',')[0]} keeps SDA Yes`
-                : 'SDA: check-in on this date · OTA: within 60 min of it'}
+            {/* ORIGINAL appointment, always (ops, 2026-09-20). This used to
+                explain what SDA/OTA measure, which nobody needed twice; the
+                date the customer was FIRST promised is the thing an operator
+                actually has to know here, because SDA scores against it and
+                the Appointment tile above shows only where the job is now.
+                Snapshotted at create time (job.service: original_appointment_
+                date_time || requested_date_time), so it is null only on rows
+                that pre-date the column. */}
+            <p className={`text-xs ${apptMoved ? 'font-medium text-warning-strong' : 'text-muted-foreground'}`}>
+              Original appointment{' '}
+              {originalAppt ? formatDate(originalAppt) : '—'}
             </p>
           </div>
         </div>
@@ -773,7 +800,7 @@ export function OfferRepliesList({ offers, jobId, emptyText }: {
  * arrows for the trackpad-less — shown only when there is somewhere to scroll.
  */
 function MediaCard({ media }: {
-  media: Array<{ id: string; kind: 'image' | 'video'; label: string; meta: string; url: string }>;
+  media: Array<{ id: string; kind: 'image' | 'video'; label: string; meta: string; url: string; isPdf?: boolean }>;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [overflows, setOverflows] = useState(false);
@@ -820,8 +847,12 @@ function MediaCard({ media }: {
               <span className="grid h-14 w-20 place-items-center overflow-hidden rounded-md border bg-muted/40 group-hover:border-foreground/30">
                 {m.kind === 'video'
                   ? <Video className="h-4 w-4 text-warning-strong" />
-                  : /* eslint-disable-next-line @next/next/no-img-element */
-                    <img src={m.url} alt={m.label} className="h-14 w-20 object-cover" loading="lazy" />}
+                  : m.isPdf
+                    /* A PDF cannot render through <img> — show the document and
+                       let the click open it, same as JobModal's tile. */
+                    ? <FileText className="h-4 w-4 text-muted-foreground" />
+                    : /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={m.url} alt={m.label} className="h-14 w-20 object-cover" loading="lazy" />}
               </span>
               <span className="mt-0.5 block truncate text-xs text-muted-foreground group-hover:text-foreground">{m.label}</span>
             </a>
