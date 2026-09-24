@@ -44,6 +44,7 @@ import { JobRefLink } from '@/components/job/JobRefLink';
 import { JobModalHost } from '@/components/job/JobModalHost';
 import { AuthImage } from '@/components/job/JobDocumentsCard';
 import { VerifyWithCustomerDialog } from '@/components/job/VerifyWithCustomerDialog';
+import { ScheduleVisitTwoDialog } from '@/components/job/ScheduleVisitTwoDialog';
 
 const LIMIT_CAP = 200;
 const POLL_MS = 30_000;
@@ -88,6 +89,9 @@ export default function OpsDeskPage() {
   const [returnTarget, setReturnTarget] = useState<OpsDeskItem | null>(null);
   const [verifyReportId, setVerifyReportId] = useState<number | null>(null);
   const [verifyJobTitle, setVerifyJobTitle] = useState<string | null>(null);
+  // Schedule Visit 2 (V3 Phase 4, spec 4.3) — row action for waitingFor
+  // 'schedule_visit2', same shared dialog the JobModal action bar opens.
+  const [visitTwoTarget, setVisitTwoTarget] = useState<OpsDeskItem | null>(null);
   const confirm = useConfirm();
   const [benching, setBenching] = useState<number | null>(null);
 
@@ -238,6 +242,9 @@ export default function OpsDeskPage() {
                           Verify With Customer
                         </Button>
                       )}
+                      {item.waitingFor === 'schedule_visit2' && (
+                        <Button size="sm" onClick={() => setVisitTwoTarget(item)}>Schedule Visit 2</Button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -264,6 +271,13 @@ export default function OpsDeskPage() {
         jobTitle={verifyJobTitle}
         onClose={() => setVerifyReportId(null)}
         onResolved={refreshList}
+      />
+      <ScheduleVisitTwoDialog
+        open={visitTwoTarget != null}
+        jobId={visitTwoTarget?.jobId ?? null}
+        jobTitle={visitTwoTarget?.title ?? null}
+        onClose={() => setVisitTwoTarget(null)}
+        onDone={refreshList}
       />
       <JobModalHost onSaved={refreshList} />
     </div>

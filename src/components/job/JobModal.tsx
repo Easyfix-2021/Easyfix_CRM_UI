@@ -33,6 +33,9 @@ import { BillingChargesTab } from './BillingChargesTab';
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
 // both ActionBar and the customer-request "apply" flow use it.
 import { RescheduleDialog as ApptRescheduleDialog } from './RescheduleDialog';
+import { ScheduleVisitTwoDialog } from './ScheduleVisitTwoDialog';
+import { ToolsAndProductsSection } from './ToolsAndProductsSection';
+import { JobSignatureCard } from './JobSignatureCard';
 import { fetchReasonsCached } from './jobActionReasons';
 import type { JobComment } from './jobTypes';
 import { JobRemarksView } from './JobRemarksView';
@@ -880,6 +883,8 @@ function ActionBar({ job, jobId, onChanged }: {
   //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // Schedule Visit 2 (V3 Phase 4, D7/spec 4.3) — status-10/REVISIT jobs only.
+  const [visitTwoOpen, setVisitTwoOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
@@ -891,6 +896,7 @@ function ActionBar({ job, jobId, onChanged }: {
     'isJobEdit',          // Change Owner + Reschedule + Description pencil + Feedback
     'isJobAssign',        // Auto-assign + Manual pick (initial)
     'isJobReassign',      // Auto-reassign + Manual pick (when already assigned)
+    APP_REQUEST_ACTION,   // Schedule Visit 2 — same isJobAppRequestResolve gate as the ops desk
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
@@ -953,6 +959,12 @@ function ActionBar({ job, jobId, onChanged }: {
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {/* Schedule Visit 2 (D7) — the desk schedules a REVISIT job's second
+          visit, status 10 -> 1, same technician. Same gate + shared dialog
+          as the /ops-desk row action for waitingFor 'schedule_visit2'. */}
+      {can[APP_REQUEST_ACTION] && s === ST.REVISIT && (
+        <Button size="sm" onClick={() => setVisitTwoOpen(true)}>Schedule Visit 2</Button>
+      )}
       {/*
         * NO CRM CHECK IN OR CHECK OUT (2026-09-11, per ops). The technician
         * checks in and out FROM THE APP. Check Out (2/20 → 10 Under Audit) had
@@ -1031,6 +1043,13 @@ function ActionBar({ job, jobId, onChanged }: {
         open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
         jobId={jobId}
         onSaved={() => { setFeedbackOpen(false); onChanged(); }}
+      />
+      <ScheduleVisitTwoDialog
+        open={visitTwoOpen}
+        jobId={jobId}
+        jobTitle={job.job_desc != null ? String(job.job_desc) : null}
+        onClose={() => setVisitTwoOpen(false)}
+        onDone={() => { setVisitTwoOpen(false); onChanged(); }}
       />
     </div>
   );
@@ -1511,6 +1530,15 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
 
       <Panel value="services" label={`Services (${Array.isArray(job.services) ? job.services.length : 0})`} layout={layout}>
         <ServicesTabBody job={job} onMutated={onRefresh} onDirtyChange={onDirtyChange} />
+        {/*
+          * Tools to Carry + Products at Site (V3 Phase 4, spec 4.4/4.5).
+          * Deliberately rendered HERE — beside ServicesTabBody rather than
+          * inside it — because ServicesTabBody is also hosted by Schedule &
+          * Assign's "Edit Services" dialog (see its export comment above),
+          * and this pair belongs only to the full JobModal Services tab.
+          * Hidden entirely without isJobEdit — see canEditJob above.
+          */}
+        <ToolsAndProductsSection jobId={Number(job.job_id)} canEdit={canEditJob} />
       </Panel>
 
       <Panel value="schedule" label="Schedule" layout={layout}>
@@ -1597,6 +1625,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             <AddAfterWorkPhotoButton jobId={Number(job.job_id)} onUploaded={onRefresh} />
           </div>
         )}
+        {/* Signature (V3 Phase 4, spec 4.1/D6) — renders nothing when the
+            job has no signature on file (e.g. a verified PIN covered it). */}
+        <JobSignatureCard jobId={Number(job.job_id)} />
         <JobImagesTab
           images={images}
           onChanged={[3, 5, 6, 7].includes(Number(job.job_status)) ? undefined : onRefresh}
