@@ -30,7 +30,15 @@ import { cn } from '@/lib/utils';
  */
 
 export type PriceTreeOption = { value: number; label: string };
-export type PriceTreeRow = { id: string; optionIds: number[]; price: number | null };
+export type PriceTreeRow = {
+  id: string;
+  optionIds: number[];
+  price: number | null;
+  /* Optional second ₹ value alongside price (e.g. Tx Share on the client
+     material-rate state overrides) — see `showSecondary` below. Unused by
+     every caller that doesn't opt in. */
+  secondaryPrice?: number | null;
+};
 
 export type PriceTreeProps = {
   options: PriceTreeOption[];
@@ -54,6 +62,21 @@ export type PriceTreeProps = {
   renderChildTree?: (row: PriceTreeRow) => React.ReactNode;
   className?: string;
   emptyText?: string;
+  /*
+   * Renders a second ₹ input (`row.secondaryPrice`) beside the price column
+   * — off by default, so every existing caller (Manage Materials' Brand
+   * Prices / State Price Overrides) is unaffected. Still domain-free: the
+   * caller supplies the label and the derivation function.
+   */
+  showSecondary?: boolean;
+  secondaryLabel?: string;
+  /*
+   * Called with the row's NEW price whenever the price input changes, to
+   * derive the new secondaryPrice (e.g. `defaultTxShare`). The secondary
+   * input's own onChange never calls this — a manual secondary edit is kept
+   * until the next price change, by design.
+   */
+  deriveSecondaryOnPriceChange?: (price: number | null) => number | null;
 };
 
 let rowSeq = 0;
@@ -78,6 +101,9 @@ export function PriceTree({
   renderChildTree,
   className,
   emptyText = 'No entries yet.',
+  showSecondary = false,
+  secondaryLabel = 'Amount',
+  deriveSecondaryOnPriceChange,
 }: PriceTreeProps) {
   const optionLabelByValue = React.useMemo(() => {
     const m = new Map<number, string>();
@@ -183,13 +209,38 @@ export function PriceTree({
                       min={0}
                       step="0.01"
                       value={row.price ?? ''}
-                      onChange={(e) => patchRow(row.id, { price: e.target.value === '' ? null : Number(e.target.value) })}
+                      onChange={(e) => {
+                        const price = e.target.value === '' ? null : Number(e.target.value);
+                        patchRow(row.id, {
+                          price,
+                          ...(deriveSecondaryOnPriceChange ? { secondaryPrice: deriveSecondaryOnPriceChange(price) } : {}),
+                        });
+                      }}
                       disabled={!canEdit}
                       placeholder={requirePrice ? 'Required' : 'Pending'}
                       className="h-9 w-full rounded-md border border-input bg-background pl-5 pr-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                     />
                   </div>
                 </div>
+                {showSecondary && (
+                  <div className="w-32 shrink-0">
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={row.secondaryPrice ?? ''}
+                        onChange={(e) => patchRow(row.id, { secondaryPrice: e.target.value === '' ? null : Number(e.target.value) })}
+                        disabled={!canEdit}
+                        aria-label={secondaryLabel}
+                        title={secondaryLabel}
+                        placeholder={secondaryLabel}
+                        className="h-9 w-full rounded-md border border-input bg-background pl-5 pr-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+                )}
                 {canEdit && (
                   <IconButton
                     icon={Trash2}

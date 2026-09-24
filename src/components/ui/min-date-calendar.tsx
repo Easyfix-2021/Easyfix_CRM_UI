@@ -21,12 +21,23 @@ import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 const pad = (n: number) => String(n).padStart(2, '0');
 const toIso = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
+/** Pure: is this day blocked? Exported for tests. */
+export function isDayBlocked(iso: string, minDate?: string, maxDate?: string, isDateDisabled?: (iso: string) => boolean): boolean {
+  return (!!minDate && iso < minDate) || (!!maxDate && iso > maxDate) || !!isDateDisabled?.(iso);
+}
+
 export function MinDateCalendar({
-  value, minDate, onChange, placeholder = 'Select A Date', disabled,
+  value, minDate, maxDate, isDateDisabled, inline = false, onChange, placeholder = 'Select A Date', disabled,
 }: {
   value: string;
   /** Days before this 'YYYY-MM-DD' are disabled. Omitted = nothing is blocked. */
   minDate?: string;
+  /** Days after this 'YYYY-MM-DD' are disabled. */
+  maxDate?: string;
+  /** Extra per-day block (e.g. a day with no free slot). */
+  isDateDisabled?: (iso: string) => boolean;
+  /** Always-open month grid, no trigger button (for a calendar view inside a form). */
+  inline?: boolean;
   onChange: (iso: string) => void;
   placeholder?: string;
   disabled?: boolean;
@@ -39,6 +50,8 @@ export function MinDateCalendar({
   const firstDow = new Date(view.y, view.m, 1).getDay();
   const days = new Date(view.y, view.m + 1, 0).getDate();
   const atFloorMonth = !!minDate && (view.y < minY || (view.y === minY && view.m <= minM - 1));
+  const [maxY, maxM] = (maxDate || '').split('-').map(Number);
+  const atCeilMonth = !!maxDate && (view.y > maxY || (view.y === maxY && view.m >= maxM - 1));
   const shift = (delta: number) => {
     const d = new Date(view.y, view.m + delta, 1);
     setView({ y: d.getFullYear(), m: d.getMonth() });
@@ -50,9 +63,10 @@ export function MinDateCalendar({
     })
     : placeholder;
 
+  const showGrid = inline || open;
   return (
     <div>
-      <button
+      {!inline && <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
@@ -61,9 +75,9 @@ export function MinDateCalendar({
       >
         <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className={value ? 'text-foreground' : 'text-muted-foreground'}>{label}</span>
-      </button>
-      {open && !disabled && (
-        <div className="mt-2 rounded-md border border-input bg-card p-3 select-none">
+      </button>}
+      {showGrid && !disabled && (
+        <div className={(inline ? '' : 'mt-2 ') + 'rounded-md border border-input bg-card p-3 select-none'}>
           <div className="mb-2 flex items-center justify-between">
             <button
               type="button"
@@ -80,8 +94,9 @@ export function MinDateCalendar({
             <button
               type="button"
               onClick={() => shift(1)}
+              disabled={atCeilMonth}
               aria-label="Next Month"
-              className="rounded p-1.5 hover:bg-muted"
+              className="rounded p-1.5 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -93,7 +108,7 @@ export function MinDateCalendar({
             {Array.from({ length: firstDow }, (_, i) => <div key={`b${i}`} />)}
             {Array.from({ length: days }, (_, i) => {
               const iso = toIso(view.y, view.m, i + 1);
-              const blocked = !!minDate && iso < minDate;
+              const blocked = isDayBlocked(iso, minDate, maxDate, isDateDisabled);
               const selected = iso === value;
               return (
                 <button
@@ -101,7 +116,7 @@ export function MinDateCalendar({
                   type="button"
                   disabled={blocked}
                   aria-pressed={selected}
-                  onClick={() => { onChange(iso); setOpen(false); }}
+                  onClick={() => { onChange(iso); if (!inline) setOpen(false); }}
                   className={
                     'h-9 rounded-full text-sm transition-colors '
                     + (blocked

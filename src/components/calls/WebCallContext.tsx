@@ -22,8 +22,14 @@
 import * as React from 'react';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
+import { shouldRetryWebCall } from '@/lib/web-call-retry';
 
 export type WebCallStatus = 'idle' | 'connecting' | 'ringing' | 'in_progress' | 'ended' | 'failed';
+
+// A leg that is actually up (or coming up). 'ended'/'failed' keep `active` set
+// so the panel can show the outcome, but they must never block the next call.
+export const isLiveWebStatus = (s: WebCallStatus) =>
+  s === 'connecting' || s === 'ringing' || s === 'in_progress';
 
 export type WebCallTarget = {
   jobId?: number;
@@ -85,6 +91,15 @@ type WebCallValue = {
    */
   configWarnings: string[];
   busy: boolean;              // between click and the SDK call being placed
+  /*
+   * Noise Filter — the operator's preference, and whether this browser can
+   * honour it (false until the SDK's worklet is ready, and forever on Safari,
+   * which the SDK does not support). Toggling mid-call swaps the live mic
+   * stream; toggling between calls applies to the next one.
+   */
+  noiseFilter: boolean;
+  noiseFilterAvailable: boolean;
+  toggleNoiseFilter: () => void;
   placeWebCall: (target: WebCallTarget, opts?: { callTo?: string; teleprompterSessionId?: string; flow?: string }) => Promise<void>;
   hangup: () => void;
   toggleMute: () => void;
@@ -101,7 +116,23 @@ const SDK_OPTIONS = {
   closeProtection: false,
   maxAverageBitrate: 48000,
   allowMultipleIncomingCalls: false,
+  // LOADS the SDK's RNNoise suppressor for the OPERATOR's mic (what the
+  // customer hears). It does not filter anything by itself: the SDK applies it
+  // only after client.startNoiseReduction() — see the Noise Filter preference
+  // below. The worklet loads from cdn.plivo.com; Safari is skipped by the SDK.
+  enableNoiseReduction: true,
 };
+
+// Per-operator Noise Filter preference (default ON). Browser-local by design:
+// it is about this operator's room and headset, not about the call.
+const NOISE_FILTER_LS_KEY = 'ef-noise-filter';
+function readNoiseFilterPref(): boolean {
+  try { return localStorage.getItem(NOISE_FILTER_LS_KEY) !== '0'; } catch { return true; }
+}
+
+// Refresh the Plivo login this long BEFORE the token's own `exp` (1h, minted by
+// plivo.webAccessToken) so a call is never placed on a token about to lapse.
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export function WebCallProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = React.useState<WebCallStatus>('idle');
@@ -111,10 +142,23 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
   // Environment-level, NOT call-level — so dismiss() deliberately leaves it be.
   const [configWarnings, setConfigWarnings] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
+  // Initialised ON (the default) and synced from localStorage after mount, so
+  // the SSR pass and first client render agree.
+  const [noiseFilter, setNoiseFilter] = React.useState(true);
+  const [noiseFilterAvailable, setNoiseFilterAvailable] = React.useState(false);
+  // Read by the SDK's ready handler, which is wired once per client.
+  const noiseFilterRef = React.useRef(true);
+  React.useEffect(() => {
+    const pref = readNoiseFilterPref();
+    noiseFilterRef.current = pref;
+    setNoiseFilter(pref);
+  }, []);
 
   // Plivo client + a memoised login promise — created lazily on first call.
   const clientRef = React.useRef<any>(null);
   const loginRef = React.useRef<Promise<any> | null>(null);
+  // ms epoch the current login's access token expires (its JWT `exp`).
+  const tokenExpRef = React.useRef(0);
   // The company DID the browser dials INTO (a real phone number — the SDK needs
   // a valid number as the destination); the answer URL bridges to the customer.
   const callerIdRef = React.useRef<string | null>(null);
@@ -131,6 +175,15 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
   // Whether the browser leg ever actually connected. Drives whether a hangup
   // is an ordinary end or the death of a leg that never came up.
   const reachedInProgressRef = React.useRef(false);
+  /*
+   * ONE automatic retry per operator click, for "Not Found" only (see
+   * onCallFailed). Holds that click's target/opts so the retry dials exactly
+   * what was asked; `used` makes a second "Not Found" a real failure.
+   * startCallRef lets the once-wired SDK handler reach the CURRENT starter.
+   */
+  type PlaceOpts = { callTo?: string; teleprompterSessionId?: string; flow?: string };
+  const retryRef = React.useRef<{ target: WebCallTarget; opts?: PlaceOpts; used: boolean } | null>(null);
+  const startCallRef = React.useRef<((t: WebCallTarget, o: PlaceOpts | undefined, isRetry: boolean) => Promise<void>) | null>(null);
 
   /*
    * Tell the server the BROWSER leg died. The server sees the operator leg's
@@ -178,11 +231,31 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Build the client (dynamic import), wire events, log in. Memoised so repeat
-  // calls reuse the same logged-in endpoint.
+  // calls reuse the same logged-in endpoint — but ONLY while that login is
+  // still good.
   const ensureClient = React.useCallback(async () => {
+    /*
+     * A STALE LOGIN FAILS AS "Not Found", AND ONLY A FRESH ONE FIXES IT.
+     *
+     * The access token lives 1h; this client used to be reused for the life of
+     * the tab. Once the token lapsed (or the SIP registration dropped — laptop
+     * sleep, network change) Plivo rejected every INVITE with 404 before routing
+     * it to our Voice Application: /web-start logged a 200, /web-answer was never
+     * called, and the operator saw "Not Found" on every retry until a page
+     * reload fetched new credentials (Prod 2026-09-24: 13 such failures across 4
+     * operators, each cleared by the next /web-credentials). So: re-login when
+     * the token is near expiry OR the SDK no longer reports itself registered.
+     */
     if (clientRef.current && loginRef.current) {
-      await loginRef.current;
-      return clientRef.current;
+      const expired = Date.now() > tokenExpRef.current - TOKEN_REFRESH_MARGIN_MS;
+      let registered = true;
+      try { registered = clientRef.current.isRegistered?.() !== false; } catch { /* keep */ }
+      if (expired || !registered) {
+        resetClient();
+      } else {
+        await loginRef.current;
+        return clientRef.current;
+      }
     }
     // Per-operator access token + caller-id (gated; 409 if web mode off / Plivo
     // off). No shared endpoint password crosses the wire.
@@ -193,6 +266,10 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     // symptom is a "Busy" chip on every call.
     const creds = await api.get<{ token: string; callerId: string | null; warnings?: string[] }>('/admin/calls/web-credentials');
     callerIdRef.current = creds.callerId;
+    // The token's own `exp` — no FE copy of the server's TTL to drift. An
+    // undecodable token reads as already-expired, so the next call re-logs in.
+    try { tokenExpRef.current = JSON.parse(atob(creds.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000 || 0; }
+    catch { tokenExpRef.current = 0; }
     setConfigWarnings(Array.isArray(creds.warnings) ? creds.warnings : []);
 
     const mod: any = await import('plivo-browser-sdk');      // browser-only — never SSR'd
@@ -200,6 +277,13 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     const sdk = new PlivoCtor(SDK_OPTIONS);
     const client = sdk.client;
     clientRef.current = client;
+
+    // The suppressor's worklet finished loading (never fires on Safari). Only
+    // now can it be switched on — and until it is, calls go out unfiltered.
+    client.on('onNoiseReductionReady', () => {
+      setNoiseFilterAvailable(true);
+      if (noiseFilterRef.current) void client.startNoiseReduction?.();
+    });
 
     // Call lifecycle → UI state.
     client.on('onCalling', () => setStatus('connecting'));
@@ -223,12 +307,32 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
         : /no.?answer|noanswer|timeout|no.?user/i.test(r) ? 'No Answer'
         : /reject|declin/i.test(r) ? 'Declined'
         : (r || 'Failed');
+      /*
+       * "Not Found" = Plivo rejected the INVITE because this browser's login is
+       * stale; the customer was never dialled (no /web-answer), so dialling
+       * again is safe — and a FRESH login is exactly what fixes it. Retry once,
+       * silently: the operator sees "Connecting…" instead of an error they'd
+       * have to click through. The failed row is still reported for the audit.
+       */
+      const retry = retryRef.current;
+      if (retry && shouldRetryWebCall(r, { attemptUsed: retry.used, reachedInProgress: reachedInProgressRef.current })) {
+        retry.used = true;
+        reportWebFailure(pretty);
+        resetClient();
+        setStatus('connecting');
+        // Off the SDK's own event dispatch — that client was just logged out.
+        setTimeout(() => { void startCallRef.current?.(retry.target, retry.opts, true); }, 0);
+        return;
+      }
       setStatus('failed');
       setActive((a) => (a ? { ...a, endedReason: pretty } : a));
       // The server has no other way to learn this leg died: when Plivo never
       // routed the call to a Voice Application it fetched nothing and called
       // back nowhere, so without this the row stays "Dialling" indefinitely.
       reportWebFailure(pretty);
+      // SIP 404 = Plivo no longer knows this endpoint's login (see ensureClient).
+      // Drop it so the operator's retry logs in afresh instead of failing again.
+      if (/not.?found/i.test(r)) resetClient();
     });
 
     loginRef.current = new Promise((resolve, reject) => {
@@ -240,11 +344,17 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     });
     await loginRef.current;
     return client;
-  }, [reportWebFailure]);
+  }, [reportWebFailure, resetClient]);
 
-  const placeWebCall = React.useCallback(async (target: WebCallTarget, opts?: { callTo?: string; teleprompterSessionId?: string; flow?: string }) => {
-    if (busy) return;
-    if (active) { setError('A call is already in progress — hang up the current call before starting another.'); return; }
+  const startWebCall = React.useCallback(async (target: WebCallTarget, opts: PlaceOpts | undefined, isRetry: boolean) => {
+    if (!isRetry) {
+      if (busy) return;
+      // Only a LIVE leg blocks. An ended/failed call is just a panel still on
+      // screen — the new call below replaces `active` wholesale. (The retry
+      // skips this: the leg it replaces still reads 'connecting' here.)
+      if (active && isLiveWebStatus(status)) { setError('A call is already in progress — hang up the current call before starting another.'); return; }
+      retryRef.current = { target, opts, used: false };
+    }
     setBusy(true); setError(null); setMuted(false);
     endedByUserRef.current = false;
     reachedInProgressRef.current = false;
@@ -302,7 +412,13 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false);
     }
-  }, [busy, active, ensureClient, resetClient]);
+  }, [busy, active, status, ensureClient, resetClient]);
+  React.useEffect(() => { startCallRef.current = startWebCall; }, [startWebCall]);
+
+  const placeWebCall = React.useCallback(
+    (target: WebCallTarget, opts?: PlaceOpts) => startWebCall(target, opts, false),
+    [startWebCall],
+  );
 
   const hangup = React.useCallback(() => {
     endedByUserRef.current = true;   // so the SDK's follow-up onCallFailed('Cancelled') reads as a normal end
@@ -326,6 +442,17 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const toggleNoiseFilter = React.useCallback(() => {
+    const next = !noiseFilterRef.current;
+    noiseFilterRef.current = next;
+    setNoiseFilter(next);
+    try { localStorage.setItem(NOISE_FILTER_LS_KEY, next ? '1' : '0'); } catch { /* per-viewer nicety only */ }
+    // Resolves false (never rejects) when unsupported; mid-call it swaps the
+    // live mic stream, between calls it just arms/disarms the next one.
+    const c = clientRef.current;
+    try { void (next ? c?.startNoiseReduction?.() : c?.stopNoiseReduction?.()); } catch { /* ignore */ }
+  }, []);
+
   const dismiss = React.useCallback(() => {
     setActive(null);
     activeCallIdRef.current = null;
@@ -338,7 +465,9 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
 
   const value = React.useMemo<WebCallValue>(() => ({
     status, active, muted, error, configWarnings, busy, placeWebCall, hangup, toggleMute, dismiss,
-  }), [status, active, muted, error, configWarnings, busy, placeWebCall, hangup, toggleMute, dismiss]);
+    noiseFilter, noiseFilterAvailable, toggleNoiseFilter,
+  }), [status, active, muted, error, configWarnings, busy, placeWebCall, hangup, toggleMute, dismiss,
+    noiseFilter, noiseFilterAvailable, toggleNoiseFilter]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -354,6 +483,7 @@ export function useWebCall(): WebCallValue {
     return {
       status: 'idle', active: null, muted: false, error: null, configWarnings: [], busy: false,
       placeWebCall: async () => {}, hangup: () => {}, toggleMute: () => {}, dismiss: () => {},
+      noiseFilter: false, noiseFilterAvailable: false, toggleNoiseFilter: () => {},
     };
   }
   return ctx;

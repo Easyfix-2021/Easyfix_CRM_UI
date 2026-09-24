@@ -14,7 +14,7 @@ import { useFetchOnce } from '@/lib/hooks';
 import { CallCustomNumbersDialog } from './CallCustomNumbersDialog';
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 import { useLiveCall } from './LiveCallContext';
-import { useWebCall } from './WebCallContext';
+import { useWebCall, isLiveWebStatus } from './WebCallContext';
 
 /*
  * Click-to-call surface — two exports:
@@ -444,7 +444,9 @@ function useClickToCall(target: CallTarget) {
     // One call at a time (app-wide): block a new call if either a mobile-bridge
     // live call (liveCall.active) OR a browser/WebRTC call (webCall.active) is
     // already in progress. The operator must hang up the current one first.
-    if (liveCall.active || webCall.active) {
+    // A web call that already ended/failed ("Not Found", "Busy"…) is only its
+    // panel lingering — it must not block the retry.
+    if (liveCall.active || (webCall.active && isLiveWebStatus(webCall.status))) {
       setToast({
         variant: 'error',
         message: 'A call is already in progress — hang up the current call before starting another.',

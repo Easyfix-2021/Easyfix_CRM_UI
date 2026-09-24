@@ -213,6 +213,28 @@ test('ClientApprovalOnBehalfModal fetches visit-slots and renders a Next Visit s
   assert.match(modalSrc, /Next Visit/);
 });
 
+test('Next Visit is a calendar view (fully booked / out-of-window days disabled) with a slot dropdown, not chips', () => {
+  assert.match(modalSrc, /<MinDateCalendar\s+inline/);
+  assert.match(modalSrc, /isDateDisabled=\{\(iso\) => !freeDays\.has\(iso\)\}/);
+  assert.match(modalSrc, /maxDate=\{days\[days\.length - 1\]\.date\}/);
+  assert.match(modalSrc, /<option key=\{h\.hour\} value=\{h\.hour\} disabled=\{!h\.free\}>/);
+  assert.doesNotMatch(modalSrc, /days\.map\(\(d\) => \(\s*<button/, 'the day chips are gone');
+});
+
+test('MinDateCalendar.isDayBlocked: min, max and per-day block', () => {
+  const ts = require('typescript');
+  const src = read('src/components/ui/min-date-calendar.tsx');
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React } }).outputText;
+  const m = { exports: {} };
+  new Function('module', 'exports', 'require', js)(m, m.exports, () => new Proxy({}, { get: () => () => null }));
+  const { isDayBlocked } = m.exports;
+  assert.equal(isDayBlocked('2026-09-23', '2026-09-24', '2026-10-23'), true, 'before min');
+  assert.equal(isDayBlocked('2026-10-24', '2026-09-24', '2026-10-23'), true, 'after max');
+  assert.equal(isDayBlocked('2026-10-01', '2026-09-24', '2026-10-23', (d) => d === '2026-10-01'), true, 'fully booked day');
+  assert.equal(isDayBlocked('2026-10-02', '2026-09-24', '2026-10-23', (d) => d === '2026-10-01'), false, 'free day in window');
+  assert.equal(isDayBlocked('2026-10-23', '2026-09-24', '2026-10-23'), false, 'max itself is bookable');
+});
+
 test('ClientApprovalOnBehalfModal renders all three Entry Permission choices', () => {
   assert.match(modalSrc, /Upload Now/);
   assert.match(modalSrc, /Upload Later/);

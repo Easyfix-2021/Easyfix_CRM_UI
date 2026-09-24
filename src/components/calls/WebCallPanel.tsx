@@ -36,7 +36,7 @@
 
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { Phone, Loader2, X, PhoneOff, Mic, MicOff, Globe, GripVertical, Minus, Maximize2, Users, AlertTriangle } from 'lucide-react';
+import { Phone, Loader2, X, PhoneOff, Mic, MicOff, Globe, GripVertical, Minus, Maximize2, Users, AlertTriangle, AudioWaveform } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
@@ -99,7 +99,10 @@ function useElapsed(startedAt: number | null, running: boolean): number {
 }
 
 export function WebCallPanel() {
-  const { status, active, muted, error, configWarnings, hangup, toggleMute, dismiss } = useWebCall();
+  const {
+    status, active, muted, error, configWarnings, hangup, toggleMute, dismiss,
+    noiseFilter, noiseFilterAvailable, toggleNoiseFilter,
+  } = useWebCall();
   const { me } = useMe();
   const confirm = useConfirm();
   const [endingRoom, setEndingRoom] = React.useState(false);
@@ -682,6 +685,33 @@ export function WebCallPanel() {
                   {muted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
                   {muted ? 'Unmute' : 'Mute'}
                 </button>
+                {/*
+                  Noise Filter — suppresses room noise on the operator's mic (what
+                  the customer hears). Usable while connecting too: toggling
+                  swaps the live mic stream, so there is no reason to wait for
+                  the answer. Hidden where the browser cannot run it (Safari, or
+                  the filter never loaded) rather than offering a dead switch.
+                */}
+                {noiseFilterAvailable && (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={noiseFilter}
+                    onClick={toggleNoiseFilter}
+                    title={noiseFilter
+                      ? 'Noise Filter is on — background noise is reduced for the customer'
+                      : 'Noise Filter is off'}
+                    className={cn(
+                      'inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-md text-xs font-semibold border transition-colors',
+                      noiseFilter
+                        ? 'bg-success-tint border-success text-success-strong hover:bg-success/15'
+                        : 'bg-card border-ink-300 text-ink-700 hover:bg-ink-50',
+                    )}
+                  >
+                    <AudioWaveform className="h-3.5 w-3.5" />
+                    {noiseFilter ? 'Noise Filter On' : 'Noise Filter Off'}
+                  </button>
+                )}
                 {/*
                   The operator's leg carries endMpcOnExit="true", so in web mode
                   hanging the BROWSER up ends the room for everyone on it. Say
