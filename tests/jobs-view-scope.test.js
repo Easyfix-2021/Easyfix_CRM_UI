@@ -164,7 +164,14 @@ test('my-orders retired the shared banner and states "Show All Orders" in the he
   // Same visibility rule the retired bar's own exit used: hidden on the
   // neutral 'all' view, and hidden under the stage clamp (a "Show All" the
   // operator isn't permitted to sit on would fire and appear to do nothing).
-  assert.match(ORDERS, /\{tab !== 'all' && !scopeIsClamped && \(/,
+  /*
+   * …and NOT on the Booking Queue (ops, 2026-09-24). Every other My Orders tab
+   * is a filtered view of the same list, so it needs a way back to the whole
+   * of it; the Booking Queue is a destination of its own, with its own counts
+   * and its own tiles, and an exit into a list that does not look like it was
+   * a door to nowhere useful.
+   */
+  assert.match(ORDERS, /\{tab !== 'all' && !scopeIsClamped && !isUnconfirmed && \(/,
     'the exit must be gated the same way the retired bar gated its own onClear');
   // Matched on the JSX TEXT NODE, not a bare substring — the phrase also
   // appears in prose comments elsewhere in the file, which would let this
@@ -179,7 +186,14 @@ test('my-orders retired the shared banner and states "Show All Orders" in the he
 test('my-orders states the bucket ONCE — the H1 suffix gave way to the bar', () => {
   assert.ok(!/· \{activeTab\.label\}/.test(ORDERS), 'the duplicate scope statement must be gone');
   assert.ok(!/const activeTab =/.test(ORDERS), 'and its now-dead lookup with it');
-  assert.match(ORDERS, /<h1 className="text-2xl font-semibold">My Orders<\/h1>/);
+  /*
+   * The H1 names the SCREEN, and on Unconfirmed the screen is the Booking
+   * Queue (ops, 2026-09-24) — a page with its own tiles, its own counts and
+   * its own queue, which "My Orders" described only in the sense that every
+   * tab shares a route. Every other tab keeps My Orders, so the check is that
+   * the title is one of exactly two, chosen by the tab, and never a third.
+   */
+  assert.match(ORDERS, /<h1 className="text-2xl font-semibold">\{isUnconfirmed \? 'Booking Queue' : 'My Orders'\}<\/h1>/);
 });
 
 test('clearing on my-orders drops the tab and the bucket filters too', () => {

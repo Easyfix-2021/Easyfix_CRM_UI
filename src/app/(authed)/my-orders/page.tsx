@@ -29,7 +29,6 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
 import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
 import { canApproveOnClientsBehalf } from '@/lib/client-approval';
-import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { BookingQueueView } from '@/components/job/BookingQueueView';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
@@ -64,10 +63,6 @@ const PS_COLUMN_COUNT = 12;
 // "All" sends 500 instead of the default 1000 (which would 400).
 const JOBS_MAX_LIMIT = 500;
 
-// Which Unconfirmed view the operator last used ('old' | 'new'). Its own key,
-// not folded into any other stored blob, so a change to one cannot reset the
-// other — the same reasoning as the section order/collapse keys.
-const UNCONFIRMED_VIEW_KEY = 'easyfix.crm.unconfirmed.view.v1';
 
 /*
  * MY ORDERS — user-scoped view of tbl_job.
@@ -375,21 +370,6 @@ export default function MyOrdersPage() {
    */
   const [sectionsReload, setSectionsReload] = useState(0);
 
-  /*
-   * Which cut of Unconfirmed is on screen. Remembered per operator so the view
-   * they work in is the one that opens, and defaulting to 'old' so nobody's
-   * screen changes under them on deploy day — ops opts into the new tab.
-   */
-  const [unconfirmedView, setUnconfirmedViewState] = useState<'old' | 'new'>('old');
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(UNCONFIRMED_VIEW_KEY) === 'new') setUnconfirmedViewState('new');
-    } catch { /* private window / blocked storage — the default is fine */ }
-  }, []);
-  function setUnconfirmedView(v: 'old' | 'new') {
-    setUnconfirmedViewState(v);
-    try { localStorage.setItem(UNCONFIRMED_VIEW_KEY, v); } catch { /* not worth failing over */ }
-  }
   /*
    * Bumped after any action that can move a job between scheduling buckets
    * (offering one sends it Not offered → Offered-waiting). The tab counts are a
@@ -811,6 +791,12 @@ export default function MyOrdersPage() {
    * same arrangement as Pending to Start.
    */
   const isUnconfirmed = tab === 'unconfirmed';
+  /*
+   * The Booking Queue's sub-line, reported UP by the view that owns the counts
+   * endpoint. The page does not compute it: two places counting open orders is
+   * how a header ends up disagreeing with the tiles under it.
+   */
+  const [bookingQueueSubline, setBookingQueueSubline] = useState<string | null>(null);
 
   /*
    * The local `jobAgeLabel(ts)` helper that used to live here was RETIRED
@@ -845,32 +831,34 @@ export default function MyOrdersPage() {
       <div className="flex items-end justify-between">
         <div>
           {/*
-            * The title is plain "My Orders" — it does not name the active
-            * tab (banner retired 2026-09-21; see VIEW SCOPE above). Ops land
-            * here from a sidebar sub-menu, so the bucket is already baked
-            * into their click; the "Show All Orders" link to the right is
-            * the way back out of it.
+            * On the Unconfirmed tab this page IS the Booking Queue, so it says
+            * so — and its sub-line is the queue's own arithmetic (open orders,
+            * and how many already have a link out), which is the sentence ops
+            * reads first. Every other tab keeps "My Orders" and the matching
+            * count: they are different screens that happen to share a route.
             */}
-          <h1 className="text-2xl font-semibold">My Orders</h1>
+          <h1 className="text-2xl font-semibold">{isUnconfirmed ? 'Booking Queue' : 'My Orders'}</h1>
           <p className="text-sm text-muted-foreground">
-            {data?.total.toLocaleString() ?? '…'} matching orders
-            {!isAdmin && me?.user && <span> owned by <strong>{me.user.user_name}</strong></span>}
-            {isAdmin && <span className="text-xs text-muted-foreground"> · viewing all (admin)</span>}
+            {isUnconfirmed ? (
+              /* Filled by BookingQueueView, which owns the counts endpoint —
+                 the page has no second opinion about them. */
+              <span id="booking-queue-subline">{bookingQueueSubline ?? '…'}</span>
+            ) : (
+              <>
+                {data?.total.toLocaleString() ?? '…'} matching orders
+                {!isAdmin && me?.user && <span> owned by <strong>{me.user.user_name}</strong></span>}
+                {isAdmin && <span className="text-xs text-muted-foreground"> · viewing all (admin)</span>}
+              </>
+            )}
           </p>
         </div>
         {/*
-          * Each My Orders sidebar sub-menu already lands on a dedicated,
-          * single-bucket page (Unconfirmed, Pending Scheduling, …), so
-          * stating "Showing X Only" on every tab was telling ops something
-          * the page they clicked already told them (ops, 2026-09-21) — the
-          * "Showing <Tab> Only · Show All Orders" bar below was removed.
-          *
-          * "Show All Orders" stays, here in the header, because no sidebar
-          * entry links to the unscoped /my-orders (every My Orders menu row
-          * points at one specific ?tab=) — this is the ONLY way back to the
-          * all-orders view, so it must not disappear with the banner.
+          * "Show All Orders" is the only way back to the unscoped list from a
+          * sidebar-scoped tab — except on the Booking Queue, which is a
+          * destination in its own right rather than a filtered view of
+          * something else, and where ops asked for it to go (2026-09-24).
           */}
-        {tab !== 'all' && !scopeIsClamped && (
+        {tab !== 'all' && !scopeIsClamped && !isUnconfirmed && (
           <button
             type="button"
             onClick={clearTabScope}
@@ -962,110 +950,34 @@ export default function MyOrdersPage() {
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
             /*
-             * TWO VIEWS OF THE SAME ORDERS, never both at once.
+             * THE OLD SECTIONS VIEW IS GONE (ops, 2026-09-24).
              *
-             * "Old view" groups by appointment date (Overdue / Upcoming /
-             * Future); "Booking queue" groups by where the order is STUCK
-             * (waiting for a link, no response, delivery failed, …). A job that
-             * is Overdue in one is No response in the other, so showing them
-             * together would count it twice and neither set of headings would
-             * sum to the tab total. The switch below is the whole isolation.
-             *
-             * Old stays the default until ops has signed the new one off.
+             * Unconfirmed carried two alternative cuts of the same orders
+             * behind an Old view / Booking queue switch, so ops could compare
+             * them. They have; the Booking queue is the one they work in, and
+             * a second view of the same rows is now just somewhere for a
+             * number to disagree with itself. UnconfirmedSections is still in
+             * the tree — /jobs' own Unconfirmed tab renders it — so nothing
+             * UnconfirmedSections is no longer rendered anywhere — it is left
+             * in the tree rather than deleted in the same change that removed
+             * ten other things, and wants a follow-up.
              */
-            <>
-              <div className="flex items-center gap-1 border-b border-border px-3">
-                {([['old', 'Old view'], ['new', 'Booking queue']] as const).map(([v, label]) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setUnconfirmedView(v)}
-                    className={`-mb-px border-b-2 px-4 py-2 text-[13px] font-semibold ${
-                      unconfirmedView === v
-                        ? 'border-primary text-primary'
-                        : 'border-transparent text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {label}
-                    {v === 'new' && (
-                      <span className="ml-1.5 align-[2px] rounded bg-primary px-1.5 py-px text-xs font-semibold text-primary-foreground">
-                        NEW
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              {unconfirmedView === 'new' ? (
-                <BookingQueueView
-                  ownerId={scopedOwnerId}
-                  query={{
-                    status: TABS.find((t) => t.value === 'unconfirmed')?.status,
-                    ownerId: scopedOwnerId,
-                    q: serverQ || undefined,
-                    sortBy: sortKey || undefined,
-                    sortDir: sortKey ? sortDir : undefined,
-                  }}
-                  canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
-                  canSendMagicLink={!!canJob.isJobMagicLinkSend}
-                  userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
-                  openView={openView}
-                  openConfirm={openConfirm}
-                  /* No sortable headers here: each bucket has its own columns,
-                     and the queue is newest-first by design. */
-                  onMutation={() => load(false, true)}
-                />
-              ) : (
-            /* Same table, grouped into the five sections ops asked for. The
-               component owns the grouping and the drag order only; every
-               column, sort header and row action still comes from
-               UnconfirmedJobsTable, which it renders once per section. */
-            <UnconfirmedSections
-              /*
-               * The tab's request shape, built ONCE here and handed to all five
-               * sections, which add `section` and their own limit/offset. The
-               * search box therefore reaches every section AND every page of
-               * each, because `q` is applied by the server rather than to an
-               * already-truncated array.
-               */
-              /* The independent total the sections are checked against. */
-              pageTotal={data?.total ?? null}
+            <BookingQueueView
+              ownerId={scopedOwnerId}
+              onCounts={setBookingQueueSubline}
               reloadSignal={sectionsReload}
-              pageBusy={loading || refreshing}
               query={{
                 status: TABS.find((t) => t.value === 'unconfirmed')?.status,
                 ownerId: scopedOwnerId,
                 q: serverQ || undefined,
-                sortBy: sortKey || undefined,
-                sortDir: sortKey ? sortDir : undefined,
               }}
-              // Confirm promotes an Unconfirmed order (status 9 → 0); gate it
-              // by the stage-transition rule too, not just the permission.
               canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
               canSendMagicLink={!!canJob.isJobMagicLinkSend}
-              // Force Send (Override) is keyed on the literal role_name
-              // = 'Admin' (matches the BE override gate). `isAdmin`
-              // above uses `role.group` which is broader (admin-class
-              // roles), so we recompute here against the exact role
-              // name. Case-insensitive for seed-data safety.
               userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
-              // Server-side sort: forward the page's sort state + toggle so the
-              // Unconfirmed column headers sort the WHOLE list (not just page).
-              sortBy={sortKey}
-              sortDir={sortDir}
-              onSort={toggle}
-              /*
-               * Refreshes the "N matching orders" header only. The ROWS live in
-               * the five section fetches, and UnconfirmedSections refreshes
-               * those itself — an eviction cannot, because useFetch does not
-               * subscribe to invalidation and these sections never unmount.
-               * See the note on its reloadKey.
-               */
-              onMagicLinkSent={() => load(false, true)}
+              onMutation={() => load(false, true)}
             />
-              )}
-            </>
           ) : isPendingScheduling ? (
           /*
             * Pending-for-Scheduling custom layout. Distinct columns vs the

@@ -2,6 +2,9 @@
 
 import * as React from 'react';
 import { Eye, CalendarCheck, Send } from 'lucide-react';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
+import { SortHeader, type SortDir } from '@/lib/use-sort';
+import { JOB_AGE_SORT_KEY } from '@/lib/job-age';
 import { formatDate } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
@@ -94,6 +97,19 @@ const COLUMNS: Col[] = [
   'job', 'age', 'ticket', 'client', 'cityCoverage', 'appt', 'customer',
   'bucket', 'nextAction', 'remarks', 'spoc', 'source', 'action',
 ];
+
+/*
+ * The four columns ops sorts by. Sorting is SERVER-side (the key goes to
+ * /admin/jobs), so it orders the whole bucket rather than the page on screen —
+ * on a 106-row bucket at 10 a page, sorting only the visible rows would be a
+ * different, and wrong, answer.
+ */
+const SORT_KEY: Partial<Record<Col, string>> = {
+  job: 'job_id',
+  age: JOB_AGE_SORT_KEY,
+  ticket: 'created_date_time',
+  appt: 'requested_date_time',
+};
 
 const HEAD: Record<Col, string> = {
   job: 'Job #', age: 'Age', ticket: 'Ticket created', client: 'Client',
@@ -225,7 +241,7 @@ function nextActionCell(bucket: string, j: BookingQueueRow) {
 
 export function BookingQueueTable({
   rows, loading, bucket, canConfirm, canSendMagicLink, userIsAdmin,
-  openView, openConfirm, onMagicLinkSent,
+  openView, openConfirm, onMagicLinkSent, sortBy, sortDir, onSort,
 }: {
   rows: BookingQueueRow[];
   loading?: boolean;
@@ -236,6 +252,9 @@ export function BookingQueueTable({
   openView: (id: number) => void;
   openConfirm: (id: number) => void;
   onMagicLinkSent?: () => void;
+  sortBy?: string | null;
+  sortDir?: SortDir;
+  onSort?: (col: string) => void;
 }) {
   const key = bucket.startsWith('response') ? 'response_received' : bucket;
   const cols = COLUMNS;
@@ -250,10 +269,13 @@ export function BookingQueueTable({
     switch (c) {
       case 'job':
         return (
-          <>
-            <div className="font-semibold">#{j.job_id}</div>
-            {j.client_ref_id && <div className="text-xs text-muted-foreground">{j.client_ref_id}</div>}
-          </>
+          <div className="inline-flex items-center gap-1 whitespace-nowrap">
+            <span className="font-semibold">#{j.job_id}</span>
+            {/* Call history + recordings, the same control Manage Jobs carries.
+                Next to the job number because that is where an operator looks
+                first when they want to know what was already said. */}
+            <CallHistoryButton jobId={j.job_id} />
+          </div>
         );
       case 'age':
         return <span title={jobAgeTitle(j)}>{formatJobAge(j)}</span>;
@@ -338,11 +360,22 @@ export function BookingQueueTable({
     <table className="data-table w-full">
       <thead>
         <tr>
-          {cols.map((c) => (
-            <th key={c} className={c === 'action' ? 'text-right whitespace-nowrap' : 'whitespace-nowrap'}>
-              {HEAD[c]}
-            </th>
-          ))}
+          {cols.map((c) => {
+            // Job # is pinned left in every bucket so it stays put while the
+            // rest scrolls — it is the one cell a reader navigates by.
+            const cls = c === 'job' ? 'stick-col-head stick-left whitespace-nowrap'
+              : c === 'action' ? 'stick-col-head stick-right text-right whitespace-nowrap'
+                : 'whitespace-nowrap';
+            const key = SORT_KEY[c];
+            if (key && onSort) {
+              return (
+                <SortHeader<string> key={c} col={key} sortBy={sortBy ?? null} sortDir={sortDir ?? 'asc'} onSort={onSort} className={cls}>
+                  {HEAD[c]}
+                </SortHeader>
+              );
+            }
+            return <th key={c} className={cls}>{HEAD[c]}</th>;
+          })}
         </tr>
       </thead>
       <tbody>
@@ -355,7 +388,13 @@ export function BookingQueueTable({
         {!loading && rows.map((j) => (
           <tr key={j.job_id}>
             {cols.map((c) => (
-              <td key={c} className={c === 'action' ? 'text-right whitespace-nowrap' : ''}>{cell(c, j)}</td>
+              <td
+                key={c}
+                className={c === 'job' ? 'stick-col stick-left whitespace-nowrap'
+                  : c === 'action' ? 'stick-col stick-right text-right whitespace-nowrap' : ''}
+              >
+                {cell(c, j)}
+              </td>
             ))}
           </tr>
         ))}

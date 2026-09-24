@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { buildJobsKey } from '@/lib/jobs-query';
+import { cycleSort, type SortDir } from '@/lib/use-sort';
 import {
   TablePagination,
   type TablePageSize,
@@ -115,13 +116,33 @@ const DAYS: { key: DayKey; label: string }[] = [
 const JOBS_MAX_LIMIT = 500;
 
 export function BookingQueueView({
-  query, ownerId, onMutation, ...tableProps
+  query, ownerId, onMutation, onCounts, reloadSignal, ...tableProps
 }: Omit<TableProps, 'rows' | 'loading'> & {
   query: JobsQuery;
   ownerId?: number;
   onMutation?: () => void;
+  /*
+   * Reports the page header's sub-line up. This component owns the counts
+   * endpoint, so it is the only thing that should be stating how many orders
+   * are open — a header computing its own would be a second opinion.
+   */
+  onCounts?: (line: string) => void;
+  /*
+   * Bumped by the PAGE after a JobModal save. It is the only way a mutation
+   * made outside this component reaches it: invalidateFetch alone does not
+   * refresh a MOUNTED useFetch (the key is a pure function of the query, so it
+   * is byte-identical after the save and the effect never re-runs), and this
+   * view never unmounts while the tab is open. Without it, confirming an order
+   * in the modal leaves it sitting in the tile it has just left.
+   */
+  reloadSignal?: number;
 }) {
-  const [bucket, setBucket] = useState<BucketKey>('new');
+  /*
+   * The page opens on RESPONSE RECEIVED (ops, 2026-09-24). Those customers have
+   * already answered and are one click from being booked — the fastest work on
+   * the board — whereas New is waiting on a cron nobody has to watch.
+   */
+  const [bucket, setBucket] = useState<BucketKey>('response_received');
   /*
    * The day pill inside the selected tile, or null for the whole bucket.
    * Cleared whenever the tile changes: "Day 2" of one bucket means nothing in
@@ -133,6 +154,19 @@ export function BookingQueueView({
   const [rescheduled, setRescheduled] = useState(false);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(10);
+  /*
+   * Sort state lives HERE, not on the page: the booking queue sorts its own
+   * buckets and the other My Orders tabs keep their own ordering. Server-side,
+   * so it orders the whole bucket rather than the ten rows on screen.
+   */
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  function toggleSort(col: string) {
+    const next = cycleSort<string>(col, { sortBy: sortKey, sortDir });
+    setSortKey(next.sortBy);
+    setSortDir(next.sortDir);
+    setPage(0);
+  }
   /*
    * Post-mutation refresh. invalidateFetch ALONE does not refresh a mounted
    * view: useFetch re-runs on [key, enabled, tick] and the key is a pure
@@ -150,15 +184,24 @@ export function BookingQueueView({
   const countsKey = `/admin/jobs/booking-queue${ownerId ? `?ownerId=${ownerId}` : ''}`;
   const counts = useFetch<Counts>(countsKey);
 
+  /*
+   * ESCALATED IS A BOARD-WIDE QUESTION (ops, 2026-09-24). "Show me everything
+   * escalated" means every escalated order, whichever bucket it sits in — an
+   * escalation that only shows inside the tile you happen to have selected is
+   * the one you will miss. So the flag DROPS the bucket filter rather than
+   * narrowing within it, and the caption below says so.
+   */
   const rowsKey = buildJobsKey({
     ...query,
-    bucket,
+    bucket: escalated ? undefined : bucket,
     // The day pill rides INSIDE the bucket predicate server-side, so the grid
     // gets exactly the rows the pill counted rather than a second filter that
     // looks right on its own.
-    ageDay: day ?? undefined,
+    ageDay: escalated ? undefined : (day ?? undefined),
     isEscalated: escalated ? 'true' : undefined,
     customerRescheduled: rescheduled ? 'true' : undefined,
+    sortBy: sortKey || undefined,
+    sortDir: sortKey ? sortDir : undefined,
     limit: pageSizeToLimit(pageSize, JOBS_MAX_LIMIT),
     offset: page * pageSizeToLimit(pageSize, JOBS_MAX_LIMIT),
   });
@@ -182,7 +225,7 @@ export function BookingQueueView({
     counts.refetch();
     rows.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadKey]);
+  }, [reloadKey, reloadSignal]);
 
   function handleMutation() {
     invalidateFetch((k) => k.startsWith('/admin/jobs'));
@@ -191,6 +234,10 @@ export function BookingQueueView({
   }
 
   const c = counts.data;
+  useEffect(() => {
+    if (c) onCounts?.(`Open orders: ${c.total.toLocaleString()} · link already sent for ${c.links_sent.toLocaleString()}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [c]);
 
   if (counts.error) {
     return (
@@ -278,14 +325,26 @@ export function BookingQueueView({
         <FlagChip on={rescheduled} tone="warning" onClick={() => { setRescheduled((v) => !v); setPage(0); }}>
           ↻ Rescheduled by customer
         </FlagChip>
+        {/* Only offered when something is actually filtered — a permanently
+            visible "Clear filter" trains people to ignore it. */}
+        {(escalated || rescheduled || day) && (
+          <button
+            type="button"
+            onClick={() => { setEscalated(false); setRescheduled(false); setDay(null); setPage(0); }}
+            className="ml-auto text-xs font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Clear filter
+          </button>
+        )}
       </div>
 
       <div className="rounded-lg border border-border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
           <span>
             <strong className="text-foreground">{rows.data?.total ?? '—'}</strong> open ·{' '}
-            {TILE_LABEL[bucket]}
-            {day && ` · ${DAYS.find((d) => d.key === day)?.label}`}
+            {escalated ? 'Escalated · every bucket' : TILE_LABEL[bucket]}
+            {!escalated && day && ` · ${DAYS.find((d) => d.key === day)?.label}`}
+            {rescheduled && ' · rescheduled by customer'}
           </span>
           <span>Newest first</span>
         </div>
@@ -296,6 +355,9 @@ export function BookingQueueView({
             loading={rows.loading}
             bucket={bucket}
             onMagicLinkSent={handleMutation}
+            sortBy={sortKey}
+            sortDir={sortDir}
+            onSort={toggleSort}
             {...tableProps}
           />
         </div>
