@@ -79,6 +79,11 @@ export type BookingQueueRow = JobAgeFields & {
   /* The latest comment on the job — NOT tbl_job.remarks, which the next write
      overwrites. See attemptColumns() in booking-queue.service.js. */
   latest_comment?: string | null;
+  /* Escalation, projected for the queue by job.service.js (wantsEscalation).
+     A count rather than a flag on some rows, so both shapes are read. */
+  is_escalated?: number | boolean | null;
+  no_of_escalations?: number | null;
+  escalated_comments?: string | null;
 };
 
 export type BucketKey =
@@ -120,6 +125,15 @@ const HEAD: Record<Col, string> = {
 
 /** Three attempt-days and the order stops being ours. Mirrors the backend. */
 const ATTEMPTS_TO_TRANSFER = 3;
+
+/*
+ * Escalation arrives as a flag on some rows and a count on others (the
+ * projection reads the latest escalation row, and older ones carry only the
+ * counter), so both shapes are accepted.
+ */
+function isEscalated(j: BookingQueueRow): boolean {
+  return j.is_escalated === 1 || j.is_escalated === true || Number(j.no_of_escalations ?? 0) > 0;
+}
 
 /** What the customer asked for, when they answered the link. */
 function answerKind(j: BookingQueueRow): 'reschedule' | 'cancel' | 'ready' {
@@ -271,6 +285,18 @@ export function BookingQueueTable({
         return (
           <div className="inline-flex items-center gap-1 whitespace-nowrap">
             <span className="font-semibold">#{j.job_id}</span>
+            {/* Escalated orders are the ones that must not be scrolled past, so
+                the mark sits ON the job number rather than in a column an eye
+                has to travel to. Title carries the reason when there is one. */}
+            {isEscalated(j) && (
+              <span
+                aria-label="Escalated"
+                title={j.escalated_comments || 'Escalated'}
+                className="text-destructive"
+              >
+                🔥
+              </span>
+            )}
             {/* Call history + recordings, the same control Manage Jobs carries.
                 Next to the job number because that is where an operator looks
                 first when they want to know what was already said. */}
@@ -339,11 +365,15 @@ export function BookingQueueTable({
             {canConfirm && key !== 'client_queue' && (
               <IconButton icon={CalendarCheck} intent="default" label="Confirm & schedule" onClick={() => openConfirm(j.job_id)} />
             )}
-            {canSendMagicLink && (key === 'new' || key === 'delivery_failed') && (
+            {/* Send / re-send the link by hand. Offered wherever a link could
+                still help: nothing sent yet, the last one failed, the customer
+                has not answered — and on call-only clients, where the cron
+                will never send one but an executive may still want to. */}
+            {canSendMagicLink && key !== 'client_queue' && key !== 'response_received' && (
               <IconButton
                 icon={Send}
                 intent="default"
-                label={key === 'new' ? 'Send link now' : 'Re-send link'}
+                label={j.magic_link_sent_at ? 'Re-send link' : 'Send link now'}
                 onClick={() => setLinkRow(j)}
               />
             )}
@@ -357,7 +387,11 @@ export function BookingQueueTable({
 
   return (
     <>
-    <table className="data-table w-full">
+    {/* Denser than the shared .data-table, but ONLY here: that utility sets the
+        rhythm for every table in the CRM, and the booking queue's rows are two
+        short lines where other tables carry one. Arbitrary variants keep the
+        override local instead of re-tuning the whole app to fit one screen. */}
+    <table className="data-table w-full [&_td]:py-1 [&_th]:py-1.5">
       <thead>
         <tr>
           {cols.map((c) => {

@@ -234,6 +234,7 @@ export function BookingQueueView({
   }
 
   const c = counts.data;
+  const anyFilter = escalated || rescheduled || !!day;
   useEffect(() => {
     if (c) onCounts?.(`Open orders: ${c.total.toLocaleString()} · link already sent for ${c.links_sent.toLocaleString()}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -250,17 +251,16 @@ export function BookingQueueView({
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-muted-foreground">
-          {/* The tiles add up to this, which is also the grid's population —
-              say it on the page so a wrong total is visible, not inferred. */}
-          Open orders:{' '}
-          <span className="text-sm font-semibold text-foreground">{c ? c.total : '—'}</span>
-          <span className="ml-2 font-normal">· link already sent for {c ? c.links_sent : '—'}</span>
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+      {/*
+        * The open-orders line lives in the PAGE HEADER now (this view reports
+        * it up through onCounts). Stating it twice, thirty pixels apart, spent
+        * a row of vertical space saying the same thing — and ops is reading
+        * this page to find jobs, not totals.
+        */}
+      {/* SIX ACROSS on a wide screen. Two rows of three pushed the first job below
+          the fold at 1440x900 — ops opened the page and could not see the work.
+          Wrapping to 3 and 2 keeps it usable on smaller screens. */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
         <Tile
           label="New — waiting for link" hint="Link goes out on the next hourly run"
           open={c?.open.new} days={c?.days?.new}
@@ -317,36 +317,36 @@ export function BookingQueueView({
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-xs font-semibold text-muted-foreground">Flags</span>
-        <FlagChip on={escalated} tone="danger" onClick={() => { setEscalated((v) => !v); setPage(0); }}>
-          🔥 Escalated
-        </FlagChip>
-        <FlagChip on={rescheduled} tone="warning" onClick={() => { setRescheduled((v) => !v); setPage(0); }}>
-          ↻ Rescheduled by customer
-        </FlagChip>
-        {/* Only offered when something is actually filtered — a permanently
-            visible "Clear filter" trains people to ignore it. */}
-        {(escalated || rescheduled || day) && (
-          <button
-            type="button"
-            onClick={() => { setEscalated(false); setRescheduled(false); setDay(null); setPage(0); }}
-            className="ml-auto text-xs font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
-            Clear filter
-          </button>
-        )}
-      </div>
-
       <div className="rounded-lg border border-border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+        {/* Caption AND filters on one line: they were two rows saying things
+            that belong together — what you are looking at, and what is
+            narrowing it. */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
           <span>
             <strong className="text-foreground">{rows.data?.total ?? '—'}</strong> open ·{' '}
             {escalated ? 'Escalated · every bucket' : TILE_LABEL[bucket]}
             {!escalated && day && ` · ${DAYS.find((d) => d.key === day)?.label}`}
             {rescheduled && ' · rescheduled by customer'}
           </span>
-          <span>Newest first</span>
+          <span className="ml-2 font-semibold">Flags</span>
+          <FlagChip on={escalated} tone="danger" onClick={() => { setEscalated((v) => !v); setPage(0); }}>
+            🔥 Escalated
+          </FlagChip>
+          <FlagChip on={rescheduled} tone="warning" onClick={() => { setRescheduled((v) => !v); setPage(0); }}>
+            ↻ Rescheduled by customer
+          </FlagChip>
+          {/* Always present, so nobody hunts for it; muted and inert when there
+              is nothing to clear, rather than appearing and disappearing. */}
+          <button
+            type="button"
+            disabled={!anyFilter}
+            onClick={() => { setEscalated(false); setRescheduled(false); setDay(null); setPage(0); }}
+            className={`ml-auto text-xs font-semibold underline underline-offset-2 ${
+              anyFilter ? 'text-foreground hover:opacity-80' : 'cursor-default text-muted-foreground/50 no-underline'
+            }`}
+          >
+            Clear filter
+          </button>
         </div>
         <div className="overflow-x-auto">
           {/* A different column set per bucket — see BookingQueueTable. */}
@@ -408,7 +408,7 @@ const TONE: Record<string, string> = {
 
 function tileClass(selected: boolean, tone?: string) {
   return [
-    'rounded-lg border px-3.5 py-3 text-left transition-shadow',
+    'rounded-lg border px-2.5 py-2 text-left transition-shadow',
     tone ? TONE[tone] : 'border-border bg-card',
     selected ? 'ring-2 ring-foreground' : 'hover:border-foreground/30',
   ].join(' ');
@@ -445,7 +445,7 @@ function Tile({
     // The tile is a plain div, not a button: it CONTAINS buttons (the pills),
     // and a button inside a button is invalid HTML that browsers silently
     // reflow. The headline row is the clickable part.
-    <div className={tileClass(selected, tone)}>
+    <div className={tileClass(selected, tone)} title={hint}>
       <button
         type="button"
         onClick={() => onPick(null)}
@@ -455,19 +455,20 @@ function Tile({
         {/* An em dash until the count arrives: a 0 that means "not loaded yet"
             is indistinguishable from a 0 that means "none", and on this page
             that difference is the whole point. */}
-        <div className="text-2xl font-semibold leading-none">{loaded ? open : '—'}</div>
-        <div className="mt-1.5 text-xs font-semibold">{label}</div>
-        <div className="mt-1 text-xs opacity-80">{hint}</div>
+        <div className="text-xl font-semibold leading-none">{loaded ? open : '—'}</div>
+        {/* The hint moved to the tile's tooltip: it explained the bucket once,
+            and after the first day it was costing a line on every tile. */}
+        <div className="mt-1 text-xs font-semibold leading-tight">{label}</div>
       </button>
       {loaded && extra && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
+        <div className="mt-1 flex flex-wrap gap-1">
           {extra.map((p) => (
             <Pill key={p.key} on={p.on} onPick={p.onPick}>{p.label} {p.n ?? 0}</Pill>
           ))}
         </div>
       )}
       {loaded && days && (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
+        <div className="mt-1 flex flex-wrap gap-1">
           {DAYS.map((d) => (
             <Pill
               key={d.key}
@@ -490,7 +491,7 @@ function Pill({ on, onPick, children }: { on: boolean; onPick: () => void; child
       type="button"
       onClick={onPick}
       aria-pressed={on}
-      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+      className={`rounded-full px-1.5 py-px text-xs font-semibold ${
         on ? 'bg-foreground text-background' : 'border border-current/20 bg-card/70'
       }`}
     >
