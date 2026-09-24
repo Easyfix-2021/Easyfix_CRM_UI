@@ -69,6 +69,9 @@ export type BookingQueueRow = JobAgeFields & {
   last_attempt_at?: string | null;
   last_attempt_kind?: 'link' | 'sms' | 'call' | null;
   transferred_at?: string | null;
+  /* The latest comment on the job — NOT tbl_job.remarks, which the next write
+     overwrites. See attemptColumns() in booking-queue.service.js. */
+  latest_comment?: string | null;
 };
 
 export type BucketKey =
@@ -81,7 +84,8 @@ type Col =
   | 'linkStatus' | 'source' | 'asked' | 'reason' | 'answeredAt'
   | 'attempts' | 'lastAttempt' | 'nextAction'
   | 'whyFailed' | 'mobileOnFile'
-  | 'withClient' | 'blocker' | 'spoc' | 'attemptsMade';
+  | 'withClient' | 'blocker' | 'spoc' | 'attemptsMade'
+  | 'coverage' | 'bucket' | 'remarks';
 
 /*
  * The column set per bucket. The three Response sub-filters are the same
@@ -91,7 +95,14 @@ type Col =
 const COLUMNS: Record<string, Col[]> = {
   new:               ['job', 'age', 'ticket', 'client', 'city', 'appt', 'customer', 'linkStatus', 'source', 'action'],
   response_received: ['job', 'age', 'client', 'city', 'appt', 'asked', 'reason', 'answeredAt', 'customer', 'action'],
-  no_response:       ['job', 'age', 'client', 'city', 'appt', 'attempts', 'lastAttempt', 'nextAction', 'customer', 'action'],
+  /*
+   * No response, as ops specified it (2026-09-24). Attempts and Last attempt
+   * moved OUT of their own columns — the attempt count now rides inside Next
+   * action ("Call — 2nd attempt · 1 of 3"), which is the sentence an executive
+   * reads anyway, and the space goes to Remarks, which they were opening the
+   * job to read.
+   */
+  no_response:       ['job', 'ticket', 'age', 'client', 'coverage', 'appt', 'bucket', 'nextAction', 'remarks', 'action'],
   delivery_failed:   ['job', 'age', 'client', 'city', 'appt', 'whyFailed', 'mobileOnFile', 'attempts', 'nextAction', 'action'],
   no_link_needed:    ['job', 'age', 'client', 'city', 'appt', 'attempts', 'lastAttempt', 'nextAction', 'customer', 'action'],
   client_queue:      ['job', 'age', 'withClient', 'client', 'city', 'blocker', 'spoc', 'attemptsMade', 'lastAttempt', 'action'],
@@ -103,6 +114,7 @@ const HEAD: Record<Col, string> = {
   linkStatus: 'Link status', source: 'Source',
   asked: 'Customer asked for', reason: 'Reason', answeredAt: 'Answered at',
   attempts: 'Attempts', lastAttempt: 'Last attempt', nextAction: 'Next action',
+  coverage: 'Coverage', bucket: 'Bucket', remarks: 'Remarks',
   whyFailed: 'Why it failed', mobileOnFile: 'Mobile on file',
   withClient: 'With client', blocker: 'Blocker', spoc: 'Client SPOC', attemptsMade: 'Attempts made',
 };
@@ -120,8 +132,21 @@ function nextActionText(bucket: string, attempts: number): string {
   if (bucket === 'new') return 'Link auto-sending';
   const n = attempts + 1;
   if (attempts >= ATTEMPTS_TO_TRANSFER) return 'Transferring to client';
-  if (n >= ATTEMPTS_TO_TRANSFER) return 'Final attempt — transfers after this';
+  if (n >= ATTEMPTS_TO_TRANSFER) return 'Final call — transfers after this';
   return n === 1 ? 'Call — 1st attempt' : 'Call — 2nd attempt';
+}
+
+const BUCKET_LABEL: Record<string, string> = {
+  new: 'New', response_received: 'Response received', no_response: 'No response',
+  delivery_failed: 'Delivery failed', no_link_needed: 'No link needed',
+  client_queue: 'Client queue',
+};
+
+/* Day 0/1/2/3+ since the ticket came in — the same clock the tile's pills use. */
+function ageDayLabel(j: BookingQueueRow): string | null {
+  const d = daysSince(j.ticket_created_date_time ?? j.created_date_time);
+  if (d === null) return null;
+  return d >= 3 ? 'Day 3+' : `Day ${d}`;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -209,10 +234,32 @@ export function BookingQueueTable({
           : <StatusChip tone="slate" size="sm">Queued · next hourly run</StatusChip>;
       case 'source':
         return <span className="text-xs text-muted-foreground">{j.source_type ?? '—'}</span>;
-      case 'asked':
-        if (j.pending_request_type === 'cancel') return <StatusChip tone="red" size="sm">Cancel</StatusChip>;
-        if (j.pending_request_type === 'reschedule') return <StatusChip tone="amber" size="sm">Reschedule</StatusChip>;
-        return <StatusChip tone="emerald" size="sm">Ready for SKU</StatusChip>;
+      case 'asked': {
+        /*
+         * The chip alone says the customer asked for something; the two lines
+         * under it say WHAT, which is the part that decides who picks the order
+         * up. Ops asked for the reason and the requested time to sit here,
+         * under the chip, rather than in a column further right where a reader
+         * has to join them back up.
+         */
+        const tone = j.pending_request_type === 'cancel' ? 'red'
+          : j.pending_request_type === 'reschedule' ? 'amber' : 'emerald';
+        const label = j.pending_request_type === 'cancel' ? 'Cancel'
+          : j.pending_request_type === 'reschedule' ? 'Reschedule' : 'Ready for SKU';
+        return (
+          <>
+            <StatusChip tone={tone} size="sm">{label}</StatusChip>
+            {j.pending_request_reason && (
+              <div className="mt-0.5 text-xs text-muted-foreground">{j.pending_request_reason}</div>
+            )}
+            {j.pending_request_preferred_datetime && (
+              <div className="text-xs font-semibold text-warning-strong">
+                asked for {formatDate(j.pending_request_preferred_datetime)}
+              </div>
+            )}
+          </>
+        );
+      }
       case 'reason':
         return <span className="text-xs text-muted-foreground">{j.pending_request_reason ?? '—'}</span>;
       case 'answeredAt':
@@ -232,7 +279,35 @@ export function BookingQueueTable({
           </>
         ) : <span className="text-xs text-muted-foreground">—</span>;
       case 'nextAction':
-        return <span className="text-xs font-semibold">{nextActionText(key, attempts)}</span>;
+        return (
+          <>
+            <span className="text-xs font-semibold">{nextActionText(key, attempts)}</span>
+            {/* The attempt count rides under the instruction rather than in a
+                column of its own — it is the reason the instruction says what
+                it says, and three days of it hands the order to the client. */}
+            {key !== 'new' && (
+              <div className="text-xs text-muted-foreground">{attempts} of {ATTEMPTS_TO_TRANSFER} attempts</div>
+            )}
+          </>
+        );
+      case 'coverage':
+        /* Coverage is not computed yet (ops: "keep all local for now"). It is
+           labelled as a placeholder rather than dressed up as a real answer —
+           a LOCAL chip that is always LOCAL should not look measured. */
+        return <StatusChip tone="emerald" size="sm" title="Coverage is not computed yet — every order shows LOCAL">LOCAL</StatusChip>;
+      case 'bucket':
+        return (
+          <>
+            <div className="text-xs font-semibold">{BUCKET_LABEL[key] ?? key}</div>
+            {ageDayLabel(j) && <div className="text-xs text-muted-foreground">{ageDayLabel(j)}</div>}
+          </>
+        );
+      case 'remarks':
+        return (
+          <span className="block max-w-[15rem] truncate text-xs text-muted-foreground" title={j.latest_comment ?? undefined}>
+            {j.latest_comment || '—'}
+          </span>
+        );
       case 'whyFailed':
         return (
           <span className="text-xs text-destructive">
