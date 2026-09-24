@@ -8,7 +8,7 @@ import {
   type TablePageSize,
   pageSizeToLimit,
 } from '@/components/ui/table-pagination';
-import { UnconfirmedJobsTable } from './UnconfirmedJobsTable';
+import { BookingQueueTable, type BookingQueueRow } from './BookingQueueTable';
 
 /*
  * My Orders → Unconfirmed → "Booking queue" — the tab ops asked for.
@@ -55,7 +55,7 @@ import { UnconfirmedJobsTable } from './UnconfirmedJobsTable';
  */
 
 type LinkKey = 'response_received' | 'no_response' | 'delivery_failed';
-type WaitKey = 'new' | 'no_link_needed';
+type WaitKey = 'new' | 'no_link_needed' | 'client_queue';
 /*
  * The three answers a link can produce. They are grid filters as well as
  * counts, so clicking one narrows the rows below — the backend accepts them
@@ -86,8 +86,9 @@ type Counts = {
   links_sent: number;
 };
 
-type Resp = { items: ComponentProps<typeof UnconfirmedJobsTable>['rows']; total: number };
-type TableProps = ComponentProps<typeof UnconfirmedJobsTable>;
+type Resp = { items: BookingQueueRow[]; total: number };
+/* `bucket` is the VIEW's state, so it is not part of what the page hands down. */
+type TableProps = Omit<ComponentProps<typeof BookingQueueTable>, 'bucket'>;
 type JobsQuery = Record<string, string | number | undefined>;
 
 /*
@@ -241,13 +242,14 @@ export function BookingQueueView({
             onPick: () => pickBucket(`response_${k}`),
           }))}
         />
-        {/* PARKED, not dropped. Ops has still to define the blocker list, and a
-            missing tile would read as "already built and empty". */}
-        <div className="rounded-lg border border-dashed border-border bg-card px-3.5 py-3 opacity-70">
-          <div className="text-2xl font-semibold leading-none text-muted-foreground">—</div>
-          <div className="mt-1.5 text-xs font-semibold">Client queue — pending</div>
-          <div className="mt-1 text-xs text-muted-foreground">Parked · rules to follow</div>
-        </div>
+        <Tile
+          label="Client queue — pending" tone="grey"
+          hint="waiting on the client — not your action"
+          open={c?.open.client_queue} days={c?.days?.client_queue}
+          dayPrefix="With client"
+          selected={bucket === 'client_queue'} activeDay={bucket === 'client_queue' ? day : null}
+          onPick={(d) => pickBucket('client_queue', d)}
+        />
         <Tile
           label="No response" tone="warning" hint="still to call"
           open={c?.open.no_response} days={c?.days?.no_response}
@@ -288,9 +290,11 @@ export function BookingQueueView({
           <span>Newest first</span>
         </div>
         <div className="overflow-x-auto">
-          <UnconfirmedJobsTable
+          {/* A different column set per bucket — see BookingQueueTable. */}
+          <BookingQueueTable
             rows={rows.data?.items ?? []}
             loading={rows.loading}
+            bucket={bucket}
             onMagicLinkSent={handleMutation}
             {...tableProps}
           />
@@ -319,6 +323,7 @@ const RESPONSE_LABEL: Record<ResponseKind, string> = {
 const TILE_LABEL: Record<BucketKey, string> = {
   new: 'New — waiting for link',
   no_link_needed: 'No link needed — calling',
+  client_queue: 'Client queue — pending',
   response_received: 'Response received',
   no_response: 'No response',
   delivery_failed: 'Delivery failed',
@@ -336,6 +341,7 @@ const TONE: Record<string, string> = {
   warning: 'bg-warning-tint border-warning/30 text-warning-strong',
   danger: 'bg-destructive/10 border-destructive/30 text-destructive',
   purple: 'bg-accent border-accent-foreground/20 text-accent-foreground',
+  grey: 'bg-muted border-border text-foreground',
 };
 
 function tileClass(selected: boolean, tone?: string) {
@@ -357,13 +363,20 @@ type ExtraPill = { key: string; label: string; n?: number; on: boolean; onPick: 
  * honest shape, and a reader cannot wonder whether the two count differently.
  */
 function Tile({
-  label, tone, hint, open, days, selected, activeDay, onPick, extra,
+  label, tone, hint, open, days, selected, activeDay, onPick, extra, dayPrefix,
 }: {
   label: string; tone?: string; hint: string;
   open?: number; days?: DayCounts;
   selected: boolean; activeDay: DayKey | null;
   onPick: (day: DayKey | null) => void;
   extra?: ExtraPill[];
+  /*
+   * Client queue counts days SINCE IT REACHED THE CLIENT, every other tile
+   * counts days since the ticket arrived. Same-looking pills, different
+   * clocks — so that tile labels its own, and nobody reads "Day 2" as the
+   * order being two days old when it is five months old and two days theirs.
+   */
+  dayPrefix?: string;
 }) {
   const loaded = open !== undefined;
   return (
@@ -399,7 +412,7 @@ function Tile({
               on={selected && activeDay === d.key}
               onPick={() => onPick(activeDay === d.key ? null : d.key)}
             >
-              {d.label} · {days[d.key] ?? 0}
+              {dayPrefix ? `${dayPrefix} ` : ''}{d.label} · {days[d.key] ?? 0}
             </Pill>
           ))}
         </div>
