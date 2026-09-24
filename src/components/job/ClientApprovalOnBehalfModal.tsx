@@ -56,6 +56,8 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { cn, formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { HOUR_FRAMES } from '@/lib/job-slots';
+import { MinDateCalendar } from '@/components/ui/min-date-calendar';
+import { Select } from '@/components/ui/select';
 import {
   APPROVAL_COMMENT_MAX, APPROVAL_COMMENT_MIN,
   validateApprovalComment, validateApprovalFiles, validateVisitSlot, validatePermissionFile,
@@ -169,7 +171,9 @@ export function ClientApprovalOnBehalfModal({
   // first day offered once it arrives, so the operator sees hour chips
   // immediately instead of an empty picker they must first click into.
   useEffect(() => {
-    if (open && visitDate == null && days.length > 0) setVisitDate(days[0].date);
+    // First day that still has a free hour — a fully booked day is disabled in the calendar.
+    const first = days.find((d) => d.hours.some((h) => h.free));
+    if (open && visitDate == null && first) setVisitDate(first.date);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, days.length]);
 
@@ -193,6 +197,9 @@ export function ClientApprovalOnBehalfModal({
     setFiles((prev) => [...prev, ...Array.from(list)]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
+
+  // Plain const, not useMemo: this runs after the `if (!jobId) return null` above (hooks may not).
+  const freeDays = new Set(days.filter((d) => d.hours.some((h) => h.free)).map((d) => d.date));
 
   function pickDay(date: string) {
     setVisitDate(date);
@@ -396,44 +403,32 @@ export function ClientApprovalOnBehalfModal({
               <div className="text-xs text-muted-foreground">No Availability In The Next 30 Days.</div>
             ) : (
               <>
-                <div className="flex flex-wrap gap-1.5">
-                  {days.map((d) => (
-                    <button
-                      key={d.date}
-                      type="button"
-                      onClick={() => pickDay(d.date)}
-                      disabled={busy}
-                      className={cn(
-                        'rounded-md border px-2 py-1 text-xs whitespace-nowrap',
-                        visitDate === d.date ? 'border-foreground bg-muted font-medium' : 'border-input hover:bg-muted/40',
-                      )}
-                    >
-                      {dayLabel(d.date)}
-                    </button>
-                  ))}
-                </div>
+                {/* Calendar view (owner, 2026-09-24): days outside the 30-day window
+                    and days with no free hour are disabled; the slot is a dropdown
+                    with already-booked hours disabled. */}
+                <MinDateCalendar
+                  inline
+                  value={visitDate ?? ''}
+                  minDate={days[0].date}
+                  maxDate={days[days.length - 1].date}
+                  isDateDisabled={(iso) => !freeDays.has(iso)}
+                  onChange={pickDay}
+                  disabled={busy}
+                />
                 {visitDate && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
+                  <Select
+                    aria-label="Visit Slot"
+                    value={visitHour == null ? '' : String(visitHour)}
+                    onChange={(e) => setVisitHour(e.target.value === '' ? null : Number(e.target.value))}
+                    disabled={busy}
+                  >
+                    <option value="">Select A Slot · {dayLabel(visitDate)}</option>
                     {(days.find((d) => d.date === visitDate)?.hours ?? []).map((h) => (
-                      <button
-                        key={h.hour}
-                        type="button"
-                        onClick={() => setVisitHour(h.hour)}
-                        disabled={busy || !h.free}
-                        title={h.free ? undefined : 'Already Booked'}
-                        className={cn(
-                          'rounded-md border px-2 py-1 text-xs whitespace-nowrap',
-                          !h.free
-                            ? 'opacity-40 line-through cursor-not-allowed'
-                            : visitHour === h.hour
-                              ? 'border-foreground bg-muted font-medium'
-                              : 'border-input hover:bg-muted/40',
-                        )}
-                      >
-                        {hourLabel(h.hour)}
-                      </button>
+                      <option key={h.hour} value={h.hour} disabled={!h.free}>
+                        {hourLabel(h.hour)}{h.free ? '' : ' · Already Booked'}
+                      </option>
                     ))}
-                  </div>
+                  </Select>
                 )}
               </>
             )}
