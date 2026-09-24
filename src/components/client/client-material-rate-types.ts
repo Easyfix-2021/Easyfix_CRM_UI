@@ -10,6 +10,11 @@
  * compare against `master_price_seen` for the review flag) are this side's
  * best-effort mirror of the spec's data model + phase-1 naming conventions.
  * See the delivery report for what was assumed.
+ *
+ * 2026-09-24 tx_share redesign (owner-approved): every group and every state
+ * override now also carries `tx_share`; the picker moved to picking a
+ * MATERIAL-BRAND PAIR straight from the new master-rows endpoint (below)
+ * rather than a free brand multi-select — see ClientMaterialPriceEditor.tsx.
  */
 
 export type ClientMaterialRateBrand = { brand_id: number; brand_name: string };
@@ -17,12 +22,14 @@ export type ClientMaterialRateBrand = { brand_id: number; brand_name: string };
 export type ClientMaterialRateStateEntry = {
   state_price_id: number;
   price: number;
+  tx_share: number;
   state_ids: number[];
 };
 
 export type ClientMaterialRateGroup = {
   group_id: number;
   price: number;
+  tx_share: number;
   brands: ClientMaterialRateBrand[];
   states: ClientMaterialRateStateEntry[];
   /* Master price when this group's price was last saved/accepted. Null =
@@ -39,9 +46,27 @@ export type ClientMaterialRateItem = {
   groups: ClientMaterialRateGroup[];
 };
 
-/* GET /admin/clients/:clientId/material-rates/options — master materials not
-   yet on this client's card, for the Add Material picker. */
+/* A single material_id used as an Edit dialog's target identity — no groups
+   attached (the dialog is always seeded from the full `ClientMaterialRateItem`
+   it's opened for). */
 export type ClientMaterialRateOption = {
   material_id: number;
   material_name: string;
 };
+
+/* GET /admin/clients/:clientId/material-rates/master-rows?search=&limit= —
+   one row per MATERIAL-BRAND pair (brand_id/brand_name null = "No Brand"),
+   with the master price and per-state master prices, for the Add Materials
+   picker. `label` is the ready-to-render "Adapter 5A - Havells" / "Adapter
+   5A" string. */
+export type MasterMaterialStatePrice = { state_id: number; state_name: string; price: number };
+export type MasterMaterialRateRow = {
+  material_id: number;
+  material_name: string;
+  brand_id: number | null;
+  brand_name: string | null;
+  label: string;
+  price: number;
+  state_prices: MasterMaterialStatePrice[];
+};
+export type MasterMaterialRateRowsResponse = { items: MasterMaterialRateRow[] };
