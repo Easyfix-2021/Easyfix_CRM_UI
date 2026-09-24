@@ -406,6 +406,17 @@ export default function JobsPage() {
     rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '',
   });
   /*
+   * The four free-text filters, debounced as ONE key (2026-09-24) so typing a
+   * 10-digit mobile fires one refetch, not ten multi-second list+COUNT pairs.
+   * Only the refetch TRIGGER is debounced: load() still reads live `filters`,
+   * so whatever is on screen when it fires is what gets sent.
+   */
+  // Customer name/no. is withheld below 3 chars (2026-09-24): the backend's
+  // Joi rejects it, and a 1-2 char name term full-scans every job anyway.
+  const customerQParam = filters.customerQ.trim().length >= 3 ? filters.customerQ.trim() : '';
+  const textFiltersKey = useDebouncedValue(
+    [customerQParam, filters.clientRef, filters.efrMobile, filters.pin].join('\u0000'), 300);
+  /*
    * ── ONE FILTER PANEL FOR EVERYONE (2026-09-16) ────────────────────────────
    *
    * This page used to host the Pending-for-Scheduling card above the Filter Job
@@ -543,7 +554,7 @@ export default function JobsPage() {
       filters.clientId, filters.cityId, filters.stateId,
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
-      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      customerQParam, filters.clientRef, filters.efrMobile, filters.pin,
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.stages.join(','),
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
@@ -729,7 +740,7 @@ export default function JobsPage() {
         dateType: (filters.dateType && (filters.startDate || filters.endDate))
           ? filters.dateType
           : undefined,
-        customerQ: filters.customerQ || undefined,
+        customerQ: customerQParam || undefined,
         clientRef: filters.clientRef || undefined,
         efrMobile: filters.efrMobile || undefined,
         pin: filters.pin || undefined,
@@ -905,7 +916,7 @@ export default function JobsPage() {
       filters.clientId, filters.cityId, filters.stateId,
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
-      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      textFiltersKey,
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
       filters.stages,
@@ -1171,7 +1182,7 @@ export default function JobsPage() {
         clientId: filters.clientId, cityId: filters.cityId, stateId: filters.stateId,
         ownerId: filters.ownerId, easyfixerId: filters.easyfixerId,
         startDate: filters.startDate, endDate: filters.endDate, dateType: effectiveDateType,
-        customerQ: filters.customerQ, clientRef: filters.clientRef,
+        customerQ: customerQParam, clientRef: filters.clientRef,
         efrMobile: filters.efrMobile, pin: filters.pin,
         categoryId: filters.categoryId, verticalId: filters.verticalId,
         rating: filters.rating, reopen: filters.reopen, dueTo: filters.dueTo,
@@ -1523,7 +1534,7 @@ export default function JobsPage() {
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Customer Name / No.</label>
-                <Input placeholder="-- All --" value={filters.customerQ} onChange={(e) => setFilters({ ...filters, customerQ: e.target.value })} />
+                <Input placeholder="Min 3 characters" value={filters.customerQ} onChange={(e) => setFilters({ ...filters, customerQ: e.target.value })} />
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Client</label>
@@ -2536,7 +2547,7 @@ export default function JobsPage() {
             startDate: filters.startDate,
             endDate: filters.endDate,
             dateType: (filters.dateType && (filters.startDate || filters.endDate)) ? filters.dateType : undefined,
-            customerQ: filters.customerQ,
+            customerQ: customerQParam || undefined,
             clientRef: filters.clientRef,
             efrMobile: filters.efrMobile,
             pin: filters.pin,
