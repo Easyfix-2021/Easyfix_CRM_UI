@@ -5,7 +5,7 @@ import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecom
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { collectedByCode, collectedByLabel, collectedByDisplay, collectedByText, COLLECTED_BY_JOB_OPTIONS } from '@/lib/collected-by';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText, Video } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -48,7 +48,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
-import { maskMobile, formatServiceAddress, productsAtBooking, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
+import { maskMobile, fileKindFromName, formatServiceAddress, productsAtBooking, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { groupByQuotationNo } from '@/lib/quotation-groups';
 import { computeApprovedTotal, defaultTxShare } from '@/lib/tx-share';
@@ -4279,7 +4279,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
  * `onError` flips to the "Image not found" empty state when the BE
  * responds 404 (image lost from S3 AND local disk, or imageId stale).
  */
-function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView, isPdf }: {
+function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView, isPdf, kind }: {
   id: string;
   url: string;
   /*
@@ -4295,6 +4295,12 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
    * lightbox — which cannot display a PDF either.
    */
   isPdf?: boolean;
+  /*
+   * What the row actually holds. tbl_job_image carries videos too (technician
+   * app, public form); an <img> on an .mp4 only ever fires onError, which is
+   * why such a tile read "Lost". A video gets its own tile and opens in a tab.
+   */
+  kind?: 'image' | 'video' | 'pdf' | 'other';
   label: string;
   tooltip: string;
   /* When provided, clicking the thumbnail opens an in-app ENLARGE lightbox
@@ -4354,10 +4360,15 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
           href={authedUrl}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={(e) => { if (onView && !isPdf) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
+          onClick={(e) => { if (onView && !isPdf && kind !== 'video') { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
           className="block w-full h-full"
         >
-          {isPdf ? (
+          {kind === 'video' ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
+              <Video className="h-5 w-5" />
+              <span className="text-xs">Video</span>
+            </div>
+          ) : isPdf ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
               <FileText className="h-5 w-5" />
               <span className="text-xs">PDF</span>
@@ -4438,11 +4449,16 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         href={authedUrl}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={(e) => { if (onView && !isPdf) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
+        onClick={(e) => { if (onView && !isPdf && kind !== 'video') { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
         className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
         title={tooltip}
       >
-        {isPdf ? (
+        {kind === 'video' ? (
+          <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
+            <Video className="h-7 w-7" />
+            <span className="text-xs">Play video</span>
+          </div>
+        ) : isPdf ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
             <FileText className="h-7 w-7" />
             <span className="text-xs">Open PDF</span>
@@ -4668,7 +4684,8 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
             // Detected from the STORED filename, not the category: the feedback
             // PDF sits in tbl_job_image beside the photos and carries no marker
             // distinguishing it beyond its extension.
-            isPdf={/\.pdf$/i.test(stored)}
+            isPdf={fileKindFromName(stored) === 'pdf' || fileKindFromName(stored) === 'other'}
+            kind={fileKindFromName(stored)}
             onView={setLightbox}
           />
         );

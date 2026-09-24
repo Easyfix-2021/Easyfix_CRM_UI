@@ -63,8 +63,15 @@ test('the token is optional, so a signed-out render cannot crash', () => {
 });
 
 test('a PDF attachment renders as a document, never through <img>', () => {
-  assert.match(up, /isPdf: \/\\\.pdf\$\/i\.test\(name\)/,
-    'the PDF flag must come from the stored filename');
+  // The kind comes from the stored filename through one shared classifier
+  // (src/lib/format.ts fileKindFromName), which since 2026-09-24 also spots
+  // videos in tbl_job_image — an .mp4 through <img> is the "Lost" tile.
+  assert.match(up, /const fileKind = fileKindFromName\(name\);/,
+    'the file kind must come from the stored filename');
+  assert.match(up, /isPdf: fileKind === 'pdf' \|\| fileKind === 'other',/,
+    'a PDF — and anything else that is not an image — must not reach <img>');
+  assert.match(up, /kind: \(fileKind === 'video' \? 'video' : 'image'\)/,
+    'a video row must render as a video tile, not an image');
   assert.match(up, /m\.isPdf[\s\S]{0,200}?<FileText/,
     'a PDF tile must draw a document icon');
   // The <img> must sit on the far side of the isPdf branch.
@@ -72,7 +79,7 @@ test('a PDF attachment renders as a document, never through <img>', () => {
   const pdf = up.indexOf('m.isPdf');
   assert.ok(pdf > -1 && img > -1 && pdf < img,
     'the isPdf branch must be taken before anything reaches <img>');
-  assert.match(up, /isPdf: false,/, 'videos must declare the flag explicitly');
+  assert.match(up, /isPdf: false,/, 'tbl_job_media videos must declare the flag explicitly');
 });
 
 // ─── 1b. The original appointment ────────────────────────────────────────
