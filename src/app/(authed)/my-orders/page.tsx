@@ -147,7 +147,16 @@ type JobRow = JobAgeFields & {
    * Optional: absent on a BE deploy predating the share feature → no chip.
    */
   share?: JobShare | null;
+  /* Escalation, projected only when the list asks for it (withEscalation). */
+  is_escalated?: number | boolean | null;
+  no_of_escalations?: number | null;
+  escalated_comments?: string | null;
 };
+
+/* A flag on some rows, a count on others — both mean escalated. */
+function isJobEscalated(j: { is_escalated?: number | boolean | null; no_of_escalations?: number | null }): boolean {
+  return j.is_escalated === 1 || j.is_escalated === true || Number(j.no_of_escalations ?? 0) > 0;
+}
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
 /*
@@ -684,7 +693,6 @@ export default function MyOrdersPage() {
   // legacy addEditJob flow.
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
-  function openReassign(id: number)    { openJobAction('reassign', id); }
   /*
    * Pending to Start renders its own table, so this page has no row for the job
    * it is opening. The caller passes the status it already holds, which is what
@@ -1071,6 +1079,12 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-left font-medium">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
+                      {/* Escalated jobs must not be scrolled past, so the mark
+                          sits ON the job number — first column, every bucket —
+                          rather than in a column the eye has to travel to. */}
+                      {isJobEscalated(j) && (
+                        <span aria-label="Escalated" title={j.escalated_comments || 'Escalated'}>🔥</span>
+                      )}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                     <div className="text-xs font-normal text-muted-foreground">{j.job_reference_id ?? '—'}</div>
@@ -1233,6 +1247,12 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-left font-medium">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
+                      {/* Escalated jobs must not be scrolled past, so the mark
+                          sits ON the job number — first column, every bucket —
+                          rather than in a column the eye has to travel to. */}
+                      {isJobEscalated(j) && (
+                        <span aria-label="Escalated" title={j.escalated_comments || 'Escalated'}>🔥</span>
+                      )}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                     {j.job_reference_id && (
@@ -1448,21 +1468,11 @@ export default function MyOrdersPage() {
                           <CalendarClock className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {/*
-                        * Reassign Technician — same modal, mode=reassign.
-                        * Backend candidates query already excludes anyone
-                        * who's previously rejected/rescheduled this job.
-                        */}
-                      {j.job_status === 1 && canJob.isJobReassign && (
-                        <button
-                          type="button"
-                          onClick={() => openReassign(j.job_id)}
-                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                          title="Reassign Technician — pick a different tech from the ranked list"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                      {/* The standalone Reassign icon went on 2026-09-25 (ops),
+                          following Pending to Start, which dropped its own on
+                          2026-09-20 for the same reason: reassigning starts
+                          from the job console, where "Change technician" opens
+                          the same ranked list. One door into a job, not two. */}
                       {/* No Check-In or Check-Out row action (2026-09-11, per ops):
                           the technician checks in and out from the app. See the
                           note in JobModal's ActionBar. */}

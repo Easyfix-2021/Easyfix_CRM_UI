@@ -194,14 +194,29 @@ test('JobForm\'s JobRemarksView re-reads after its OWN Add Remarks — via a loc
 
 test('Schedule & Assign\'s Add Remarks re-reads the panel\'s thread, as its reschedule does', () => {
   const sa = strip(fs.readFileSync(path.join(SRC_DIR, 'components/job/ScheduleAssignModal.tsx'), 'utf8'));
-  const panel = strip(fs.readFileSync(path.join(SRC_DIR, 'components/job/JobContextPanel.tsx'), 'utf8'));
   const mount = sa.match(/<AddRemarksDialog\b[\s\S]*?\n\s*\/>/);
   assert.ok(mount, 'positive control: S&A must mount Add Remarks');
   const saved = mount[0].slice(mount[0].indexOf('onSaved='));
   const evictAt = saved.search(EVICT);
   assert.ok(evictAt > -1, 'the save must evict the cached thread');
   assert.ok(evictAt < saved.indexOf('setRemarksReloadKey((n) => n + 1);'), 'evict, THEN remount');
-  // The bump only helps if the panel keys the reader on it.
-  assert.match(sa, /remarksReloadKey=\{remarksReloadKey\}/);
-  assert.match(panel, /<JobRemarksView key=\{remarksReloadKey\}/);
+  /*
+   * The bump only helps if the reader is keyed on it. JobContextPanel was that
+   * reader until 2026-09-25, when the Current view was removed and Schedule &
+   * Assign became Uplifted alone — so the thread it keys is now the one in its
+   * own return.
+   *
+   * And the belt to that brace: useFetch itself now REFETCHES on invalidation
+   * (lib/hooks.ts). It did not, which is why the eviction above was inert for a
+   * mounted thread and ops had to reload the page to see a remark they had just
+   * added. Either mechanism alone would do; both is deliberate, because the
+   * remount also drops stale scroll state.
+   */
+  assert.match(sa, /<JobRemarksView key=\{remarksReloadKey\}/,
+    'the thread S&A renders must be keyed on the bump');
+  const hooks = strip(fs.readFileSync(path.join(SRC_DIR, 'lib/hooks.ts'), 'utf8'));
+  assert.match(hooks, /invalidationListeners\.add\(onInvalidate\)/,
+    'useFetch must subscribe to invalidation, or every caller that evicts is relying on a remount it does not control');
+  assert.match(hooks, /if \(enabled && k === key\) setTick/,
+    'and refetch only its own key');
 });

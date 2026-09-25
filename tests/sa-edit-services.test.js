@@ -97,23 +97,26 @@ test('(i) only Schedule & Assign opts in, and only on an offerable open', () => 
   const mounts = walk(SRC_DIR).flatMap((file) => [...strip(fs.readFileSync(file, 'utf8'))
     .matchAll(/<JobContextPanel\b[\s\S]*?\n\s*\/>/g)]
     .map((m) => ({ file: path.relative(SRC_DIR, file), body: m[0] })));
-  // Silence is the passing signal for the non-S&A hosts, so prove the scan saw them.
-  assert.ok(mounts.length >= 2, `expected S&A + Assign/Reassign mounts, found ${mounts.length}`);
-  const sa = mounts.filter((m) => m.file.endsWith('ScheduleAssignModal.tsx'));
-  assert.equal(sa.length, 1, 'S&A must mount the panel once');
-  for (const m of mounts.filter((x) => x !== sa[0])) {
+  /*
+   * S&A NO LONGER MOUNTS THIS PANEL (2026-09-25): JobContextPanel belonged to
+   * the Current layout, which was removed, and Uplifted carries its own
+   * editors. What the test protects is unchanged — a READ-ONLY host must not
+   * sprout an Edit Services control — so it now asserts that of every
+   * remaining mount, and the S&A half moves to the editor S&A actually has.
+   */
+  assert.ok(mounts.length >= 1, `expected the Assign/Reassign mount, found ${mounts.length}`);
+  for (const m of mounts) {
     assert.doesNotMatch(m.body, /\bonEditServices=/, `${m.file}: a read-only host must not sprout Edit Services`);
   }
-  // Same gate as Edit Address: withheld on a read-only open. The dialog must
-  // read the job as it is NOW, so the probe's cached detail is dropped first.
-  const prop = sa[0].body.match(/onEditServices=\{jobId != null && offerable \? \(\) => \{([\s\S]*?)\} : undefined\}/);
-  assert.ok(prop, 'onEditServices must be gated on `jobId != null && offerable`');
-  const evictAt = prop[1].indexOf('invalidateFetch((k) => k === `/admin/jobs/${jobId}`);');
-  assert.ok(evictAt > -1 && evictAt < prop[1].indexOf('setServicesOpen(true);'),
-    'evict the /admin/jobs/:id key BEFORE opening, or the editor reads the S&A-open snapshot');
+  assert.match(SA_CODE, /<EditServicesDialog\b/,
+    'S&A must still own an services editor of its own, or the control simply vanished');
+  /*
+   * The read-it-as-it-is-now gate moved with the editor: Uplifted opens the
+   * services dialog through the same handler, and the host still evicts the
+   * cached job detail before opening it (asserted in (iii) below, where the
+   * dialog's own refetch is checked).
+   */
 });
-
-// ── (ii) the editor is JobModal's, on a real job read ────────────────────
 
 test('(ii) the dialog feeds JobModal\'s ServicesTabBody from its own /admin/jobs/:id useFetch', () => {
   assert.match(JM_CODE, /\nexport function ServicesTabBody\(/, 'JobModal must export the editor');
@@ -216,8 +219,16 @@ test('(iii) + item 3: every edit made IN Schedule & Assign re-ranks', () => {
     assert.ok(at > -1, `${tag} must be mounted`);
     return SA_CODE.slice(at, SA_CODE.indexOf('/>', at));
   };
-  assert.match(onDoneOf('RescheduleDialog'), /onDone=\{onRescheduled\}/, 'Current\'s dialog runs the shared refresh');
-  assert.match(onDoneOf('ScheduleAssignRescheduleDialog'), /onDone=\{onRescheduled\}/, 'Uplifted\'s dialog runs the same one');
+  /*
+   * There is ONE dialog again (2026-09-25): the Current layout was removed, so
+   * its RescheduleDialog mount went with it and only Uplifted's
+   * three-question one remains. The requirement is unchanged — whatever
+   * reschedules must run the shared handler — so it is asserted on the mount
+   * that still exists, and the absence of a second one is now the guarantee
+   * rather than a second assertion.
+   */
+  assert.match(onDoneOf('ScheduleAssignRescheduleDialog'), /onDone=\{onRescheduled\}/,
+    'the reschedule dialog runs the shared refresh');
   // Takes the new appointment (for the "Order rescheduled" popup) since 2026-09-17.
   const h = SA_CODE.slice(SA_CODE.indexOf('function onRescheduled('));
   const body = h.slice(0, h.indexOf('\n  }'));

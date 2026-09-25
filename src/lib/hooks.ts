@@ -149,7 +149,29 @@ export function useFetch<T>(
           dataKey: s.dataKey,
         }));
       });
-    return () => { cancelled = true; };
+    /*
+     * REFETCH WHEN THIS KEY IS INVALIDATED — the half that was missing.
+     *
+     * invalidateFetch() evicts the cache AND notifies listeners, and the note
+     * above it says why the notification exists: eviction alone only helps a
+     * component that mounts again later. useFetchOnce subscribed; useFetch,
+     * which is what nearly every screen actually uses, did not. So a mounted
+     * list kept the payload it already had, and every caller that invalidated
+     * after a write was relying on something else — a `key=` remount, a parent
+     * reload — to make the change appear. Where nothing else did, ops reloaded
+     * the page: adding a remark on Schedule & Assign was one of those.
+     *
+     * Guarded on `enabled` so a disabled hook stays quiet, and on the key
+     * matching, so an unrelated eviction costs nothing.
+     */
+    const onInvalidate = (k: string) => {
+      if (enabled && k === key) setTick((t) => t + 1);
+    };
+    invalidationListeners.add(onInvalidate);
+    return () => {
+      cancelled = true;
+      invalidationListeners.delete(onInvalidate);
+    };
   }, [key, enabled, tick]);
 
   // Optional SILENT background poll — realtime opt-in via `refetchInterval`.
