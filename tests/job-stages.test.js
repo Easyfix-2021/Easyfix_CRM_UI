@@ -65,13 +65,19 @@ const only = (...stages) => ({ mode: 'list', stages });
  * status 15 is now the ONE deliberate exception to "every status belongs to
  * exactly one stage", carved out explicitly in the overlap test below rather
  * than silently breaking it.
+ *
+ * REPINNED 2026-09-24 (V3 Phase 4, D7 "Schedule Visit 2"): 'audit-complete'
+ * gained target 1 — a REVISIT job (status 10) can now be moved to SCHEDULED
+ * (1) via POST /admin/jobs/:id/schedule-visit-two (services/job.service.js
+ * reschedule machinery, same technician, visit_number bumped). Read out of
+ * EasyFix_Backend/lib/job-stages.js, not hand-copied — see the note above.
  */
 const EXPECTED = {
   'unconfirmed':        { visible: [9],     targets: [0, 6],           label: 'Unconfirmed Orders' },
   'pending-scheduling': { visible: [0],     targets: [1, 6, 9],        label: 'Pending for Scheduling' },
   'pending-start':      { visible: [1],     targets: [2, 20, 21, 6],   label: 'Pending to Start' },
   'pending-close':      { visible: [2, 20], targets: [10, 21, 6, 16], label: 'Pending to Close' },
-  'audit-complete':     { visible: [10],    targets: [3, 5, 6],        label: 'Under Audit' },
+  'audit-complete':     { visible: [10],    targets: [3, 5, 6, 1],     label: 'Under Audit' },
   'pending-feedback':   { visible: [3],     targets: [5, 6],           label: 'Pending for Feedback' },
   'completed':          { visible: [5],     targets: [],               label: 'Completed' },
   'onhold':             { visible: [21],    targets: [1, 6],           label: 'Orders in Followup' },

@@ -251,7 +251,95 @@ export const api = {
     request<Advance[] | { items?: Advance[] }>(`/admin/advances`, { method: 'GET', query: { jobId } }),
   createAdvance: (body: CreateAdvanceInput) =>
     request<{ advance_id: number }>(`/admin/advances`, { method: 'POST', body }),
+
+  /*
+   * ─── Ops Desk (3.2) + Verification (3.6) ───────────────────────────────
+   *
+   * The list GETs (`/admin/ops-desk`, `/admin/verification`, `/admin/jobs/:id/chat`,
+   * `/admin/jobs/:id/money`) are called straight through `useFetch` with an
+   * inline URL, same as JobActivity / Quotations above — a plain bounded list
+   * needs no bespoke wrapper. Only the MUTATIONS get typed helpers here,
+   * matching offerJob/rescheduleJob's precedent.
+   */
+
+  // Price & Send Estimate — creates the client-approval line + moves the job
+  // to 15 (Estimate Pending). txAmount<=clientAmount is enforced server-side;
+  // the dialog re-validates so a bad value never round-trips.
+  priceOpsDeskReport: (reportId: number, body: { clientAmount: number; txAmount: number; note?: string }) =>
+    request<{ id: number }>(`/admin/ops-desk/reports/${reportId}/price`, { method: 'POST', body }),
+
+  // Send Back To Him — additional-work report goes back to the technician
+  // for a re-shoot / re-report, with a note stating what's missing.
+  returnOpsDeskReport: (reportId: number, note: string) =>
+    request<{ id: number }>(`/admin/ops-desk/reports/${reportId}/return`, { method: 'POST', body: { note } }),
+
+  // Bench Picked Up (help reports, no body) / Verify-with-customer outcome
+  // (cant_complete reports: revisit reschedules the job, cancel closes it).
+  resolveOpsDeskReport: (
+    reportId: number,
+    body?: { outcome: 'revisit' | 'cancel'; revisitOn?: string },
+  ) =>
+    request<{ id: number }>(`/admin/ops-desk/reports/${reportId}/resolve`, { method: 'POST', body: body ?? {} }),
+
+  // Verification queue → "Pass Audit". Does NOT post the ledger — money
+  // reaches the wallet only after client QC (sheet 14 order).
+  verifyJob: (jobId: number) =>
+    request<{ job_id: number }>(`/admin/jobs/${jobId}/verify`, { method: 'POST', body: {} }),
+
+  // Job chat (3.4) — the Activity tab's thread + reply box.
+  postJobChat: (jobId: number, body: string) =>
+    request<JobChatMessage>(`/admin/jobs/${jobId}/chat`, { method: 'POST', body: { body } }),
+
+  /*
+   * ─── V3 Phase 4 — job extras (Tools to Carry / Products at Site /
+   * Signature / Schedule Visit 2) ──────────────────────────────────────
+   *
+   * GET /admin/jobs/:id/tools, GET /admin/tools, GET /admin/jobs/:id/
+   * site-products and GET /admin/jobs/:id/signature are plain bounded reads
+   * — called straight through `useFetch` with an inline URL, same
+   * precedent as the Ops Desk/Verification GETs above. Only the
+   * MUTATIONS get typed helpers here.
+   *
+   * All four are gated server-side on the same action key the CRM job
+   * edit uses (isJobEdit) — see JobModal's ServicesTabBody `canEditJob`.
+   */
+
+  // Tools to Carry — replaces the WHOLE set (PHASE4-SPEC.md BACKEND-B).
+  putJobTools: (jobId: number, toolIds: number[]) =>
+    request<{ toolIds: number[] }>(`/admin/jobs/${jobId}/tools`, { method: 'PUT', body: { toolIds } }),
+
+  // Products at Site — one row per POST; DELETE removes a single row by id.
+  addJobSiteProduct: (jobId: number, body: JobSiteProductInput) =>
+    request<JobSiteProduct>(`/admin/jobs/${jobId}/site-products`, { method: 'POST', body }),
+  deleteJobSiteProduct: (jobId: number, rowId: number) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/site-products/${rowId}`, { method: 'DELETE' }),
+
+  // Schedule Visit 2 (D7) — status 10 -> 1, same technician, visit_number
+  // bumped server-side. `visitOn` is IST wall-clock 'YYYY-MM-DDTHH:mm',
+  // sent verbatim (matches rescheduleJob's convention — never convert to UTC).
+  scheduleVisitTwo: (jobId: number, visitOn: string) =>
+    request<{ job_id: number }>(`/admin/jobs/${jobId}/schedule-visit-two`, { method: 'POST', body: { visitOn } }),
 };
+
+/*
+ * ─── Job extras contract types (PHASE4-SPEC.md "Data model" +
+ * "Backend contracts" — BACKEND-B) ──────────────────────────────────────
+ */
+
+/** GET/PUT /admin/jobs/:id/tools — the job's current Tools to Carry set. */
+/* GET/PUT /admin/jobs/:id/tools — the shape the backend really sends
+ * (routes/admin/jobs-phase4.js): the job's tools as rows, not bare ids. */
+export type JobToolsResponse = { items: { id: number; name: string }[] };
+
+/** GET /admin/tools row (tbl_tools) — shared with settings/tools + service-types. */
+export type ToolOption = { tool_id: number; tool_name: string; tool_desc?: string | null; tool_status?: number | string | null };
+
+/** tbl_job_site_product row. */
+export type JobSiteProduct = { id: number; name: string; qty: number; brand: string | null };
+export type JobSiteProductInput = { name: string; qty: number; brand?: string };
+
+/** GET /admin/jobs/:id/signature — null when no signature is on file. */
+export type JobSignatureResponse = { svg: string; width: number; height: number; signedOn: string } | null;
 
 /* ─── Billing & Charges contract types ──────────────────────────────────
  *
@@ -525,4 +613,86 @@ export type JobOffersResponse = {
  */
 export type JobOfferResult = {
   offered: number;
+};
+
+/* ─── Ops Desk (3.2) + Verification (3.6) contract types ────────────────
+ *
+ * Mirror PHASE3-SPEC.md's Admin API contracts (GET /admin/ops-desk,
+ * GET /admin/verification, GET/POST /admin/jobs/:id/chat,
+ * GET /admin/jobs/:id/money) exactly — the backend is being built in
+ * parallel against this same spec, so these are typed to the CONTRACT,
+ * not to a running endpoint.
+ */
+
+export type OpsDeskBand = 'A' | 'B' | 'C' | 'D';
+export type OpsDeskPendingOn = 'technician' | 'easyfix' | 'client';
+export type OpsDeskStartProof = 'pin' | 'pin_late' | 'photos' | null;
+
+export type OpsDeskItem = {
+  jobId: number;
+  title: string;
+  clientName: string | null;
+  locality: string | null;
+  technician: { efrId: number; name: string | null } | null;
+  jobStatus: number;
+  band: OpsDeskBand;
+  situation: string;
+  pendingOn: OpsDeskPendingOn;
+  waitingFor: string;
+  startProof: OpsDeskStartProof;
+  money: { client: number | null; tx: number | null };
+  /** Minutes-at-door, or null when there's nothing to wait for. */
+  needsMeIn: number | null;
+  report?: {
+    id: number;
+    kind: 'additional_work' | 'cant_complete' | 'cancel' | 'help';
+    status: string;
+    reasonText?: string | null;
+    proofImageIds?: number[];
+  } | null;
+  helpReason?: string | null;
+  leftSite?: boolean;
+};
+
+export type OpsDeskResponse = {
+  counts: Record<OpsDeskBand, number>;
+  items: OpsDeskItem[];
+  total: number;
+};
+
+export type VerificationItem = {
+  jobId: number;
+  title: string | null;
+  clientName: string | null;
+  technician: { efrId: number; name: string | null } | null;
+  jobStatus: number;
+  /** Present when this row is a claim (cant_complete / cancel) rather than a plain completed-job audit row. */
+  report?: OpsDeskItem['report'];
+  submittedOn: string | null;
+  /** A cancel ask with no claim row — resolved from the job, not the claim endpoint. */
+  legacyCancelAsk?: boolean;
+};
+
+export type {
+  VerificationAuditItem, VerificationClaimItem, VerificationResponse,
+} from './ops-desk';
+
+export type JobChatMessage = {
+  id: number;
+  senderKind: 'tx' | 'desk';
+  efrId: number | null;
+  userId: number | null;
+  senderName: string | null;
+  body: string;
+  sentOn: string;
+};
+
+export type JobChatResponse = {
+  items: JobChatMessage[];
+};
+
+export type JobMoneyResponse = {
+  client: number | null;
+  tx: number | null;
+  margin: number | null;
 };

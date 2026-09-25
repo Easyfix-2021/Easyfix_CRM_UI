@@ -17,6 +17,8 @@ import {
   // Pending-to-start rows open the job console; Manage Jobs' status-1 rows
   // open the same screen, so they now carry the same icon.
   PanelsTopLeft,
+  // Ops Desk header link (V3 Phase 3, spec 3.2/3.3).
+  LayoutDashboard,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -356,7 +358,7 @@ export default function JobsPage() {
   // explicit actions. The View-modal opened on row-click handles its own
   // internal Edit/Save buttons separately — gate those when the modal
   // ships a permission-aware refactor.
-  const can = actionFlags(me, ['isJobAddNew', 'isJobUpload', 'isJobEdit']);
+  const can = actionFlags(me, ['isJobAddNew', 'isJobUpload', 'isJobEdit', 'isJobAppRequestResolve']);
   // Per-row action gates — same keys /my-orders uses. Manage Jobs was
   // previously ungated, so Confirm/Schedule/Check-In/Check-Out icons
   // showed regardless of permission. That asymmetry let Admin appear to
@@ -1525,6 +1527,14 @@ export default function JobsPage() {
           <p className="text-sm text-muted-foreground">{data?.total.toLocaleString() ?? '…'} matching jobs</p>
         </div>
         <div className="flex gap-2">
+          {/* Ops Desk header link (spec 3.2/3.3) — same action key as the
+              page itself, so this link never shows the guard to someone who
+              can't get past it. */}
+          {can.isJobAppRequestResolve && (
+            <Button variant="outline" asChild>
+              <Link href="/ops-desk"><LayoutDashboard className="h-4 w-4 mr-1" /> Ops Desk</Link>
+            </Button>
+          )}
           {can.isJobUpload && (
             <Button variant="outline" asChild>
               <Link href="/jobs/upload"><Upload className="h-4 w-4 mr-1" /> Upload Excel</Link>

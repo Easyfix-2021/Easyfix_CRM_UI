@@ -56,7 +56,7 @@ export type StageDef = {
  *   pending-scheduling   [0]               [1,6,9]             Pending for Scheduling
  *   pending-start        [1]               [2,20,21,6]         Pending to Start
  *   pending-close        [2,20]            [10,21,6]           Pending to Close
- *   audit-complete       [10]              [3,5,6]             Under Audit
+ *   audit-complete       [10]              [3,5,6,1]           Under Audit
  *   pending-feedback     [3]               [5,6]               Pending for Feedback
  *   completed            [5]               []                  Completed
  *   onhold               [21]              [1,6]               Orders in Followup
@@ -96,8 +96,15 @@ export const STAGES: Record<StageKey, StageDef> = {
    * b['10'] while linking to a tab that showed [3,5].
    * The 'audit-complete' SLUG is kept on purpose: bookmarks and the legacy
    * redirect map (PendingForCheckout = 10) point at it.
+   *
+   * Target 1 added (V3 Phase 4, D7 "Schedule Visit 2") — a REVISIT job
+   * (status 10) with open additional work closes as a revisit and now also
+   * needs a second-visit appointment; the desk books it via POST
+   * /admin/jobs/:id/schedule-visit-two, which moves the job 10 -> 1
+   * (SCHEDULED), same technician. Mirrors lib/job-stages.js's 'audit-complete'
+   * row verbatim — keep the two in parity (tests/job-stages-parity.test.js).
    */
-  'audit-complete':     { key: 'audit-complete',     label: 'Under Audit',            visibleStatuses: [10],     transitionTargets: [3, 5, 6] },
+  'audit-complete':     { key: 'audit-complete',     label: 'Under Audit',            visibleStatuses: [10],     transitionTargets: [3, 5, 6, 1] },
   'pending-feedback':   { key: 'pending-feedback',   label: 'Pending for Feedback',   visibleStatuses: [3],      transitionTargets: [5, 6] },
   'completed':          { key: 'completed',          label: 'Completed',              visibleStatuses: [5],      transitionTargets: [] },
   'onhold':             { key: 'onhold',             label: 'Orders in Followup',     visibleStatuses: [21],     transitionTargets: [1, 6] },
