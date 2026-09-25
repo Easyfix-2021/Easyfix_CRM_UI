@@ -56,6 +56,8 @@ export type CallRow = {
    * boolean is all it needed. MySQL returns 1/0.
    */
   has_recording: number | boolean | null;
+  // 1 when audio is proven NOT to exist (see RecordingCell). MySQL returns 1/0.
+  recording_lost?: number | boolean | null;
   start_time: string | null;
   inserted_time: string | null;
   // Counterparty classification added by the backend when scoped to a job.
@@ -146,6 +148,15 @@ function RecordingCell({ row }: { row: CallRow }) {
   // Kaleyra rows carry an https recording URL; Plivo rows only *might* have one
   // (recorded + connected) — the endpoint 404s cleanly when there's none.
   const isPlivo = String(row.provider ?? '').toLowerCase() === 'plivo';
+  // Proven absent (the 24–25 Sep recording outage) — say so up front instead of
+  // a Play that can only 404. See recording_lost in GET /admin/calls.
+  if (row.recording_lost) {
+    return (
+      <span className="text-xs italic text-muted-foreground" title="This call was not recorded (recording outage, 24–25 Sep)">
+        No recording
+      </span>
+    );
+  }
   const canPlay = !!row.has_recording || (isPlivo && (row.duration ?? 0) > 0);
   if (!canPlay) {
     // A Plivo call with no duration never connected → there is no recording to
