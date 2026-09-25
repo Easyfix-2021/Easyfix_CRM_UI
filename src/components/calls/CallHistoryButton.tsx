@@ -23,7 +23,7 @@
  */
 
 import * as React from 'react';
-import { Info, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
+import { PhoneCall, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -357,14 +357,17 @@ export function CallHistoryButton({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-        title="View call history for this job"
-        aria-label="View call history for this job"
+        title="Calls &amp; recordings for this job"
+        aria-label="Calls and recordings for this job"
         className={cn(
           'inline-flex items-center align-middle text-primary hover:text-brand-600',
           className,
         )}
       >
-        <Info className="h-4 w-4" />
+        {/* A HANDSET, not an ⓘ. The old icon read as "information" and ops did
+            not associate it with calls at all. Not headphones: this lists every
+            call on the job, including ones with no recording to play. */}
+        <PhoneCall className="h-4 w-4" />
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

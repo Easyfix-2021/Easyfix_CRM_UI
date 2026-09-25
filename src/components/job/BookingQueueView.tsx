@@ -105,11 +105,15 @@ type JobsQuery = Record<string, string | number | undefined>;
  * whole bucket. Day N = N IST calendar days since the ticket came in.
  */
 /*
- * The tile the page opens on, and the one Clear filter returns to: those
- * customers have already answered and are one click from booked — the fastest
- * work on the board.
+ * NO TILE IS SELECTED ON ARRIVAL (ops, 2026-09-25): the page opens on the WHOLE
+ * queue, newest job first, and a tile narrows it. Opening pre-filtered meant
+ * every operator's first action was to undo a choice the page had made for
+ * them — and the count on screen did not match the count in the header.
+ *
+ * `null` is therefore a real state, not "not loaded yet": no bucket goes to the
+ * server, so the grid lists every open order.
  */
-const DEFAULT_BUCKET: BucketKey = 'response_received';
+const DEFAULT_BUCKET: BucketKey | null = null;
 
 const DAYS: { key: DayKey; label: string }[] = [
   { key: '0', label: 'Day 0' },
@@ -155,7 +159,7 @@ export function BookingQueueView({
    * already answered and are one click from being booked — the fastest work on
    * the board — whereas New is waiting on a cron nobody has to watch.
    */
-  const [bucket, setBucket] = useState<BucketKey>(DEFAULT_BUCKET);
+  const [bucket, setBucket] = useState<BucketKey | null>(DEFAULT_BUCKET);
   /*
    * The day pill inside the selected tile, or null for the whole bucket.
    * Cleared whenever the tile changes: "Day 2" of one bucket means nothing in
@@ -172,7 +176,8 @@ export function BookingQueueView({
    * buckets and the other My Orders tabs keep their own ordering. Server-side,
    * so it orders the whole bucket rather than the ten rows on screen.
    */
-  const [sortKey, setSortKey] = useState<string | null>(null);
+  /* Newest job first until somebody clicks a column header (ops, 2026-09-25). */
+  const [sortKey, setSortKey] = useState<string | null>('job_id');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   function toggleSort(col: string) {
     const next = cycleSort<string>(col, { sortBy: sortKey, sortDir });
@@ -188,7 +193,18 @@ export function BookingQueueView({
    */
   const [reloadKey, setReloadKey] = useState(0);
 
+  /*
+   * A SECOND CLICK ON THE SAME TILE CLEARS IT (ops, 2026-09-25) — the tile is a
+   * toggle, not a radio button, so the way back to "everything" is the control
+   * you just used rather than a different one somewhere else.
+   *
+   * Clicking a DIFFERENT tile always selects it, and picking a day pill always
+   * selects its tile: only the exact same selection turns itself off.
+   */
   function pickBucket(b: BucketKey, d: DayKey | null = null) {
+    const sameTile = bucket === b;
+    const sameDay = day === d;
+    if (sameTile && sameDay) { setBucket(null); setDay(null); setPage(0); return; }
     setBucket(b);
     setDay(d);
     setPage(0);
@@ -206,11 +222,11 @@ export function BookingQueueView({
    */
   const rowsKey = buildJobsKey({
     ...query,
-    bucket: escalated ? undefined : bucket,
+    bucket: escalated ? undefined : (bucket ?? undefined),
     // The day pill rides INSIDE the bucket predicate server-side, so the grid
     // gets exactly the rows the pill counted rather than a second filter that
     // looks right on its own.
-    ageDay: escalated ? undefined : (day ?? undefined),
+    ageDay: escalated || !bucket ? undefined : (day ?? undefined),
     isEscalated: escalated ? 'true' : undefined,
     customerRescheduled: rescheduled ? 'true' : undefined,
     sortBy: sortKey || undefined,
@@ -257,7 +273,7 @@ export function BookingQueueView({
   }
 
   const c = counts.data;
-  const anyFilter = escalated || rescheduled || !!day;
+  const anyFilter = escalated || rescheduled || !!day || !!bucket;
   useEffect(() => {
     if (c) onCounts?.(`Open orders: ${c.total.toLocaleString()} · link already sent for ${c.links_sent.toLocaleString()}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -294,8 +310,8 @@ export function BookingQueueView({
         <Tile
           label="Response received" tone="info" hint="the customer answered"
           open={c?.open.response_received} days={c?.days?.response_received}
-          selected={bucket.startsWith('response')}
-          activeDay={bucket.startsWith('response') ? day : null}
+          selected={!!bucket && bucket.startsWith('response')}
+          activeDay={bucket && bucket.startsWith('response') ? day : null}
           onPick={(d) => pickBucket('response_received', d)}
           /*
            * Response received carries BOTH splits, and they answer different
@@ -348,7 +364,7 @@ export function BookingQueueView({
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
           <span>
             <strong className="text-foreground">{rows.data?.total ?? '—'}</strong> open ·{' '}
-            {escalated ? 'Escalated · every bucket' : TILE_LABEL[bucket]}
+            {escalated ? 'Escalated · every bucket' : bucket ? TILE_LABEL[bucket] : 'All unconfirmed orders'}
             {!escalated && day && ` · ${DAYS.find((d) => d.key === day)?.label}`}
             {rescheduled && ' · rescheduled by customer'}
           </span>
@@ -365,7 +381,7 @@ export function BookingQueueView({
           <BookingQueueTable
             rows={rows.data?.items ?? []}
             loading={rows.loading}
-            bucket={bucket}
+            bucket={bucket ?? undefined}
             onMagicLinkSent={handleMutation}
             sortBy={sortKey}
             sortDir={sortDir}

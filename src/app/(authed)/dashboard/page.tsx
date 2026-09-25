@@ -70,6 +70,12 @@ type FlowCard = {
   tint: string;       // card surface + on-tint text; see the adjacency rule below
   statKey: keyof Stats;
   href: string;       // deep-link into jobs list
+  /*
+   * Only the first three are links (ops, 2026-09-25) — see FlowCardTile. The
+   * rest stay display-only, so this is a flag per card rather than a blanket
+   * reversal of the 2026-06-04 decision.
+   */
+  clickable?: boolean;
 };
 type Stats = {
   followup: number;
@@ -120,9 +126,9 @@ type Stats = {
  * rather than appending whichever colour looks free.
  */
 const FLOW: FlowCard[] = [
-  { title: 'Unconfirmed Orders',      sub: 'Booked from web / API',     icon: ShoppingCart,  tint: 'bg-urgent-tint text-urgent-strong',          statKey: 'unconfirmed',       href: '/my-orders?tab=unconfirmed' },
-  { title: 'Pending for Scheduling',  sub: 'Confirmed, no tech yet',    icon: CalendarClock, tint: 'bg-warning-tint text-warning-strong',    statKey: 'pendingScheduling', href: '/my-orders?tab=pending-scheduling' },
-  { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'bg-info-tint text-info-strong',          statKey: 'pendingToStart',    href: '/my-orders?tab=pending-start' },
+  { title: 'Unconfirmed Orders',      sub: 'Booked from web / API',     icon: ShoppingCart,  tint: 'bg-urgent-tint text-urgent-strong',          statKey: 'unconfirmed',       href: '/my-orders?tab=unconfirmed' , clickable: true },
+  { title: 'Pending for Scheduling',  sub: 'Confirmed, no tech yet',    icon: CalendarClock, tint: 'bg-warning-tint text-warning-strong',    statKey: 'pendingScheduling', href: '/my-orders?tab=pending-scheduling' , clickable: true },
+  { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'bg-info-tint text-info-strong',          statKey: 'pendingToStart',    href: '/my-orders?tab=pending-start' , clickable: true },
   { title: 'Pending App Ack',         sub: 'Assigned, awaiting tech',   icon: BellRing,      tint: 'bg-neutral-tint text-neutral-strong',      statKey: 'pendingAppAck',     href: '/my-orders?tab=pending-app-ack' },
   { title: 'Pending to Close',        sub: 'Technician on-site',        icon: CheckCircle2,  tint: 'bg-info-tint text-info-strong',        statKey: 'pendingToClose',    href: '/my-orders?tab=pending-close' },
   { title: 'Under Audit',             sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'bg-success-tint text-success-strong',  statKey: 'auditComplete',     href: '/my-orders?tab=audit-complete' },
@@ -176,13 +182,19 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
     3000,
     Math.round((Math.max(titleExit, subExit) / PX_PER_SEC) * 1000),
   );
-  // Dashboard cards are now display-only — clicks disabled per ops 2026-06-04.
-  // Previously each card linked to `/my-orders?tab=<slug>`; that drove operators
-  // off the dashboard mid-glance. The funnel-narrative + count read better as a
-  // single overview surface; navigation lives on the sidebar / Jobs menu now.
-  // Hover lift / shadow stay so the cards still feel alive, just non-interactive.
-  return (
-    <div className="block h-full group/card cursor-default">
+  /*
+   * Cards were made display-only on 2026-06-04: linking every one of them drove
+   * operators off the dashboard mid-glance, and the funnel read better as a
+   * single overview.
+   *
+   * PARTIALLY REVERSED (ops, 2026-09-25): the first three — Unconfirmed,
+   * Pending for Scheduling, Pending to Start — are the queues people actually
+   * work out of, and they were clicking them anyway and finding nothing
+   * happened. The other five stay as they are, so the glance surface survives;
+   * `clickable` on the card is what says which is which.
+   */
+  const inner = (
+    <div className={`block h-full group/card ${card.clickable ? 'cursor-pointer' : 'cursor-default'}`}>
       <div className={`rounded-lg ${card.tint} shadow-sm p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
         <div className="flex items-center justify-between">
           <div className="h-7 w-7 rounded-md bg-card/60 grid place-items-center shrink-0">
@@ -214,6 +226,12 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
         </div>
       </div>
     </div>
+  );
+  if (!card.clickable) return inner;
+  return (
+    <Link href={card.href} className="block h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg">
+      {inner}
+    </Link>
   );
 }
 

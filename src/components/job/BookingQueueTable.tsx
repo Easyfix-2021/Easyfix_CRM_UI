@@ -76,6 +76,9 @@ export type BookingQueueRow = JobAgeFields & {
   last_attempt_at?: string | null;
   last_attempt_kind?: 'link' | 'sms' | 'call' | null;
   transferred_at?: string | null;
+  /* 'local' | 'travel' | null — computed server-side from the job's PIN and who
+     serves it. NULL means the job has no PIN, so the question is unanswerable. */
+  coverage?: 'local' | 'travel' | null;
   /* The latest comment on the job — NOT tbl_job.remarks, which the next write
      overwrites. See attemptColumns() in booking-queue.service.js. */
   latest_comment?: string | null;
@@ -125,6 +128,25 @@ const HEAD: Record<Col, string> = {
 
 /** Three attempt-days and the order stops being ours. Mirrors the backend. */
 const ATTEMPTS_TO_TRANSFER = 3;
+
+/*
+ * WHICH BUCKET A ROW IS IN, worked out from the row itself.
+ *
+ * Needed only when NO tile is selected — in every other case the server has
+ * already filtered, and the selection is the answer. This mirrors
+ * bucketPredicate() in booking-queue.service.js and, like every mirror, can
+ * drift from it; it drives a LABEL only, never which rows are listed, so a
+ * disagreement shows up as a mislabelled chip rather than a missing order.
+ */
+function bucketOf(j: BookingQueueRow): BucketKey {
+  const answered = !!j.customer_submitted_at || !!j.pending_request_type;
+  if (answered) return 'response_received';
+  if (Number(j.attempts_count ?? 0) >= 3 || j.transferred_at) return 'client_queue';
+  if (j.client_opted_in === 0 || j.client_opted_in === false) return 'no_link_needed';
+  if (j.magic_link_delivery_status === 'failed' || j.magic_link_delivery_status === 'undelivered') return 'delivery_failed';
+  if (j.magic_link_sent_at) return 'no_response';
+  return 'new';
+}
 
 /*
  * Escalation arrives as a flag on some rows and a count on others (the
@@ -259,7 +281,9 @@ export function BookingQueueTable({
 }: {
   rows: BookingQueueRow[];
   loading?: boolean;
-  bucket: BucketKey;
+  /* Undefined = no tile selected: the grid is the whole queue, so the Bucket
+     column names each row's OWN bucket rather than the one that was clicked. */
+  bucket?: BucketKey;
   canConfirm?: boolean;
   canSendMagicLink?: boolean;
   userIsAdmin?: boolean;
@@ -270,7 +294,7 @@ export function BookingQueueTable({
   sortDir?: SortDir;
   onSort?: (col: string) => void;
 }) {
-  const key = bucket.startsWith('response') ? 'response_received' : bucket;
+  const key = !bucket ? 'all' : bucket.startsWith('response') ? 'response_received' : bucket;
   const cols = COLUMNS;
   /*
    * The popup is controlled and renders ONCE, outside the table — mounting one
@@ -313,12 +337,16 @@ export function BookingQueueTable({
         return (
           <>
             <div>{j.city_name ?? '—'}</div>
-            {/* Coverage is not computed yet (ops: "keep all local for now"), so
-                it is labelled as a placeholder rather than dressed up as an
-                answer — a chip that is always LOCAL should not look measured. */}
-            <StatusChip tone="emerald" size="sm" title="Coverage is not computed yet — every order shows LOCAL">
-              LOCAL
-            </StatusChip>
+            {/* LOCAL when a technician serves this PIN, TRAVEL when none does,
+                and NOTHING AT ALL when the job has no PIN — that last case is
+                unanswerable, and a green LOCAL on it would be a guess wearing
+                the clothes of a measurement. */}
+            {j.coverage === 'local' && (
+              <StatusChip tone="emerald" size="sm" title="A technician serves this PIN code">LOCAL</StatusChip>
+            )}
+            {j.coverage === 'travel' && (
+              <StatusChip tone="sky" size="sm" title="No technician serves this PIN code — somebody has to travel">TRAVEL</StatusChip>
+            )}
           </>
         );
       case 'appt':
@@ -338,9 +366,11 @@ export function BookingQueueTable({
           </>
         );
       case 'bucket':
-        return bucketCell(key, j);
+        // With no tile selected every row can be in a different bucket, so the
+        // cell has to work it out per row rather than trust the selection.
+        return bucketCell(key === 'all' ? bucketOf(j) : key, j);
       case 'nextAction':
-        return nextActionCell(key, j);
+        return nextActionCell(key === 'all' ? bucketOf(j) : key, j);
       case 'remarks':
         return (
           <span className="block max-w-[15rem] truncate text-xs text-muted-foreground" title={j.latest_comment ?? undefined}>

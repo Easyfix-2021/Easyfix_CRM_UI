@@ -9,6 +9,7 @@ import type { JobOffer } from '@/lib/api';
 import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { formatServiceAddress, productsAtBooking } from '@/lib/format';
 import { collectedByText } from '@/lib/collected-by';
 import { useMe } from '@/lib/auth-context';
@@ -472,7 +473,14 @@ export function ScheduleAssignUplifted({
             </p>
           </div>
           <div className="bg-card px-3 py-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current state</p>
+            <p className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Current state
+              {/* Calls + recordings, here as well as on the queue: this console
+                  is where an operator decides what to do next, and "what has
+                  already been said to this customer" is part of that decision.
+                  Same component, so there is one call history in the CRM. */}
+              {job?.job_id != null && <CallHistoryButton jobId={job.job_id} />}
+            </p>
             <p className="flex flex-wrap items-center gap-1">
               <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${stateOverride?.chipClass ?? tone.chip}`}>{stateOverride?.label ?? tone.state}</span>
               {stateOverride?.extra}
