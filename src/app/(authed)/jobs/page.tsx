@@ -232,7 +232,17 @@ function closureReason(j: JobRow): Closure | null {
   return null;
 }
 
-function RemarkCell({ j }: { j: JobRow }) {
+/*
+ * THE CELL'S CONTENTS ONLY — the <td> stays in the row, deliberately.
+ *
+ * tests/manage-jobs-table.test.js counts one <td> per <th> across the two
+ * hand-written runs, which is what catches a column added to one side and not
+ * the other; a component that swallowed the <td> made the row read one cell
+ * short and the whole invariant went red. The same suite indexes the cell run
+ * positionally (Job Id is cells[1]), so hiding a <td> inside a component would
+ * silently shift those assertions too.
+ */
+function RemarkText({ j }: { j: JobRow }) {
   const closed = closureReason(j);
   // A cancelled job with NEITHER a reason nor a comment falls through to the
   // ordinary latest-comment rendering, so the cell never loses a comment it
@@ -244,19 +254,11 @@ function RemarkCell({ j }: { j: JobRow }) {
       closed.reason && closed.comment ? `Comment: ${closed.comment}` : null,
       j.last_comment ? `Latest comment: ${j.last_comment}` : null,
     ].filter(Boolean).join('\n');
-    return (
-      <td className="text-xs max-w-[16rem]">
-        <span className="line-clamp-2 break-words" title={title}>{text}</span>
-      </td>
-    );
+    return <span className="line-clamp-2 break-words" title={title}>{text}</span>;
   }
-  return (
-    <td className="text-xs max-w-[16rem]">
-      {j.last_comment
-        ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
-        : <span className="text-muted-foreground">—</span>}
-    </td>
-  );
+  return j.last_comment
+    ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
+    : <span className="text-muted-foreground">—</span>;
 }
 
 /*
@@ -2186,8 +2188,8 @@ export default function JobsPage() {
                          that have no columns of their own. Clamped to two lines
                          with the full text on hover; comments are free text and
                          a long one would set the row height for the whole
-                         page. See RemarkCell. */}
-                  <RemarkCell j={j} />
+                         page. See RemarkText. */}
+                  <td className="text-xs max-w-[16rem]"><RemarkText j={j} /></td>
                   {/* 5. Open Due to — the accountable PARTY, not the reason
                          text. Same reason row as legacy's Remark column, which
                          is why the two were blank together there. */}
