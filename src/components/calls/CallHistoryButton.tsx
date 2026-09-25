@@ -23,7 +23,7 @@
  */
 
 import * as React from 'react';
-import { PhoneCall, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
+import { Headset, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -364,10 +364,12 @@ export function CallHistoryButton({
           className,
         )}
       >
-        {/* A HANDSET, not an ⓘ. The old icon read as "information" and ops did
-            not associate it with calls at all. Not headphones: this lists every
-            call on the job, including ones with no recording to play. */}
-        <PhoneCall className="h-4 w-4" />
+        {/* A HEADSET (ops, 2026-09-25) — the call-centre icon people already
+            read as "the calls on this job". It replaced an ⓘ, which read as
+            "information", and then a ringing handset, which read as "place a
+            call" — this opens a history, it does not dial. Sized with its
+            neighbours (h-3.5) rather than standing proud of the row. */}
+        <Headset className="h-3.5 w-3.5" />
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

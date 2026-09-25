@@ -210,7 +210,16 @@ export function BookingQueueView({
     setPage(0);
   }
 
-  const countsKey = `/admin/jobs/booking-queue${ownerId ? `?ownerId=${ownerId}` : ''}`;
+  /*
+   * The search term goes to the TILES as well as the rows (ops, 2026-09-25).
+   * Typing a client name narrowed the list while every tile kept the whole
+   * board's number, so the strip stopped adding up to what was under it. The
+   * backend applies the same predicate the grid's own WHERE uses.
+   */
+  const countsKey = buildJobsKey({
+    ownerId,
+    q: (query.q as string) || undefined,
+  }).replace('/admin/jobs?', '/admin/jobs/booking-queue?');
   const counts = useFetch<Counts>(countsKey);
 
   /*

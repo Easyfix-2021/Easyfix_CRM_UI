@@ -10,10 +10,13 @@ import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, CalendarCheck, MapPin, RefreshCw,
+  Eye, CalendarClock, CalendarCheck, MapPin,
   ClipboardCheck, ClipboardList, CheckCircle2,
   // Escalated jobs carry the same flame the Schedule & Assign console uses.
   Flame,
+  // Pending-to-start rows open the job console; Manage Jobs' status-1 rows
+  // open the same screen, so they now carry the same icon.
+  PanelsTopLeft,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -2430,11 +2433,19 @@ export default function JobsPage() {
                         * without owning it — of which there are none today, and
                         * that is not a property worth depending on.
                         */}
+                      {/*
+                        * THE SAME ICON THE PENDING-TO-START BUCKET USES (ops,
+                        * 2026-09-25). It always opened the same screen — and
+                        * since the Current/Uplifted switch went, that screen IS
+                        * the job console, on both pages. Two icons for one
+                        * destination read as two different things, and ops
+                        * asked for them to match.
+                        */}
                       {j.job_status === 1 && canJob.isJobReassign && (
                         <IconButton
-                          icon={RefreshCw}
+                          icon={PanelsTopLeft}
                           intent="primary"
-                          label="Reassign Technician — pick a different tech from the ranked list"
+                          label="Open job console — change technician, reschedule, add remarks"
                           onClick={() => openReassign(j.job_id)}
                         />
                       )}
