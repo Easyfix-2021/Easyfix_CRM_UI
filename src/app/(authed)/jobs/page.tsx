@@ -189,7 +189,79 @@ type JobRow = JobAgeFields & {
      tbl_user, which is better than the denormalised varchar legacy printed. */
   escalated_by_name?: string | null;
   escalated_time?: string | null;
+  /* Why a terminal row is terminal — action_taken_reason.action_desc reached
+     through the FK that belongs to the status, plus the operator's free text.
+     status 6 Cancelled reads the cancel_* pair, status 7 Enquiry the enquiry_*
+     pair; they are meaningless at any other status. enquiry_* arrive NULL on a
+     deploy whose tbl_job predates those columns (the BE probes), which reads
+     the same as "no reason recorded". */
+  cancel_reason_name?: string | null;
+  cancel_comment?: string | null;
+  enquiry_reason_name?: string | null;
+  enquiry_comment?: string | null;
 };
+
+/*
+ * ── The Remark cell (2026-09-25, ops) ──────────────────────────────────────
+ *
+ * Remark renders the job's LATEST COMMENT, and on a Failed Order it was almost
+ * always an em-dash: closing a job from the cancel dialog writes a REASON and,
+ * usually, nothing else — no comment row. On QA, 6,362 of the newest 21,879
+ * cancelled jobs have a reason recorded and no comment at all. So the column an
+ * operator scans to find out what happened to a cancelled job was blank on
+ * exactly those rows.
+ *
+ * On status 6 / 7 the cell now shows the closure reason (legacy's "reason
+ * remarks", the same action_taken_reason.action_desc the XLSX sheet's
+ * Cancel/Enquiry Reason column prints), and the latest comment — when there is
+ * one — moves into the hover title rather than displacing it. Every other
+ * status is untouched.
+ *
+ * THE REASON TEXT ALONE, with no "Cancelled: " / "Enquiry: " prefix (ops,
+ * 2026-09-25): Bucket and Bucket Status already name the state two columns
+ * over, so the prefix only ate width off a cell clamped to two lines. `label`
+ * survives on the Closure type because it still says WHICH id the reason came
+ * from — see closureReason.
+ *
+ * NOT the Open Due to row: that one answers "who is this job still open on",
+ * and on a cancelled job it can resolve to the pending reason instead of the
+ * cancellation. Two questions, two reason rows — see manageColumns in the BE.
+ */
+type Closure = { label: string; reason: string | null; comment: string | null };
+function closureReason(j: JobRow): Closure | null {
+  if (j.job_status === 6) return { label: 'Cancelled', reason: j.cancel_reason_name ?? null, comment: j.cancel_comment ?? null };
+  if (j.job_status === 7) return { label: 'Enquiry', reason: j.enquiry_reason_name ?? null, comment: j.enquiry_comment ?? null };
+  return null;
+}
+
+/*
+ * THE CELL'S CONTENTS ONLY — the <td> stays in the row, deliberately.
+ *
+ * tests/manage-jobs-table.test.js counts one <td> per <th> across the two
+ * hand-written runs, which is what catches a column added to one side and not
+ * the other; a component that swallowed the <td> made the row read one cell
+ * short and the whole invariant went red. The same suite indexes the cell run
+ * positionally (Job Id is cells[1]), so hiding a <td> inside a component would
+ * silently shift those assertions too.
+ */
+function RemarkText({ j }: { j: JobRow }) {
+  const closed = closureReason(j);
+  // A cancelled job with NEITHER a reason nor a comment falls through to the
+  // ordinary latest-comment rendering, so the cell never loses a comment it
+  // used to show.
+  const text = closed ? (closed.reason ?? closed.comment ?? null) : null;
+  if (closed && text) {
+    const title = [
+      text,
+      closed.reason && closed.comment ? `Comment: ${closed.comment}` : null,
+      j.last_comment ? `Latest comment: ${j.last_comment}` : null,
+    ].filter(Boolean).join('\n');
+    return <span className="line-clamp-2 break-words" title={title}>{text}</span>;
+  }
+  return j.last_comment
+    ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
+    : <span className="text-muted-foreground">—</span>;
+}
 
 /*
  * Master / Under Master / Individual, from tbl_easyfixer.efr_manager_id (a
@@ -2134,18 +2206,16 @@ export default function JobsPage() {
                       <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
                     </div>
                   </td>
-                  {/* 4. Remark — THE LATEST COMMENT on the job, per ops. Not
-                         j.remarks: only one of the platform's comment writers
-                         mirrors into that column, and it doubles as a
-                         serialisation format for two fields that have no
-                         columns of their own. Clamped to two lines with the
-                         full text on hover; comments are free text and a long
-                         one would set the row height for the whole page. */}
-                  <td className="text-xs max-w-[16rem]">
-                    {j.last_comment
-                      ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
-                      : <span className="text-muted-foreground">—</span>}
-                  </td>
+                  {/* 4. Remark — THE LATEST COMMENT on the job, per ops (and the
+                         CLOSURE REASON on a cancelled / enquiry row, which has
+                         no comment to show). Not j.remarks: only one of the
+                         platform's comment writers mirrors into that column,
+                         and it doubles as a serialisation format for two fields
+                         that have no columns of their own. Clamped to two lines
+                         with the full text on hover; comments are free text and
+                         a long one would set the row height for the whole
+                         page. See RemarkText. */}
+                  <td className="text-xs max-w-[16rem]"><RemarkText j={j} /></td>
                   {/* 5. Open Due to — the accountable PARTY, not the reason
                          text. Same reason row as legacy's Remark column, which
                          is why the two were blank together there. */}
