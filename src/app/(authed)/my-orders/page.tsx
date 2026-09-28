@@ -1,7 +1,9 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
+import {
+  useJobActionParams, useJobActionNav, isJobModalAction, useGuardedJobAction,
+} from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, CalendarCheck,
@@ -27,7 +29,7 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
 import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
 import { canApproveOnClientsBehalf } from '@/lib/client-approval';
-import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
+import { BookingQueueView } from '@/components/job/BookingQueueView';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
@@ -48,9 +50,19 @@ import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/componen
 import { useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
+/*
+ * Columns in the Pending-for-Scheduling table — Job ID, Age, Ticket Created
+ * Date, Client, Client SPOC, City, Service Category, Appointment, Customer,
+ * Current Status, Open Reason, Action. Named once so the loading skeleton and
+ * the empty state cannot drift from <thead> again, which is exactly what
+ * happened when the Job Ref column was folded under the Job ID.
+ */
+const PS_COLUMN_COUNT = 12;
+
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
 const JOBS_MAX_LIMIT = 500;
+
 
 /*
  * MY ORDERS — user-scoped view of tbl_job.
@@ -135,7 +147,16 @@ type JobRow = JobAgeFields & {
    * Optional: absent on a BE deploy predating the share feature → no chip.
    */
   share?: JobShare | null;
+  /* Escalation, projected only when the list asks for it (withEscalation). */
+  is_escalated?: number | boolean | null;
+  no_of_escalations?: number | null;
+  escalated_comments?: string | null;
 };
+
+/* A flag on some rows, a count on others — both mean escalated. */
+function isJobEscalated(j: { is_escalated?: number | boolean | null; no_of_escalations?: number | null }): boolean {
+  return j.is_escalated === 1 || j.is_escalated === true || Number(j.no_of_escalations ?? 0) > 0;
+}
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
 /*
@@ -357,6 +378,7 @@ export default function MyOrdersPage() {
    * "N matching orders" header — bumped wherever a JobModal save lands.
    */
   const [sectionsReload, setSectionsReload] = useState(0);
+
   /*
    * Bumped after any action that can move a job between scheduling buckets
    * (offering one sends it Not offered → Offered-waiting). The tab counts are a
@@ -575,8 +597,36 @@ export default function MyOrdersPage() {
    * the canonical schema by `useJobActionParams`. Other params
    * (e.g. `?tab=scheduled`) are preserved across pushes.
    */
-  const { jobId: urlJobId, action: urlAction } = useJobActionParams();
+  const { jobId: urlJobId } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
+
+  /*
+   * ── URL → SCREEN GUARD (ops, 2026-09-20, reworked 2026-09-21) ─────────────
+   *
+   * The action lives in the URL, so it can be typed. Pasting a COMPLETED job's
+   * id under `?action=schedule` would open Schedule & Assign on it — a write
+   * console with Edit Services inside, on a job whose service lines are its
+   * billing lines. The screen follows the job's status instead; the map lives
+   * in lib/job-action-url so Manage Jobs shares it verbatim.
+   *
+   * EVERY MODAL MEMO BELOW READS `openAction`, NOT THE RAW URL. That is the
+   * whole point of the rework: the first version opened what the URL asked for
+   * and corrected itself afterwards, so the operator got wrong console →
+   * spinner → toast → close → right screen → spinner. Deciding first makes it
+   * one open and no close.
+   *
+   * `rowStatus` is what keeps that free. A job on this page carries its own
+   * status, so a click resolves in the same render with no request at all.
+   * `reportedStatus` covers the rows this page does NOT hold — Pending to Start
+   * renders its own table and hands the status up when it opens the console —
+   * and only a pasted link for a job on neither path falls back to the probe.
+   */
+  const reportedStatus = useRef<Map<number, number>>(new Map());
+  const rowStatus = urlJobId == null
+    ? undefined
+    : (data?.items ?? []).find((r) => r.job_id === urlJobId)?.job_status
+      ?? reportedStatus.current.get(urlJobId);
+  const { action: openAction, jobId: openJobId } = useGuardedJobAction(rowStatus);
 
   /*
    * JobModal opens for the actions in JOBMODAL_ACTIONS (create / view / checkin
@@ -591,37 +641,38 @@ export default function MyOrdersPage() {
    * of casting, so an unregistered action now opens nothing.
    */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
-    if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
-    if (urlAction === 'create')       return { open: true, mode: 'create' };
-    if (urlJobId == null)             return { open: false, mode: 'create' };
-    return { open: true, mode: urlAction, id: urlJobId };
-  }, [urlAction, urlJobId]);
+    if (!isJobModalAction(openAction)) return { open: false, mode: 'create' };
+    if (openAction === 'create')       return { open: true, mode: 'create' };
+    if (openJobId == null)             return { open: false, mode: 'create' };
+    return { open: true, mode: openAction, id: openJobId };
+  }, [openAction, openJobId]);
 
   // AssignTechDialog state — derived from `?action=assign|reassign|console`.
   // `console` is the Pending to Start row's console icon: the SAME Reassign
   // Technician popup, opened on its Uplifted tab (the job console); the row's
   // reassign icon opens it on Current.
   const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode; view: AssignView }>(() => {
-    if ((urlAction === 'assign' || urlAction === 'reassign' || urlAction === 'console') && urlJobId != null) {
+    if ((openAction === 'assign' || openAction === 'reassign' || openAction === 'console') && openJobId != null) {
       return {
         open: true,
-        jobId: urlJobId,
-        mode: urlAction === 'assign' ? 'assign' : 'reassign',
-        view: urlAction === 'console' ? 'uplifted' : 'current',
+        jobId: openJobId,
+        mode: openAction === 'assign' ? 'assign' : 'reassign',
+        view: openAction === 'console' ? 'uplifted' : 'current',
       };
     }
     return { open: false, jobId: null, mode: 'assign', view: 'current' };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
   // ScheduleAssignModal state — derived from `?action=schedule`. This is
   // the Pending-for-Scheduling flow (status=0, unassigned): pick a date +
   // slot AND a technician in one atomic step.
   const scheduleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
-    if (urlAction === 'schedule' && urlJobId != null) {
-      return { open: true, jobId: urlJobId };
+    if (openAction === 'schedule' && openJobId != null) {
+      return { open: true, jobId: openJobId };
     }
     return { open: false, jobId: null };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
+
 
   // Transient sibling family for the Unconfirmed grouped view — see jobs/page.
   const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
@@ -642,8 +693,15 @@ export default function MyOrdersPage() {
   // legacy addEditJob flow.
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
-  function openReassign(id: number)    { openJobAction('reassign', id); }
-  function openConsole(id: number)     { openJobAction('console',  id); }
+  /*
+   * Pending to Start renders its own table, so this page has no row for the job
+   * it is opening. The caller passes the status it already holds, which is what
+   * keeps that click instant — see the guard above.
+   */
+  function openConsole(id: number, status?: number) {
+    if (status != null) reportedStatus.current.set(id, status);
+    openJobAction('console', id);
+  }
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
   function openSchedule(id: number)    { openJobAction('schedule', id); }
 
@@ -741,6 +799,18 @@ export default function MyOrdersPage() {
    * same arrangement as Pending to Start.
    */
   const isUnconfirmed = tab === 'unconfirmed';
+  /*
+   * The Booking Queue's sub-line, reported UP by the view that owns the counts
+   * endpoint. The page does not compute it: two places counting open orders is
+   * how a header ends up disagreeing with the tiles under it.
+   */
+  const [bookingQueueSubline, setBookingQueueSubline] = useState<string | null>(null);
+  /*
+   * Bumped by the Clear-filter button beside the search box. The queue owns its
+   * own filter state (tile, day, flags) — this is the page asking it to drop
+   * all of it, rather than the page trying to hold a copy and the two drifting.
+   */
+  const [queueClear, setQueueClear] = useState(0);
 
   /*
    * The local `jobAgeLabel(ts)` helper that used to live here was RETIRED
@@ -775,32 +845,34 @@ export default function MyOrdersPage() {
       <div className="flex items-end justify-between">
         <div>
           {/*
-            * The title is plain "My Orders" — it does not name the active
-            * tab (banner retired 2026-09-21; see VIEW SCOPE above). Ops land
-            * here from a sidebar sub-menu, so the bucket is already baked
-            * into their click; the "Show All Orders" link to the right is
-            * the way back out of it.
+            * On the Unconfirmed tab this page IS the Booking Queue, so it says
+            * so — and its sub-line is the queue's own arithmetic (open orders,
+            * and how many already have a link out), which is the sentence ops
+            * reads first. Every other tab keeps "My Orders" and the matching
+            * count: they are different screens that happen to share a route.
             */}
-          <h1 className="text-2xl font-semibold">My Orders</h1>
+          <h1 className="text-2xl font-semibold">{isUnconfirmed ? 'Booking Queue' : 'My Orders'}</h1>
           <p className="text-sm text-muted-foreground">
-            {data?.total.toLocaleString() ?? '…'} matching orders
-            {!isAdmin && me?.user && <span> owned by <strong>{me.user.user_name}</strong></span>}
-            {isAdmin && <span className="text-xs text-muted-foreground"> · viewing all (admin)</span>}
+            {isUnconfirmed ? (
+              /* Filled by BookingQueueView, which owns the counts endpoint —
+                 the page has no second opinion about them. */
+              <span id="booking-queue-subline">{bookingQueueSubline ?? '…'}</span>
+            ) : (
+              <>
+                {data?.total.toLocaleString() ?? '…'} matching orders
+                {!isAdmin && me?.user && <span> owned by <strong>{me.user.user_name}</strong></span>}
+                {isAdmin && <span className="text-xs text-muted-foreground"> · viewing all (admin)</span>}
+              </>
+            )}
           </p>
         </div>
         {/*
-          * Each My Orders sidebar sub-menu already lands on a dedicated,
-          * single-bucket page (Unconfirmed, Pending Scheduling, …), so
-          * stating "Showing X Only" on every tab was telling ops something
-          * the page they clicked already told them (ops, 2026-09-21) — the
-          * "Showing <Tab> Only · Show All Orders" bar below was removed.
-          *
-          * "Show All Orders" stays, here in the header, because no sidebar
-          * entry links to the unscoped /my-orders (every My Orders menu row
-          * points at one specific ?tab=) — this is the ONLY way back to the
-          * all-orders view, so it must not disappear with the banner.
+          * "Show All Orders" is the only way back to the unscoped list from a
+          * sidebar-scoped tab — except on the Booking Queue, which is a
+          * destination in its own right rather than a filtered view of
+          * something else, and where ops asked for it to go (2026-09-24).
           */}
-        {tab !== 'all' && !scopeIsClamped && (
+        {tab !== 'all' && !scopeIsClamped && !isUnconfirmed && (
           <button
             type="button"
             onClick={clearTabScope}
@@ -840,7 +912,8 @@ export default function MyOrdersPage() {
       {!isRetiredTab && !isPendingStart && (
       <Card>
         <CardContent className="p-3 space-y-3">
-          <div className="relative">
+          <div className="flex items-center gap-2">
+          <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             {/* Placeholder + hint are DERIVED from JOB_SEARCH_FIELDS in
                 lib/job-tabs.ts — the same array filterJobRows matches on — so
@@ -857,6 +930,25 @@ export default function MyOrdersPage() {
               onChange={(e) => setQ(e.target.value)}
               className="pl-9"
             />
+          </div>
+          {/*
+            * CLEAR FILTER lives beside the search box (ops, 2026-09-24), not
+            * down in the table's caption: it resets EVERYTHING that is
+            * narrowing the queue — the search text, the flag chips, the day
+            * pill and the selected tile — and the search box is the control
+            * people look at when they want the page back to normal. Down in
+            * the caption it could only reach the flags, which is exactly the
+            * complaint.
+            */}
+          {isUnconfirmed && (
+            <button
+              type="button"
+              onClick={() => { setQ(''); setQueueClear((n) => n + 1); }}
+              className="whitespace-nowrap rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Clear filter
+            </button>
+          )}
           </div>
           {/*
             * Pending-for-Scheduling filter bar. Rendered ONLY on that tab —
@@ -880,7 +972,6 @@ export default function MyOrdersPage() {
           isAdmin={isAdmin}
           canJob={canJob}
           openView={openView}
-          openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
           /* The six-tab strip carries the stage-access clamp, so the scope bar
              above is suppressed for it. */
@@ -892,54 +983,35 @@ export default function MyOrdersPage() {
         <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
-            /* Same table, grouped into the five sections ops asked for. The
-               component owns the grouping and the drag order only; every
-               column, sort header and row action still comes from
-               UnconfirmedJobsTable, which it renders once per section. */
-            <UnconfirmedSections
-              /*
-               * The tab's request shape, built ONCE here and handed to all five
-               * sections, which add `section` and their own limit/offset. The
-               * search box therefore reaches every section AND every page of
-               * each, because `q` is applied by the server rather than to an
-               * already-truncated array.
-               */
-              /* The independent total the sections are checked against. */
-              pageTotal={data?.total ?? null}
+            /*
+             * THE OLD SECTIONS VIEW IS GONE (ops, 2026-09-24).
+             *
+             * Unconfirmed carried two alternative cuts of the same orders
+             * behind an Old view / Booking queue switch, so ops could compare
+             * them. They have; the Booking queue is the one they work in, and
+             * a second view of the same rows is now just somewhere for a
+             * number to disagree with itself. UnconfirmedSections is still in
+             * the tree — /jobs' own Unconfirmed tab renders it — so nothing
+             * UnconfirmedSections is no longer rendered anywhere — it is left
+             * in the tree rather than deleted in the same change that removed
+             * ten other things, and wants a follow-up.
+             */
+            <BookingQueueView
+              ownerId={scopedOwnerId}
+              onCounts={setBookingQueueSubline}
               reloadSignal={sectionsReload}
-              pageBusy={loading || refreshing}
+              clearSignal={queueClear}
               query={{
                 status: TABS.find((t) => t.value === 'unconfirmed')?.status,
                 ownerId: scopedOwnerId,
                 q: serverQ || undefined,
-                sortBy: sortKey || undefined,
-                sortDir: sortKey ? sortDir : undefined,
               }}
-              // Confirm promotes an Unconfirmed order (status 9 → 0); gate it
-              // by the stage-transition rule too, not just the permission.
               canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
               canSendMagicLink={!!canJob.isJobMagicLinkSend}
-              // Force Send (Override) is keyed on the literal role_name
-              // = 'Admin' (matches the BE override gate). `isAdmin`
-              // above uses `role.group` which is broader (admin-class
-              // roles), so we recompute here against the exact role
-              // name. Case-insensitive for seed-data safety.
               userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
-              // Server-side sort: forward the page's sort state + toggle so the
-              // Unconfirmed column headers sort the WHOLE list (not just page).
-              sortBy={sortKey}
-              sortDir={sortDir}
-              onSort={toggle}
-              /*
-               * Refreshes the "N matching orders" header only. The ROWS live in
-               * the five section fetches, and UnconfirmedSections refreshes
-               * those itself — an eviction cannot, because useFetch does not
-               * subscribe to invalidation and these sections never unmount.
-               * See the note on its reloadKey.
-               */
-              onMagicLinkSent={() => load(false, true)}
+              onMutation={() => load(false, true)}
             />
           ) : isPendingScheduling ? (
           /*
@@ -984,15 +1056,19 @@ export default function MyOrdersPage() {
               </tr>
             </thead>
             <tbody>
+              {/* 12, not 13: the Job Ref column folded under the Job ID on
+                  2026-09-18 and these two were left behind, so the table grew a
+                  phantom column while loading and snapped back when the rows
+                  landed — a visible jump on every load and filter change. */}
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 13 }).map((_, c) => (
+                  {Array.from({ length: PS_COLUMN_COUNT }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={13} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={PS_COLUMN_COUNT} className="text-center text-muted-foreground py-8">
                   {psAnySet
                     ? 'No orders match these filters.'
                     : `No orders in this bucket${!isAdmin ? ' owned by you' : ''}.`}
@@ -1003,6 +1079,12 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-left font-medium">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
+                      {/* Escalated jobs must not be scrolled past, so the mark
+                          sits ON the job number — first column, every bucket —
+                          rather than in a column the eye has to travel to. */}
+                      {isJobEscalated(j) && (
+                        <span aria-label="Escalated" title={j.escalated_comments || 'Escalated'}>🔥</span>
+                      )}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                     <div className="text-xs font-normal text-muted-foreground">{j.job_reference_id ?? '—'}</div>
@@ -1165,6 +1247,12 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-left font-medium">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
+                      {/* Escalated jobs must not be scrolled past, so the mark
+                          sits ON the job number — first column, every bucket —
+                          rather than in a column the eye has to travel to. */}
+                      {isJobEscalated(j) && (
+                        <span aria-label="Escalated" title={j.escalated_comments || 'Escalated'}>🔥</span>
+                      )}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                     {j.job_reference_id && (
@@ -1380,21 +1468,11 @@ export default function MyOrdersPage() {
                           <CalendarClock className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {/*
-                        * Reassign Technician — same modal, mode=reassign.
-                        * Backend candidates query already excludes anyone
-                        * who's previously rejected/rescheduled this job.
-                        */}
-                      {j.job_status === 1 && canJob.isJobReassign && (
-                        <button
-                          type="button"
-                          onClick={() => openReassign(j.job_id)}
-                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                          title="Reassign Technician — pick a different tech from the ranked list"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                      {/* The standalone Reassign icon went on 2026-09-25 (ops),
+                          following Pending to Start, which dropped its own on
+                          2026-09-20 for the same reason: reassigning starts
+                          from the job console, where "Change technician" opens
+                          the same ranked list. One door into a job, not two. */}
                       {/* No Check-In or Check-Out row action (2026-09-11, per ops):
                           the technician checks in and out from the app. See the
                           note in JobModal's ActionBar. */}

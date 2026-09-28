@@ -204,8 +204,16 @@ export function AssignTechnicianModal({
   // (top went refreshing) and then SETTLED — not on the render before it kicks in.
   const rescheduleRefetchStarted = useRef(false);
 
-  const [view, setView] = useState<AssignView>(initialView);
-  const uplifted = mode === 'reassign' && view === 'uplifted';
+  /*
+   * REASSIGN IS UPLIFTED, FULL STOP (ops, 2026-09-25) — the same call made for
+   * Schedule & Assign, and for the same reason: two arrangements of one job
+   * mean every fix is made and checked twice, and an operator describing a
+   * screen has to say which one they are on first. `initialView` is ignored
+   * rather than removed from the props, so the caller keeps compiling; it has
+   * nothing left to choose.
+   */
+  const view: AssignView = 'uplifted';
+  const uplifted = mode === 'reassign';
   const techRef = useRef<HTMLElement | null>(null);
   const notesRef = useRef<HTMLDivElement | null>(null);
   const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
@@ -229,17 +237,6 @@ export function AssignTechnicianModal({
   const promptSetAtRef = useRef(0);
   /* The Uplifted body's read of the appointment (undefined until it reports). */
   const [bodyAppointment, setBodyAppointment] = useState<string | null | undefined>(undefined);
-  useEffect(() => { setView(initialView); }, [open, jobId, initialView]);
-  /* Switching tabs: the Uplifted body will re-read and re-report the
-     appointment, and a reassign intent from the other tab must not survive
-     into it. Done in the click, not an effect, so the remounting body's report
-     (a child effect, which runs first) is not wiped straight after. */
-  function switchView(next: AssignView) {
-    if (next === view) return;
-    setBodyAppointment(undefined);
-    reassignIntentRef.current = false;
-    setView(next);
-  }
 
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
@@ -589,24 +586,9 @@ export function AssignTechnicianModal({
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {mode === 'reassign' ? 'Reassign Technician' : 'Assign Technician'}
             {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
-            {mode === 'reassign' && (
-              <span className="ml-auto mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5">
-                {(['current', 'uplifted'] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => switchView(v)}
-                    aria-pressed={view === v}
-                    className={[
-                      'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
-                      view === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                    ].join(' ')}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </span>
-            )}
+            {/* The Current / Uplifted switch went on 2026-09-25 with Schedule
+                & Assign's: Uplifted is the layout, so there is nothing to
+                choose between. */}
           </DialogTitle>
         </DialogHeader>
 

@@ -83,26 +83,39 @@ test('no footer button can submit on top of a save already in flight', () => {
 
 // ─── 2. …and the page behind it refreshes ────────────────────────────────
 
-test('the page can force every section to refetch, and does so after a modal save', () => {
-  assert.match(sections, /reloadSignal\?: number;/,
-    'the page-driven refresh signal is the only way a mutation made OUTSIDE the sections can reach them');
-  assert.match(sections, /function reloadSections\(\) \{[\s\S]*?invalidateFetch\(\(k\) => k\.startsWith\('\/admin\/jobs'\)\);[\s\S]*?setReloadKey\(\(k\) => k \+ 1\);/,
-    'a bump alone is what refetches a MOUNTED section; the eviction is what keeps a later mount honest');
-  // Bound call-to-dep-array, the house idiom (see unconfirmed-sections.test.js):
-  // an effect that merely NAMES reloadSignal, or a reloadSections that only
-  // handleMutation calls, would leave the page's signal inert.
-  assert.match(sections, /reloadSections\(\);[\s\S]{0,140}?\}, \[reloadSignal\]\);/,
-    'the signal must drive the reload itself, or nothing refetches when the page bumps it');
+/*
+ * THE SAME REQUIREMENT, ON THE SCREEN THAT NOW CARRIES IT.
+ *
+ * My Orders -> Unconfirmed used to render five reorderable sections; ops
+ * retired that view on 2026-09-24 and the tab is the Booking Queue alone. The
+ * rule it was protecting did not retire with it: a save made in the modal must
+ * reach the rows BEHIND the modal, or an order the operator just booked sits
+ * in the tile it has already left.
+ *
+ * The mechanism is unchanged and still the subtle part — invalidateFetch alone
+ * does NOT refresh a mounted useFetch (the key is a pure function of the query,
+ * so after a save it is byte-identical and the effect never re-runs), and this
+ * view does not unmount while the tab is open. Hence the page-driven signal.
+ */
+test('a modal save refreshes the Booking Queue behind it', () => {
+  const view = strip(read('src/components/job/BookingQueueView.tsx'));
+  assert.match(view, /reloadSignal\?: number;/,
+    'the page-driven signal is the only way a mutation made OUTSIDE the view reaches it');
+  // Bound call-to-dep-array, the house idiom: an effect that merely NAMES the
+  // signal, or one that omits it from the deps, leaves the page's bump inert.
+  assert.match(view, /counts\.refetch\(\);[\s\S]{0,120}?rows\.refetch\(\);[\s\S]{0,160}?\}, \[reloadKey, reloadSignal\]\);/,
+    'both the tiles and the rows must refetch — a stale tile over fresh rows is the same bug wearing a different hat');
 
-  assert.match(myOrders, /reloadSignal=\{sectionsReload\}/);
+  assert.match(myOrders, /reloadSignal=\{sectionsReload\}/,
+    'the page must actually hand the signal down');
   // Scanned INSIDE the JobModal onSaved handler: a bump wired to any other
   // handler leaves Book Call — the case that started this — unrefreshed.
   const saved = myOrders.slice(myOrders.indexOf('<JobModal'));
   const onSaved = saved.slice(saved.indexOf('onSaved={(job) => {'), saved.indexOf('initialTab='));
   assert.match(onSaved, /setSectionsReload\(\(n\) => n \+ 1\);/,
-    'the sections are refreshed from the same handler that refreshes the header');
+    'the queue is refreshed from the same handler that refreshes the header');
   assert.match(onSaved, /invalidateFetch\(\(k\) => k\.startsWith\('\/admin\/jobs'\)\);/,
-    'a status-9 row can be confirmed from other tabs, where the sections are not mounted to hear the signal');
+    'a status-9 row can be confirmed from other tabs, where the queue is not mounted to hear the signal');
 });
 
 test('the reconciliation warning waits for the counts it is comparing', () => {
@@ -117,8 +130,13 @@ test('the reconciliation warning waits for the counts it is comparing', () => {
   // a post-mutation refetch flips `refreshing`, never `loading`.
   assert.match(sections, /onBusy\(loading \|\| refreshing\);[\s\S]{0,120}?\}, \[loading, refreshing\]\);/,
     'every section must report busy for the SWR refetch, not just the first load');
-  assert.match(myOrders, /pageBusy=\{loading \|\| refreshing\}/,
-    "the page's own total is one half of the sum being checked");
+  /*
+   * The PAGE half of this check went with the sections view (ops retired it on
+   * 2026-09-24). The Booking Queue has no sum to reconcile: its tiles and its
+   * rows come from one endpoint each, over the same predicate, so there is no
+   * second opinion to disagree with. The assertions above still stand because
+   * UnconfirmedSections itself is unchanged.
+   */
 });
 
 // ─── 3. Controls ─────────────────────────────────────────────────────────

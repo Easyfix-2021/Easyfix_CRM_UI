@@ -310,21 +310,20 @@ export function ScheduleAssignModal({
    * the same offer commit and the same footer, so a job can be worked from
    * either; only the arrangement above the technician table differs.
    *
-   * Default is Current, so nobody is moved onto a new layout mid-shift. The
-   * choice is remembered per browser: an operator evaluating Uplifted should
-   * not have to re-pick it on every job. localStorage may throw (Safari private
-   * mode), hence the try/catch — a broken preference must not break the modal.
+   * ── THE CHOICE IS OVER (ops, 2026-09-25) ──────────────────────────────────
+   *
+   * Uplifted was the candidate; it is now THE layout, and the Current/Uplifted
+   * switch is gone. Two arrangements of one job meant every fix had to be made
+   * and checked twice, and an operator describing a screen had to say which one
+   * they were on first.
+   *
+   * The Current-only sections are deleted with it — TypeScript flagged them
+   * the moment `view` stopped being able to hold 'current', which is the right
+   * way for dead UI to announce itself. `view` remains as a constant so the
+   * remaining `view === 'uplifted'` guards keep reading as the layout they
+   * belong to rather than becoming unexplained bare fragments.
    */
-  const [view, setView] = useState<'current' | 'uplifted'>('current');
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(SA_VIEW_KEY) === 'uplifted') setView('uplifted');
-    } catch { /* no preference available — Current stands */ }
-  }, []);
-  function pickView(next: 'current' | 'uplifted') {
-    setView(next);
-    try { localStorage.setItem(SA_VIEW_KEY, next); } catch { /* preference is a convenience, not state */ }
-  }
+  const view = 'uplifted';
   /*
    * "Choose technicians" in the Uplifted header scrolls to the Top-10 table
    * rather than duplicating it — one table, one selection, one commit button.
@@ -372,38 +371,64 @@ export function ScheduleAssignModal({
     // Read BEFORE the refetch below replaces the list: these are the offers the
     // reschedule just expired.
     const expired = (offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length;
-    if (expired > 0) {
-      setReofferNeeded(true);
-      /*
-       * Say what happened and hand over the next step in one place (ops,
-       * 2026-09-17): the order's new time, and a button that goes straight to
-       * the available technicians. "Later" keeps the console where it is — the
-       * strip and the close check still remind them.
-       */
-      void confirmAction({
-        title: 'Order rescheduled',
-        icon: <CalendarClock className="h-5 w-5" />,
-        iconAccent: 'sky',
-        description: (
-          <div className="space-y-1.5 text-sm">
-            <p>Order rescheduled for <b>{newAppointment ? formatDate(newAppointment) : 'the new time'}</b>.</p>
-            <p>{expired} offer{expired === 1 ? '' : 's'} expired — offer it again for the new time.</p>
-          </div>
-        ),
-        confirmLabel: 'Proceed to re-offer',
-        cancelLabel: 'Later',
-      }).then((go) => {
-        if (go) techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
+    if (expired > 0) setReofferNeeded(true);
+
+    /*
+     * Re-rank FIRST, then prompt. The order matters: the prompt's only job is
+     * to hand the operator to the technician list, so that list has to be on
+     * its way in before they can arrive at it.
+     *
+     * The invalidate is the fix for a BLANK technician list after a reschedule
+     * (ops, 2026-09-20). `refetch()` alone can be answered out of useFetch's
+     * 30s module cache, which resolves in a microtask — React batches it with
+     * the `refreshing = true` that precedes it, so `refreshing` may never be
+     * OBSERVED as true. The veil below only lifts once it has seen the refetch
+     * start, so it stayed up forever and the list rendered as an empty loader.
+     * Evicting the entry makes the refetch a real round trip; the timeout in
+     * the veil effect covers the case anyway.
+     */
     rescheduleRefetchStarted.current = false;
     setRescheduling(true); // veil the stale date/list until the refetch settles
+    invalidateFetch((k) =>
+      k.startsWith(`/admin/jobs/${jobId}/candidates`)
+      || k === `/admin/jobs/${jobId}/header`
+      || k === `/admin/jobs/${jobId}`);
     top.refetch();
     offers.refetch();
     invalidateFetch((k) =>
       k.startsWith(`/admin/jobs/${jobId}/comments`)
       || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
     setRemarksReloadKey((n) => n + 1);
+
+    /*
+     * Say what happened and hand over the next step in one place (ops,
+     * 2026-09-17, extended 2026-09-20): the order's new time, what it cost in
+     * live offers, and a button that goes straight to the available
+     * technicians. Shown after EVERY reschedule from this console, not only
+     * when offers expired — this bucket is unallocated work, so the next step
+     * is always "offer it", and ops asked to be taken to the list. "Later"
+     * keeps the console where it is; the strip and the close check still remind
+     * them.
+     */
+    void confirmAction({
+      title: 'Order rescheduled',
+      icon: <CalendarClock className="h-5 w-5" />,
+      iconAccent: 'sky',
+      description: (
+        <div className="space-y-1.5 text-sm">
+          <p>Order rescheduled for <b>{newAppointment ? formatDate(newAppointment) : 'the new time'}</b>.</p>
+          <p>
+            {expired > 0
+              ? `${expired} offer${expired === 1 ? '' : 's'} expired — offer it again for the new time.`
+              : 'Offer it to technicians for the new time.'}
+          </p>
+        </div>
+      ),
+      confirmLabel: expired > 0 ? 'Proceed to re-offer' : 'Proceed to offer',
+      cancelLabel: 'Later',
+    }).then((go) => {
+      if (go) techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
   const staleOwnerName = probe?.fk_easyfixter_id != null
     ? (probe.easyfixer_name || `Efr #${probe.fk_easyfixter_id}`)
@@ -660,7 +685,16 @@ export function ScheduleAssignModal({
   useEffect(() => {
     if (!rescheduling) return;
     if (top.loading || top.refreshing) { rescheduleRefetchStarted.current = true; return; }
-    if (rescheduleRefetchStarted.current) setRescheduling(false);
+    if (rescheduleRefetchStarted.current) { setRescheduling(false); return; }
+    /*
+     * Belt and braces (ops, 2026-09-20). A refetch answered from cache can
+     * settle without `refreshing` ever being rendered as true, so the latch
+     * above never sets and the veil never lifts — the technician list then sits
+     * behind a permanent loader, which is what ops saw as a blank screen after
+     * "Proceed to re-offer". Never let the veil outlive the reschedule.
+     */
+    const t = setTimeout(() => setRescheduling(false), 1500);
+    return () => clearTimeout(t);
   }, [rescheduling, top.loading, top.refreshing]);
 
   /*
@@ -1086,25 +1120,8 @@ export function ScheduleAssignModal({
                 review): both already have a tile of their own a few hundred
                 pixels below, and a header that repeats the tiles reads as two
                 sources for one number. The header states identity only. */}
-            {/* Layout switch, not a mode switch: both tabs act on the same job
-                with the same footer. Sits in the title row so it is the first
-                thing seen and costs no vertical space of its own. */}
-            <span className="ml-auto mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5">
-              {(['current', 'uplifted'] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => pickView(v)}
-                  aria-pressed={view === v}
-                  className={[
-                    'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
-                    view === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                  ].join(' ')}
-                >
-                  {v}
-                </button>
-              ))}
-            </span>
+            {/* The Current / Uplifted switch was removed on 2026-09-25: Uplifted
+                is the layout now, so there is nothing to choose between. */}
           </DialogTitle>
         </DialogHeader>
 
@@ -1176,180 +1193,11 @@ export function ScheduleAssignModal({
               services and notes in its own cards — with the same editors wired
               to the same handlers — and puts the remarks thread at the BOTTOM
               of the page, below the technician table (see after section (c)). */}
-          {view === 'current' && (
-          <JobContextPanel
-            job={job}
-            jobId={jobId}
-            remarksReloadKey={remarksReloadKey}
-            showReschedule
-            onReschedule={() => setRescheduleOpen(true)}
-            rescheduling={rescheduling}
-            /* /offer AND /assign both refuse a passed appointment (since
-               2026-09-17), so the notice blocks in either mode — the same
-               condition as the footer button's own `disabled`. */
-            pastBlocksAction
-            /*
-             * Job Description + Additional Comments are EDITABLE here (opt-in;
-             * the panel stays read-only for Assign / Reassign, which don't pass
-             * this). Withheld on a read-only open — same condition as the
-             * banner above and the commit button's own gate — so an order that
-             * has left Pending-for-Scheduling can't be edited from a modal that
-             * says it is read-only. The panel additionally requires isJobEdit.
-             */
-            onSaveDetails={jobId != null && offerable ? async (patch) => {
-              await api.patch(`/admin/jobs/${jobId}`, patch);
-              /*
-               * The panel's job object comes from the CANDIDATES response, not
-               * from /admin/jobs/:id — invalidating the detail key alone would
-               * leave the OLD text on screen. reRank re-runs that hook too.
-               */
-              reRank();
-            } : undefined}
-            /*
-             * Edit Address — same opt-in gate. The dialog PATCHes on its own,
-             * so this callback only has to re-rank — and ranking is
-             * address-sensitive, so this is not a cosmetic refresh.
-             */
-            onAddressSaved={jobId != null && offerable ? reRank : undefined}
-            /*
-             * Edit Services — same opt-in gate (the panel adds isJobEdit). The
-             * detail key is dropped first so the editor reads the job's services
-             * as they are NOW: the probe above cached that very key when this
-             * modal opened, and a View-modal edit since then is not in it.
-             */
-            onEditServices={jobId != null && offerable ? () => {
-              invalidateFetch((k) => k === `/admin/jobs/${jobId}`);
-              setServicesOpen(true);
-            } : undefined}
-          />
-          )}
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ─────────
               Current tab only: Uplifted carries the same rows, compacted, in its
               Technician card, and two copies of one list on one screen is how
               they start disagreeing. */}
-          {view === 'current' && offerMode && (offerItems?.length ?? 0) > 0 && (
-            <section>
-              <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                Offered To
-                <span className="inline-flex items-center rounded-full bg-ink-100 px-2 py-0.5 text-xs font-medium text-ink-700 border border-ink-100">
-                  {offerItems!.length}
-                </span>
-              </h3>
-              {/*
-                * The caption is CONDITIONAL on the backend's expiry regime,
-                * because it used to assert "open offers expire after 30
-                * minutes" unconditionally and production has
-                * `job.offer_expiry.enabled = 'false'` — nothing times an offer
-                * out there at all.
-                *
-                * It also stops calling every closed offer "expired". EXPIRED is
-                * written by nine backend paths and only one is the 30-minute
-                * sweep; the rest fire when the job is assigned, rescheduled,
-                * released, withdrawn, or superseded by a sibling accepting.
-                * Reported 2026-09-10 on job 538177: two offers showed EXPIRED
-                * after 22 hours with the sweep switched off, closed in the same
-                * second a re-offer went out. Reading that as "the technician
-                * ignored it" is a claim about a person, and it was wrong —
-                * which is exactly the conclusion the old caption invited.
-                *
-                * `undefined` (a backend that predates the field) gets the
-                * neutral wording rather than either promise.
-                */}
-              <p className="mb-2 text-xs text-muted-foreground">
-                Technicians this job has been offered to — including those who declined,
-                and those whose offer was closed without an answer. Whoever accepts first
-                on the app is assigned.{' '}
-                {offers.data?.offer_expiry_enabled === true ? (
-                  <>An open offer expires 30 minutes after it is made.</>
-                ) : offers.data?.offer_expiry_enabled === false ? (
-                  <>
-                    Open offers do not time out. An <span className="font-medium">Expired</span>{' '}
-                    offer here was closed by a later action on the job — a re-offer,
-                    assignment, reschedule, or another technician accepting — not by the
-                    technician failing to respond.
-                  </>
-                ) : null}
-              </p>
-              {/* Table rather than chips: a chip row wrapped unpredictably and
-                  had no room for the mobile number ops needs to chase an offer.
-                  Uses the shared .data-table so it reads like every other list
-                  in the CRM. */}
-              <div className="overflow-x-auto rounded-md border">
-                <table className="data-table w-full text-xs">
-                  <thead>
-                    <tr>
-                      <th className="!text-left">Technician</th>
-                      <th className="!text-left">Mobile</th>
-                      <th className="!text-left">Offer Status</th>
-                      <th className="!text-left">Offered</th>
-                      <th className="!text-left">Source</th>
-                      <th className="!text-left">Offered By</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {offerItems!.map((o) => {
-                      /* Colour as TEXT, not a chip: inside a table the chip
-                         competed with the row's own status pills and made the
-                         column read as an action. REJECTED=rose, EXPIRED=slate,
-                         OFFERED (live)=amber. */
-                      const statusText =
-                        o.offer_status === 2 ? 'text-urgent-strong'
-                          : o.offer_status === 3 ? 'text-ink-500'
-                            : 'text-warning-strong';
-                      return (
-                        <tr key={o.efr_id}>
-                          <td className="!text-left">
-                            <div className="font-medium">{o.efr_name}</div>
-                            <div className="text-xs text-muted-foreground">#{o.efr_id}</div>
-                          </td>
-                          {/* Click-to-call resolves the real number server-side
-                              from efr_id — the masked digits here are display
-                              only. jobContextId files the call under this job. */}
-                          <td className="!text-left whitespace-nowrap">
-                            {o.mobile
-                              ? <CallableMobile efrId={o.efr_id} jobContextId={jobId ?? undefined} mobile={o.mobile} />
-                              : <span className="text-muted-foreground">—</span>}
-                          </td>
-                          <td className="!text-left">
-                            <div className="flex flex-col gap-0.5">
-                              {o.offer_status_label && (
-                                <span className={`font-medium ${statusText}`}>{o.offer_status_label}</span>
-                              )}
-                              {o.offer_status === 2 && o.reject_reason && (
-                                <span className="text-xs text-urgent-strong" title="Reason given by technician">
-                                  &ldquo;{o.reject_reason}&rdquo;
-                                </span>
-                              )}
-                              {(o.offer_count ?? 1) > 1 && (
-                                <span className="text-xs text-ink-500" title="Times offered">
-                                  Offered ×{o.offer_count}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          {/* Plain text — the clock icon read as a control in a
-                              dense table and added nothing the label doesn't. */}
-                          <td className="!text-left whitespace-nowrap text-muted-foreground">
-                            {relativeTime(o.offered_at)}
-                          </td>
-                          <td className="!text-left">
-                            {o.offer_source
-                              ? (o.offer_source === 'top10' ? 'Top-10' : o.offer_source === 'search' ? 'Search' : 'Auto')
-                              : <span className="text-muted-foreground">—</span>}
-                          </td>
-                          <td className="!text-left">
-                            {o.offered_by_name
-                              || <span className="text-muted-foreground" title="Auto-assigned, or offered before this was recorded">—</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
 
           {err && (
             <div className="text-sm text-urgent-strong flex items-center gap-1">
@@ -1715,14 +1563,6 @@ export function ScheduleAssignModal({
           /* Offers still waiting for a reply — the reschedule expires every one
              of them, so the dialog warns before and confirms at the end. */
           liveOffers={(offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length}
-          onClose={() => setRescheduleOpen(false)}
-          onDone={onRescheduled}
-        />
-      )}
-      {jobId && view === 'current' && (
-        <RescheduleDialog
-          open={rescheduleOpen}
-          jobId={jobId}
           onClose={() => setRescheduleOpen(false)}
           onDone={onRescheduled}
         />

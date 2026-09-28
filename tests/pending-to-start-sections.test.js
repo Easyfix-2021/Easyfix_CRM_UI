@@ -276,7 +276,10 @@ test('differential control — the removed Check In row icon would be caught', (
     '  </button>',
     ')}',
   ].join('\n');
-  const anchor = '{canJob.isJobReassign && (';
+  /* Anchored on the console icon since 2026-09-20: the Reassign block this
+     used to sit against was removed (ops), and the anchor only has to be a
+     real, unique point inside the action cell. */
+  const anchor = '{onOpenConsole && (';
   assert.ok(view.includes(anchor), 'the insertion anchor must exist');
   const mutated = view.replace(anchor, `${removed}\n${anchor}`);
   assert.notEqual(mutated, view, 'the mutation must land');
