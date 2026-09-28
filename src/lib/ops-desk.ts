@@ -64,6 +64,16 @@ export function pollIntervalMs(tabVisible: boolean, baseMs: number): number | un
 }
 
 /*
+ * A job's chat is awaiting a desk reply when its LATEST line is the
+ * technician's — the same rule GET /admin/ops-desk/chats applies server-side.
+ * No read tracking: a desk reply is what clears it. `items` is oldest-first,
+ * as GET /admin/jobs/:id/chat returns it.
+ */
+export function chatAwaitingReply(items: ReadonlyArray<{ senderKind: string }> | null | undefined): boolean {
+  return !!items && items.length > 0 && items[items.length - 1].senderKind === 'tx';
+}
+
+/*
  * Flatten GET /admin/verification into the one table the page renders.
  *
  * CLAIMS FIRST. A can't-complete or cancel claim has a technician who has

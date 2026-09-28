@@ -691,6 +691,23 @@ export type JobChatResponse = {
   items: JobChatMessage[];
 };
 
+/** GET /admin/ops-desk/chats — jobs whose latest chat line is the technician's, newest first. */
+export type OpsDeskChatItem = {
+  jobId: number;
+  reference: string | null;
+  title: string | null;
+  clientName: string | null;
+  locality: string | null;
+  technician: { efrId: number; name: string | null } | null;
+  jobStatus: number;
+  lastMessage: { id: number; efrId: number | null; senderName: string | null; body: string; sentOn: string };
+};
+
+export type OpsDeskChatsResponse = {
+  items: OpsDeskChatItem[];
+  total: number;
+};
+
 export type JobMoneyResponse = {
   client: number | null;
   tx: number | null;
