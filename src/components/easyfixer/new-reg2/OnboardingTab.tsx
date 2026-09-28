@@ -63,10 +63,12 @@ type CityCoverage = {
 function CoverageByCity({
   rows,
   loading,
+  canEdit,
   onEdit,
 }: {
   rows: CityCoverage[];
   loading: boolean;
+  canEdit: boolean;
   onEdit: () => void;
 }) {
   if (loading) return <p className="px-1 text-sm text-muted-foreground">Loading coverage…</p>;
@@ -74,7 +76,7 @@ function CoverageByCity({
     return (
       <div className="px-1">
         <p className="text-sm text-muted-foreground">No serviceable pincodes selected yet.</p>
-        <Button size="sm" variant="outline" className="mt-2" onClick={onEdit}>Add pincodes →</Button>
+        {canEdit && <Button size="sm" variant="outline" className="mt-2" onClick={onEdit}>Edit pincodes</Button>}
       </div>
     );
   }
@@ -89,41 +91,45 @@ function CoverageByCity({
               <th className="!text-left">Location</th>
               <th className="!text-left">Pincodes</th>
               <th className="!text-left">Zonal manager</th>
-              <th className="!text-right">Total</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr
-                key={r.key}
-                role="button"
-                tabIndex={0}
-                onClick={onEdit}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(); } }}
-                title="Open the pincode editor in Work & Coverage"
-                className="cursor-pointer hover:bg-muted/60 focus:bg-muted/60 focus:outline-none"
-              >
+              <tr key={r.key}>
                 <td className="!text-left">
                   <span className="font-medium text-ink-900">{r.city}</span>
                   {r.state && <span className="block text-xs text-muted-foreground">{r.state}</span>}
                 </td>
                 <td className="!text-left text-ink-700">{r.locations.join(', ') || '—'}</td>
-                <td className="!text-left font-mono text-xs text-ink-700">{r.pincodes.join(', ')}</td>
+                <td className="!text-left">
+                  <span className="inline-flex flex-wrap items-center gap-1">
+                    {/* The per-city count rides on the pincodes themselves as a
+                        chip, so the table does not spend a whole column on one
+                        digit per row. */}
+                    <span className="font-mono text-xs text-ink-700">{r.pincodes.join(', ')}</span>
+                    <span className="rounded-full border bg-muted px-1.5 py-0.5 text-xs text-ink-700">{r.pincodes.length}</span>
+                  </span>
+                </td>
                 <td className="!text-left text-ink-700">{r.zonalManager || '—'}</td>
-                <td className="!text-right tabular-nums">{r.pincodes.length}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr>
-              <td className="!text-left font-semibold text-ink-900" colSpan={4}>Total pincodes selected</td>
-              <td className="!text-right font-semibold tabular-nums">{total}</td>
+              <td className="!text-left font-semibold text-ink-900" colSpan={canEdit ? 3 : 4}>
+                {total} pincode{total === 1 ? '' : 's'} selected in {rows.length} cit{rows.length === 1 ? 'y' : 'ies'}
+              </td>
+              {canEdit && (
+                <td className="!text-right">
+                  <Button size="sm" variant="outline" onClick={onEdit}>Edit pincodes</Button>
+                </td>
+              )}
             </tr>
           </tfoot>
         </table>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        A city shows &quot;—&quot; for its zonal manager when none is assigned to its state. Click any row to edit the pincode list.
+        A city shows &quot;—&quot; for its zonal manager when none is assigned to its state.
       </p>
     </div>
   );
@@ -154,6 +160,10 @@ export function OnboardingTab({
   const activated = v.activation.is_activated;
   const rv = v.registrationVerification;
   const skillsMapped = v.additional.deep_skills_count > 0;
+  // Onboarding stops being the place to change coverage the moment the
+  // technician is live — edits then belong in Work & Coverage, which stays
+  // open. Read-only here, not hidden: the reviewer still needs to see it.
+  const canEditCoverage = !activated;
 
   // Coverage is read from the pincode endpoint rather than the payload's bare
   // count, because the reviewer needs city / location / zonal manager per row.
@@ -282,14 +292,13 @@ export function OnboardingTab({
           </div>
         </VerificationSection>
 
-        <VerificationSection
-          headerTone="sub"
-          title="Serviceable pincodes"
-          verified={pinCount > 0}
-          progress={pinCount > 0 ? 100 : 0}
-          rightSlot={<span>{pinCount} pincode{pinCount === 1 ? '' : 's'} · {byCity.length} cit{byCity.length === 1 ? 'y' : 'ies'}</span>}
-        >
-          <CoverageByCity rows={byCity} loading={pinLoading && !pinData} onEdit={onEditPincodes} />
+        <VerificationSection headerTone="sub" title="Serviceable pincodes" verified={pinCount > 0} progress={pinCount > 0 ? 100 : 0}>
+          <CoverageByCity
+            rows={byCity}
+            loading={pinLoading && !pinData}
+            canEdit={canEditCoverage}
+            onEdit={onEditPincodes}
+          />
         </VerificationSection>
 
         <p className="text-xs text-muted-foreground">
