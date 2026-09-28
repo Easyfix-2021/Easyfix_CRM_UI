@@ -44,3 +44,11 @@ next-env.d.ts
 # mirror-app/shared-job-<version>.tar.gz. That tarball IS committed once it
 # exists — none is committed yet. See the `shared-job` stage in Dockerfile.
 /public/public/shared-job/
+
+# Local report PREVIEWS — the underscore-prefixed HTML dropped into public/ so a
+# generated report (MTD and friends) can be opened in a browser during
+# development. Each one is a self-contained dump of real data, ~1.5 MB, and
+# public/ is SERVED: a committed preview would publish a snapshot of whatever
+# client rows it was built from, to anyone who guesses the filename. They are
+# regenerated on demand and nothing builds from them.
+/public/_*.html
