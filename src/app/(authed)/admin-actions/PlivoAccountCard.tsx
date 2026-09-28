@@ -22,12 +22,16 @@ import { InfoTooltip } from '@/components/ui/tooltip';
 import { useFetch } from '@/lib/hooks';
 
 type Kind = { usd: number; count: number; ready: boolean; estimate: boolean; estimateReasons: string[] };
+type Leg = { usd: number; count: number };
+// Calls only: the operator's browser leg (Plivo files it as inbound) vs the
+// customer's PSTN leg — one web call bills both.
+type CallsKind = Kind & { agent: Leg; customer: Leg };
 type PlivoAccount = {
   balance: { known: false } | { known: true; cashCredits: number; autoRecharge: boolean; lowThreshold: number };
   spend: {
     month: string;
     currency: 'USD';
-    calls: Kind;
+    calls: CallsKind;
     transcriptions: Kind;
     asOf: string | null;
     refreshing: boolean;
@@ -113,7 +117,7 @@ export function PlivoAccountCard() {
               <Stat
                 label="Calls This Month"
                 value={<Cost kind={spend.calls} />}
-                sub={`${spend.calls.count.toLocaleString('en-IN')} call legs`}
+                sub={`Agent ${usd(spend.calls.agent.usd)} · Customer ${usd(spend.calls.customer.usd)} · ${spend.calls.count.toLocaleString('en-IN')} call legs`}
               />
               <Stat
                 label="Transcription This Month"
@@ -122,7 +126,8 @@ export function PlivoAccountCard() {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              USD, summed from Plivo&apos;s call and transcription records; excludes number rental, recording storage and taxes
+              USD, summed from Plivo&apos;s call and transcription records; excludes number rental, recording storage and taxes.
+              Agent = the operator&apos;s browser leg (Plivo lists it as inbound); Customer = the outbound phone leg
               {spend.asOf && ` · as of ${new Date(spend.asOf).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })} IST`}
               {' · updates every 10 min'}
             </p>
