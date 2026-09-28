@@ -163,10 +163,9 @@ test('the new props are optional and the existing ones keep their shape', () => 
     /\bisAdmin: boolean;/,
     /\bcanJob: Record<string, boolean>;/,
     /\bopenView: \(jobId: number\) => void;/,
-    /\bopenReassign: \(jobId: number\) => void;/,
     /\bonShowLocation: \(row: \{ job_id: number; easyfixer_name: string \| null \}\) => void;/,
     /\bscopeClamped\?: boolean;/,
-    /\bonOpenConsole\?: \(jobId: number\) => void;/,
+    /\bonOpenConsole\?: \(jobId: number, jobStatus: number\) => void;/,
   ]) {
     assert.match(props[1], p, `PendingToStartViewProps lost or changed ${p}`);
   }
@@ -285,8 +284,11 @@ test('the job console icon is first in the action cell, and only when the host w
   const cell = actionCellOf(view);
   assert.ok(cell, 'positive control: the action cell must be found');
   assert.match(cell,
-    /\{onOpenConsole && \(\s*<button\s+type="button"\s+onClick=\{\(\) => onOpenConsole\(j\.job_id\)\}\s+className="inline-flex items-center gap-1 text-primary text-xs hover:underline"\s+title="Open job console"\s+aria-label="Open job console"\s*>\s*<PanelsTopLeft className="h-3\.5 w-3\.5" \/>\s*<\/button>\s*\)\}/);
-  const order = ['onOpenConsole(j.job_id)', 'onShowLocation(j)', 'onView(j.job_id)', 'onReassign(j.job_id)', '<ResendPinButton', '<TechRequestActions']
+    /\{onOpenConsole && \(\s*<button\s+type="button"\s+onClick=\{\(\) => onOpenConsole\(j\.job_id, j\.job_status\)\}\s+className="inline-flex items-center gap-1 text-primary text-xs hover:underline"\s+title="Open job console"\s+aria-label="Open job console"\s*>\s*<PanelsTopLeft className="h-3\.5 w-3\.5" \/>\s*<\/button>\s*\)\}/);
+  /* 'onReassign(j.job_id)' left this list on 2026-09-20 (ops): the standalone
+     Reassign icon was removed, and the console icon above is now the single
+     way into a job. The remaining icons keep their relative order. */
+  const order = ['onOpenConsole(j.job_id, j.job_status)', 'onShowLocation(j)', 'onView(j.job_id)', '<ResendPinButton', '<TechRequestActions']
     .map((s) => [s, cell.indexOf(s)]);
   for (const [s, i] of order) assert.ok(i > -1, `${s} must still be in the action cell`);
   for (let k = 1; k < order.length; k += 1) {
@@ -348,12 +350,15 @@ test('differential control — the guards go red when their subject is removed',
     assert.doesNotMatch(mutated, pattern, `${what}: the guard still passes with its subject removed`);
   }
 
-  // Order: moving the console icon after Reassign must flip the order scan.
+  /* Order: moving the console icon to the END of the cell must flip the order
+     scan. It used to be moved after the Reassign block, which was removed on
+     2026-09-20 (ops) — appending needs no anchor at all, so the control cannot
+     rot against the next icon that leaves. */
   const cell = actionCellOf(view);
   const icon = cell.match(/\{onOpenConsole && \([\s\S]*?<\/button>\s*\)\}/);
   assert.ok(icon, 'control: the console icon block must be found');
-  const moved = cell.replace(icon[0], '').replace('{canJob.isJobReassign && (', `${icon[0]}\n{canJob.isJobReassign && (`);
+  const moved = `${cell.replace(icon[0], '')}\n${icon[0]}`;
   assert.notEqual(moved, cell, 'the order mutation must land');
-  assert.ok(moved.indexOf('onOpenConsole(j.job_id)') > moved.indexOf('onView(j.job_id)'),
+  assert.ok(moved.indexOf('onOpenConsole(j.job_id, j.job_status)') > moved.indexOf('onView(j.job_id)'),
     'the order scan would see the icon out of place');
 });
