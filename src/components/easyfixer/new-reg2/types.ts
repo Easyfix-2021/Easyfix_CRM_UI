@@ -166,6 +166,10 @@ export type PincodeChip = {
   pincode_id: number;
   pincode: string;
   location: string | null;
+  city_id: number | null;
   city_name: string | null;
   state_name: string | null;
+  // A city's zonal manager is its state's, stored on tbl_city.state_user.
+  // Often null: only ~4,100 of ~11,000 active cities have one assigned.
+  zonal_manager_name: string | null;
 };

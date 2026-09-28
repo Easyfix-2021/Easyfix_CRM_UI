@@ -114,6 +114,18 @@ export default function NewRegistration2ProfilePage() {
   // list to review what the technician has filled in, not to read Overview.
   const [tab, setTab] = useState<TabKey>('onboarding');
 
+  // Bumped when the Onboarding tab's coverage table is clicked: switches to
+  // Work & Coverage and tells it to scroll the pincode editor into view.
+  const [pincodeFocus, setPincodeFocus] = useState(0);
+  const openPincodeEditor = useCallback(() => {
+    setTab('work');
+    setPincodeFocus((n) => n + 1);
+  }, []);
+
+  // A stored profile_img whose file 404s must fall back to the initial, not
+  // leave a broken-image icon in the header.
+  const [photoBroken, setPhotoBroken] = useState(false);
+
   const displayName = useMemo(
     () => formatEasyfixerName(v?.header.full_name ?? row?.efr_name ?? '') || `EF ${efrId}`,
     [v, row, efrId],
@@ -170,8 +182,16 @@ export default function NewRegistration2ProfilePage() {
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="flex flex-wrap items-center gap-4 p-5">
           <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-brand-50 text-2xl font-semibold text-brand-700">
-            {v.activation.sidebar.profile_img
-              ? <img src={`/easydoc/easyfixer_documents/${v.activation.sidebar.profile_img}`} alt="" className="h-full w-full object-cover" />
+            {v.activation.sidebar.profile_img && !photoBroken
+              ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`/easydoc/easyfixer_documents/${v.activation.sidebar.profile_img}`}
+                  alt={`${displayName} profile photo`}
+                  className="h-full w-full object-cover"
+                  onError={() => setPhotoBroken(true)}
+                />
+              )
               : displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-[220px] flex-1">
@@ -246,7 +266,9 @@ export default function NewRegistration2ProfilePage() {
             onChangeStatus={() => setStatusOpen(true)}
           />
         )}
-        {tab === 'onboarding' && <OnboardingTab efrId={efrId} v={v} onReload={reloadAll} />}
+        {tab === 'onboarding' && (
+          <OnboardingTab efrId={efrId} v={v} onReload={reloadAll} onEditPincodes={openPincodeEditor} />
+        )}
         {tab === 'profile' && (
           <ProfileDocumentsTab
             v={v}
@@ -262,6 +284,8 @@ export default function NewRegistration2ProfilePage() {
             active={!!active}
             canManageSkills={!!can.isEdit}
             onManageSkills={() => setDeepSkillOpen(true)}
+            canEditPincodes={!!can.isEdit}
+            focusPincodes={pincodeFocus}
           />
         )}
         {tab === 'bank' && (

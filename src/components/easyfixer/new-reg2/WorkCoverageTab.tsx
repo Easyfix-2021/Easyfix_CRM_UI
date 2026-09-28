@@ -4,14 +4,20 @@
  *
  * Real data: GET .../option-mappings (grouped Category → Skill → Option →
  * service type) and GET .../serviceable-pincodes. Editing the mapping reuses
- * the shared EasyfixerDeepSkillModal (opened by the parent). Coverage-from-jobs
- * and jobs-by-category have no endpoint, so they render placeholders.
+ * the shared EasyfixerDeepSkillModal (opened by the parent); editing the
+ * pincodes reuses ServiceablePincodesEditor, the same component the
+ * verification workflow renders. Coverage-from-jobs and jobs-by-category have
+ * no endpoint, so they render placeholders.
+ *
+ * `focusPincodes` is a counter the Onboarding tab bumps when a reviewer clicks
+ * a coverage row there: the parent switches to this tab and we scroll the
+ * pincode editor into view and ring it, so the click lands somewhere visible
+ * instead of at the top of a long page.
  */
-import { useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFetch } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
-import { Search } from 'lucide-react';
+import { ServiceablePincodesEditor } from '@/components/easyfixer/ServiceablePincodesEditor';
 import { SectionCard, EndpointPending, LockedBody } from './ui';
 import type { OptionMapping, PincodeChip } from './types';
 
@@ -20,22 +26,37 @@ export function WorkCoverageTab({
   active,
   canManageSkills,
   onManageSkills,
+  canEditPincodes = false,
+  focusPincodes = 0,
 }: {
   efrId: number;
   active: boolean;
   canManageSkills: boolean;
   onManageSkills: () => void;
+  canEditPincodes?: boolean;
+  focusPincodes?: number;
 }) {
   // Parent remounts this tab (React key) after an unmap, so a plain key
   // re-fetches — no cache-buster query param.
   const { data: mapData, loading: mapLoading } = useFetch<{ items: OptionMapping[] }>(
     `/admin/easyfixers/${efrId}/option-mappings`,
   );
-  const { data: pinData, loading: pinLoading } = useFetch<{ items: PincodeChip[] }>(
+  const { data: pinData, refetch: refetchPins } = useFetch<{ items: PincodeChip[] }>(
     `/admin/easyfixers/${efrId}/serviceable-pincodes`,
   );
 
-  const [pinQuery, setPinQuery] = useState('');
+  const pinRef = useRef<HTMLDivElement>(null);
+  const [ringing, setRinging] = useState(false);
+
+  // Arriving from the Onboarding tab's coverage table: scroll here and flash a
+  // ring. Skips the initial render (focusPincodes starts at 0).
+  useEffect(() => {
+    if (!focusPincodes) return;
+    pinRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setRinging(true);
+    const t = setTimeout(() => setRinging(false), 2000);
+    return () => clearTimeout(t);
+  }, [focusPincodes]);
 
   // Group option mappings by category → deep skill → option (with its type).
   const grouped = useMemo(() => {
@@ -52,11 +73,6 @@ export function WorkCoverageTab({
   }, [mapData]);
 
   const pins = pinData?.items ?? [];
-  const filteredPins = pins.filter((p) => {
-    const q = pinQuery.trim().toLowerCase();
-    if (!q) return true;
-    return p.pincode.includes(q) || (p.location ?? '').toLowerCase().includes(q) || (p.city_name ?? '').toLowerCase().includes(q);
-  });
 
   return (
     <div className="space-y-4">
@@ -97,35 +113,28 @@ export function WorkCoverageTab({
         </p>
       </SectionCard>
 
-      <SectionCard title="Serviceable Pincodes" icon={<span>📍</span>} right={<span>{pins.length} selected</span>}>
-        <div className="mb-3 flex items-center gap-2 rounded-lg border bg-card px-3 py-2">
-          <Search className="h-4 w-4 shrink-0 text-ink-300" />
-          <input
-            value={pinQuery}
-            onChange={(e) => setPinQuery(e.target.value)}
-            placeholder="Search pincode or area…"
-            aria-label="Search serviceable pincodes"
-            className="w-full bg-transparent text-sm outline-none"
-          />
-        </div>
-        {pinLoading && !pinData ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : filteredPins.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{pins.length === 0 ? 'No serviceable pincodes yet.' : 'No pincodes match your search.'}</p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {filteredPins.map((p) => (
-              <span key={p.pincode_id} className="rounded-md border bg-muted px-2 py-1 font-mono text-xs text-ink-700" title={[p.location, p.city_name, p.state_name].filter(Boolean).join(', ')}>
-                {p.pincode}{p.city_name ? ` · ${p.city_name}` : ''}
-              </span>
-            ))}
-          </div>
-        )}
-        <p className="mt-3 text-xs text-muted-foreground">
-          Editing serviceable pincodes runs in the{' '}
-          <Link href={`/easyfixers/${efrId}/verification?from=/easyfixers/new-registration-2/${efrId}`} className="text-primary hover:underline">verification workflow</Link>.
-        </p>
-      </SectionCard>
+      <div ref={pinRef} className={ringing ? 'rounded-xl ring-2 ring-primary ring-offset-2 transition-shadow' : 'transition-shadow'}>
+        <SectionCard title="Serviceable Pincodes" icon={<span>📍</span>} right={<span>{pins.length} selected</span>}>
+          {canEditPincodes ? (
+            <ServiceablePincodesEditor efrId={efrId} onReload={async () => { refetchPins(); }} />
+          ) : (
+            <>
+              {pins.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No serviceable pincodes yet.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {pins.map((p) => (
+                    <span key={p.pincode_id} className="rounded-md border bg-muted px-2 py-1 font-mono text-xs text-ink-700" title={[p.location, p.city_name, p.state_name].filter(Boolean).join(', ')}>
+                      {p.pincode}{p.city_name ? ` · ${p.city_name}` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-3 text-xs text-muted-foreground">You do not have permission to change serviceable pincodes.</p>
+            </>
+          )}
+        </SectionCard>
+      </div>
 
       <SectionCard title="Coverage — where they have worked" icon={<span>🗺️</span>} right={<span>from job PIN codes</span>}>
         {active
