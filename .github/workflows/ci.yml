@@ -88,13 +88,22 @@ jobs:
       # config, and the audit's own file walk would scan them as if they were
       # ours. The audit reads git history from THIS repo, not that one, so a
       # depth-1 clone of the tool is all that is needed.
-      # Same branch the client-UI clone below uses: a PR compares against its
-      # target branch's backend (tests/job-stages-parity reads lib/job-stages.js
-      # through EASYFIX_BACKEND_DIR), a dispatch against Production.
+      # A PR compares against its target branch's backend (tests/job-stages-parity
+      # reads lib/job-stages.js through EASYFIX_BACKEND_DIR), a dispatch against
+      # Production — UNLESS the backend has a branch with this PR's head name
+      # (2026-09-28): a feature built in both repos is then tested as the pair
+      # that will ship, mirroring EasyFix_Backend's ci.yml CRM clone. Only that
+      # guess may fall back; the base must exist. Refs arrive via env:, never
+      # ${{ }} inside run: — a fork's PR chooses head_ref.
       - name: Fetch the shared message-literal audit
         env:
+          HEAD_REF: ${{ github.head_ref }}
           BRANCH: ${{ github.base_ref || 'Production' }}
-        run: git clone --quiet --depth 1 --branch "$BRANCH" https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
+        run: |
+          BE=https://github.com/Easyfix-2021/Easyfix_Backend.git
+          if [ -n "$HEAD_REF" ] && git ls-remote --exit-code --heads "$BE" "$HEAD_REF" >/dev/null; then BRANCH="$HEAD_REF"; fi
+          git clone --quiet --depth 1 --branch "$BRANCH" "$BE" "$RUNNER_TEMP/easyfix-backend-audit"
+          echo "Backend parity checkout: $BRANCH @ $(git -C "$RUNNER_TEMP/easyfix-backend-audit" rev-parse --short HEAD)"
       # tests/dozzle-agent-compose.test.js FAILS (never skips) unless
       # Easyfix_client_UI carries a byte-identical deploy/docker-compose.prod-frontend.yml
       # — same clone as deploy.yml precheck. A PR clones its target branch, the
