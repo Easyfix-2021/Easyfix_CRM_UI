@@ -74,6 +74,10 @@ const STRIP: Array<{ key: keyof StatusCounts; label: string; status: string; lif
   { key: 'training_pending', label: 'Training Pending', status: '', lifecycleStatus: 'TRAINING_PENDING', dot: 'bg-gold' },
 ];
 
+// Legacy `status` bucket 6 — user_id > 0 AND tech_verified != 1. The landing
+// filter for this page, and where Reset returns to.
+const REG_IN_PROGRESS_STATUS = '6';
+
 const EF_COLS = 8;
 
 type ServiceCategory = { service_catg_id: number; service_catg_name: string };
@@ -97,7 +101,9 @@ export default function NewRegistration2ListPage() {
 
   // Search box (id / name / mobile) + which status bucket is active.
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('1'); // Active default, matches roster
+  // The page exists for people still registering, so it opens on bucket 6
+  // (Registration In Progress) rather than the roster's Active default.
+  const [status, setStatus] = useState(REG_IN_PROGRESS_STATUS);
   const [lifecycleStatus, setLifecycleStatus] = useState('');
 
   const [page, setPage] = useState(0);
@@ -223,7 +229,7 @@ export default function NewRegistration2ListPage() {
         <Button onClick={() => load(true)} disabled={loading}>Search</Button>
         <Button
           variant="outline"
-          onClick={() => { setSearch(''); setStatus('1'); setLifecycleStatus(''); setPage(0); setResetTick((n) => n + 1); }}
+          onClick={() => { setSearch(''); setStatus(REG_IN_PROGRESS_STATUS); setLifecycleStatus(''); setPage(0); setResetTick((n) => n + 1); }}
           disabled={loading}
         >
           Reset

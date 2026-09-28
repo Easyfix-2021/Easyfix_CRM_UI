@@ -110,7 +110,9 @@ export default function NewRegistration2ProfilePage() {
   const [txOpen, setTxOpen] = useState(false);
   const [clientMapOpen, setClientMapOpen] = useState(false);
 
-  const [tab, setTab] = useState<TabKey>('overview');
+  // Opens on Onboarding: people arrive here from the Registration In Progress
+  // list to review what the technician has filled in, not to read Overview.
+  const [tab, setTab] = useState<TabKey>('onboarding');
 
   const displayName = useMemo(
     () => formatEasyfixerName(v?.header.full_name ?? row?.efr_name ?? '') || `EF ${efrId}`,
