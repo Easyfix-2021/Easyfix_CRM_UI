@@ -376,8 +376,10 @@ export type TravelChargeInput = {
 };
 
 /* ─── Advance requests ──────────────────────────────────────────────────
- * Mirrors `tbl_efr_advance_payment` (see finance/advances page). adv_status:
- *   0 Pending · 1 Ops Approved · 2 Finance Approved · 3 Rejected.
+ * Mirrors `tbl_efr_advance_payment` (see finance/advances page). adv_status
+ * is LEGACY's ladder — the Struts CRM is still live on this same table:
+ *   1 Initiated · 2 Pending To Finance · 3 Rejected by Ops
+ *   4 Advance Done · 5 Rejected by Finance
  */
 export type Advance = {
   advance_id: number;
@@ -389,15 +391,42 @@ export type Advance = {
   advance_amt: number | null;
   initiated_on: string | null;
   initiated_by: number | null;
+  initiated_by_name: string | null;
   pm_remarks: string | null;
   ops_action_on: string | null;
+  ops_action_by: number | null;
+  ops_action_by_name: string | null;
   ops_remarks: string | null;
   fin_action_on: string | null;
+  fin_action_by: number | null;
+  fin_action_by_name: string | null;
   fin_remarks: string | null;
   transaction_id: string | null;
+  supporting_document: string | null;
   efr_name: string | null;
   efr_no: string | null;
   client_name: string | null;
+  /* Audit Advance columns (legacy parity): the technician's city and current
+     balance, and the job's status for the open/completed/closed filter. */
+  city_name: string | null;
+  current_balance: number | string | null;
+  job_status: number | null;
+};
+
+/*
+ * GET /admin/advances/context?jobId=&efrId= — everything the Advance Payment
+ * Request form needs before a row exists, mirroring what legacy's
+ * findAdvanceByJobIdAndStatus() put on its default Advance object.
+ */
+export type AdvanceContext = {
+  job_id: number;
+  client_id: number | null;
+  efr_id: number | null;
+  job_total_amt: number;
+  max_allowed_advance: number;
+  foh_count: number;
+  esa_count: number;
+  tx_open_count: number;
 };
 
 export type CreateAdvanceInput = {
@@ -409,11 +438,14 @@ export type CreateAdvanceInput = {
   pmRemarks: string;
 };
 
+/* Legacy's wording, verbatim — AdvanceDaoImpl.java:429. Keep in step with
+   ADV_STATUS in Easyfix_Backend/routes/admin/advances.js. */
 export const ADVANCE_STATUS_LABEL: Record<number, string> = {
-  0: 'Pending',
-  1: 'Ops Approved',
-  2: 'Finance Approved',
-  3: 'Rejected',
+  1: 'Initiated',
+  2: 'Pending To Finance',
+  3: 'Rejected by Ops',
+  4: 'Advance Done',
+  5: 'Rejected by Finance',
 };
 
 /* Optional proposed-schedule edit carried alongside an offer/assign commit. */
