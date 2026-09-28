@@ -4,11 +4,13 @@
  * Audit Advance — multi-step approval workflow for advance payments to
  * easyfixers backed by `tbl_efr_advance_payment`.
  *
- * State machine (adv_status):
- *   0 = pending / initiated by PM
- *   1 = ops approved (mid-state)
- *   2 = finance approved (terminal)
- *   3 = rejected (by ops or finance)
+ * State machine (adv_status) — legacy's ladder, shared with the still-live
+ * Struts CRM writing the same table:
+ *   1 = Initiated           (PM raised it, awaiting Ops)
+ *   2 = Pending To Finance  (Ops approved, awaiting Finance)
+ *   3 = Rejected by Ops     (terminal)
+ *   4 = Advance Done        (Finance paid, terminal)
+ *   5 = Rejected by Finance (terminal)
  *
  * Backend wiring:
  *   GET    /admin/advances?status=&efrId=
@@ -29,6 +31,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useFetch as useSharedFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { DownloadButton } from '@/components/ui/download-button';
+import { downloadXlsx } from '@/lib/download-xlsx';
 
 type Advance = {
   advance_id: number;
@@ -49,14 +53,46 @@ type Advance = {
   efr_name: string | null;
   efr_no: string | null;
   client_name: string | null;
+  /* Legacy Audit Advance columns this screen shipped without. Finance judges
+     an advance against what the technician already holds, and Ops filters by
+     city — neither was on the page. */
+  city_name: string | null;
+  current_balance: number | string | null;
+  job_status: number | null;
 };
 
+/* Legacy's job-status filter: three buckets, not raw statuses
+   (AdvanceDaoImpl.java:358). */
+const JOB_STATUS_FILTERS: { value: string; label: string }[] = [
+  { value: '', label: 'All jobs' },
+  { value: '1', label: 'Open' },
+  { value: '2', label: 'Completed' },
+  { value: '3', label: 'Cancelled / Enquiry' },
+];
+
+/*
+ * adv_status labels — LEGACY's ladder, not an invented one. The legacy Struts
+ * CRM is still live on the same tbl_efr_advance_payment, and its wording is
+ * what Ops and Finance already read on that screen
+ * (EasyFix_CRM AdvanceDaoImpl.java:429).
+ *
+ * This map used to be 0 Pending / 1 Ops Approved / 2 Finance Approved /
+ * 3 Rejected, which mislabelled every legacy row: an untouched request (1)
+ * displayed as "Ops Approved" and one still awaiting Finance (2) displayed as
+ * "Finance Approved". Keep these in step with ADV_STATUS in
+ * Easyfix_Backend/routes/admin/advances.js.
+ */
 const STATUS_LABEL: Record<number, string> = {
-  0: 'Pending',
-  1: 'Ops Approved',
-  2: 'Finance Approved',
-  3: 'Rejected',
+  1: 'Initiated',
+  2: 'Pending To Finance',
+  3: 'Rejected by Ops',
+  4: 'Advance Done',
+  5: 'Rejected by Finance',
 };
+
+/* Only these two states are actionable; 3, 4 and 5 are terminal. */
+const STATUS_AWAITING_OPS = 1;
+const STATUS_AWAITING_FINANCE = 2;
 
 /*
  * Adapter over the mandatory shared `@/lib/hooks` useFetch (per memory
@@ -64,16 +100,60 @@ const STATUS_LABEL: Record<number, string> = {
  * payload; this page consumes a list endpoint, so we normalise to
  * array semantics + `reload` naming to keep the call-site terse.
  */
-function useFetch<T>(url: string | null): { data: T[]; loading: boolean; error: string | null; reload: () => void } {
-  const { data, loading, error, refetch } = useSharedFetch<T[] | { items?: T[] }>(url);
+function useFetch<T>(url: string | null): {
+  data: T[]; total: number; loading: boolean; error: string | null; reload: () => void;
+} {
+  const { data, loading, error, refetch } = useSharedFetch<T[] | { items?: T[]; total?: number }>(url);
   const arr: T[] = Array.isArray(data) ? data : ((data as { items?: T[] } | null)?.items ?? []);
-  return { data: arr, loading, error, reload: refetch };
+  // Older payloads are a bare array with no count; fall back to what arrived so
+  // the pager reads "1–n of n" rather than "of 0".
+  const total = Array.isArray(data)
+    ? data.length
+    : ((data as { total?: number } | null)?.total ?? arr.length);
+  return { data: arr, total, loading, error, reload: refetch };
 }
 
 export default function AdvancesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const url = `/admin/advances${statusFilter ? `?status=${statusFilter}` : ''}`;
-  const { data, loading, error, reload } = useFetch<Advance>(url);
+  const [jobStatusFilter, setJobStatusFilter] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [downloading, setDownloading] = useState(false);
+  const [page, setPage] = useState(0);
+
+  /* Both halves of a range or neither — the BE only applies it when it has
+     both ends, so sending one would silently do nothing. */
+  const query = new URLSearchParams();
+  if (statusFilter) query.set('status', statusFilter);
+  if (jobStatusFilter) query.set('jobStatus', jobStatusFilter);
+  if (dateFrom && dateTo) { query.set('dateFrom', dateFrom); query.set('dateTo', dateTo); }
+  const qs = query.toString();
+
+  // Legacy's page size (advancedApproved.vm:299).
+  const PAGE_SIZE = 20;
+  const pageQuery = new URLSearchParams(qs);
+  pageQuery.set('limit', String(PAGE_SIZE));
+  pageQuery.set('offset', String(page * PAGE_SIZE));
+
+  const url = `/admin/advances?${pageQuery.toString()}`;
+  const { data, total, loading, error, reload } = useFetch<Advance>(url);
+
+  // Any filter change invalidates the current page number.
+  useEffect(() => { setPage(0); }, [statusFilter, jobStatusFilter, dateFrom, dateTo]);
+
+  async function download() {
+    setDownloading(true);
+    try {
+      await downloadXlsx({
+        url: `/admin/advances/export${qs ? `?${qs}` : ''}`,
+        filename: `advance-list-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed' });
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   // Reject flow now uses a dedicated dialog instead of window.prompt.
   // Approve flows remain inline POST calls — no input needed.
@@ -119,9 +199,9 @@ export default function AdvancesPage() {
         </p>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Status:</span>
-        {['', '0', '1', '2', '3'].map((s) => (
+        {['', '1', '2', '3', '4', '5'].map((s) => (
           <button
             key={s || 'all'}
             onClick={() => setStatusFilter(s)}
@@ -131,6 +211,47 @@ export default function AdvancesPage() {
           </button>
         ))}
       </div>
+
+      {/* Legacy's remaining filters. City / NDM / PM are supported by the API
+          but need their own lookup pickers — not wired here yet. */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <Label className="mb-1 block text-xs text-muted-foreground">Job status</Label>
+          <select
+            value={jobStatusFilter}
+            onChange={(e) => setJobStatusFilter(e.target.value)}
+            className="h-9 rounded-md border border-input bg-card px-2 text-sm shadow-sm focus:outline-none"
+          >
+            {JOB_STATUS_FILTERS.map((o) => (
+              <option key={o.value || 'all'} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <Label className="mb-1 block text-xs text-muted-foreground">From</Label>
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" />
+        </div>
+        <div>
+          <Label className="mb-1 block text-xs text-muted-foreground">To</Label>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" />
+        </div>
+        {(dateFrom || dateTo) && (
+          <Button
+            variant="outline"
+            onClick={() => { setDateFrom(''); setDateTo(''); }}
+            className="h-9"
+          >
+            Clear dates
+          </Button>
+        )}
+        <div className="ml-auto">
+          {/* Legacy's "Download Advance" — exports the filtered set. */}
+          <DownloadButton onClick={() => void download()} downloading={downloading} />
+        </div>
+      </div>
+      {(dateFrom && !dateTo) || (!dateFrom && dateTo) ? (
+        <p className="text-xs text-muted-foreground">Pick both dates to apply the range.</p>
+      ) : null}
 
       {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
       {error && (
@@ -150,7 +271,10 @@ export default function AdvancesPage() {
               <tr>
                 <th className="!text-center">ID</th>
                 <th>Easyfixer</th>
+                {/* Finance approves against what the tech already holds. */}
+                <th className="!text-right">Tx Balance ₹</th>
                 <th>Client</th>
+                <th>City</th>
                 <th className="!text-center">Job</th>
                 <th className="!text-right">Job Total ₹</th>
                 <th className="!text-right">Advance ₹</th>
@@ -170,6 +294,9 @@ export default function AdvancesPage() {
                       #{a.efr_id} · {a.efr_no || '—'}
                     </span>
                   </td>
+                  <td className="!text-right font-mono">
+                    {a.current_balance != null ? Number(a.current_balance).toFixed(2) : '—'}
+                  </td>
                   <td className="text-xs">
                     {a.client_name || '—'}
                     {a.client_id != null && (
@@ -179,6 +306,7 @@ export default function AdvancesPage() {
                       </>
                     )}
                   </td>
+                  <td className="text-xs">{a.city_name || '—'}</td>
                   <td className="!text-center font-mono text-xs">{a.job_id ?? '—'}</td>
                   <td className="!text-right font-mono">
                     {a.job_total_amt != null ? Number(a.job_total_amt).toFixed(2) : '—'}
@@ -191,7 +319,7 @@ export default function AdvancesPage() {
                   </td>
                   <td className="text-xs">{a.initiated_on ? formatDate(a.initiated_on) : '—'}</td>
                   <td className="!text-right whitespace-nowrap">
-                    {a.adv_status === 0 && (
+                    {a.adv_status === STATUS_AWAITING_OPS && (
                       <>
                         <button
                           onClick={() => act(a, 'ops-approve')}
@@ -207,7 +335,7 @@ export default function AdvancesPage() {
                         </button>
                       </>
                     )}
-                    {a.adv_status === 1 && (
+                    {a.adv_status === STATUS_AWAITING_FINANCE && (
                       <>
                         <button
                           onClick={() => act(a, 'fin-approve')}
@@ -230,6 +358,34 @@ export default function AdvancesPage() {
           </table>
         </div>
       )}
+      {/* Pager — legacy showed an entries count and a page control; without one
+          this screen silently stopped at its fetch limit. */}
+      {!loading && !error && total > 0 && (
+        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span>
+            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="h-8"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              className="h-8"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={(page + 1) * PAGE_SIZE >= total}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
+
       <RejectAdvanceDialog advance={rejecting} onClose={() => setRejecting(null)} onSubmit={submitReject} />
     </div>
   );

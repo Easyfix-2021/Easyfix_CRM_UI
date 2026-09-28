@@ -6,7 +6,6 @@ import { useFetch, invalidateFetch } from '@/lib/hooks';
 import {
   api,
   ApiError,
-  ADVANCE_STATUS_LABEL,
   type JobChargesResponse,
   type JobCharge,
   type JobChargeService,
@@ -57,12 +56,70 @@ function chargeMode(type: string): ChargeMode | null {
   return null;
 }
 
+/* Legacy adv_status ladder — see ADVANCE_STATUS_LABEL in lib/api.ts. */
 const ADVANCE_TONE: Record<number, StatusChipTone> = {
-  0: 'amber',
-  1: 'sky',
-  2: 'emerald',
+  1: 'amber',
+  2: 'sky',
   3: 'red',
+  4: 'emerald',
+  5: 'red',
 };
+
+/*
+ * Legacy renders the job's advances as one row PER WORKFLOW STAGE, newest
+ * first, each carrying that stage's own actor, timestamp and remarks
+ * (EasyFix_CRM pages/jobs/getAllAdvanceListByJobId.vm). A paid advance is
+ * three rows: Advance Payment Done / Approved / Initiated.
+ *
+ * This tab used to collapse all of that into ONE row per advance showing only
+ * pm_remarks — ops_remarks and fin_remarks were fetched and never rendered, so
+ * the approval trail was invisible from the job.
+ */
+type AdvanceStageRow = {
+  key: string;
+  label: string;
+  amount: number | null;
+  actionBy: string | null;
+  actionOn: string | null;
+  remarks: string | null;
+};
+
+function advanceStages(a: Advance): AdvanceStageRow[] {
+  const amount = a.advance_amt;
+  const initiated: AdvanceStageRow = {
+    key: `${a.advance_id}-init`,
+    label: 'Initiated',
+    amount,
+    actionBy: a.initiated_by_name,
+    actionOn: a.initiated_on,
+    remarks: a.pm_remarks,
+  };
+  const ops = (label: string): AdvanceStageRow => ({
+    key: `${a.advance_id}-ops`,
+    label,
+    amount,
+    actionBy: a.ops_action_by_name,
+    actionOn: a.ops_action_on,
+    remarks: a.ops_remarks,
+  });
+  const fin = (label: string): AdvanceStageRow => ({
+    key: `${a.advance_id}-fin`,
+    label,
+    amount,
+    actionBy: a.fin_action_by_name,
+    actionOn: a.fin_action_on,
+    remarks: a.fin_remarks,
+  });
+  switch (Number(a.adv_status)) {
+    case 5: return [fin('Rejected by Finance'), ops('Approved'), initiated];
+    case 4: return [fin('Advance Payment Done'), ops('Approved'), initiated];
+    case 3: return [ops('Rejected'), initiated];
+    case 2: return [ops('Approved'), initiated];
+    // 1 is Initiated. A 0 is only ever a row this CRM wrote before the ladder
+    // was corrected — it meant "initiated by PM" then, so it reads the same.
+    default: return [initiated];
+  }
+}
 
 export function BillingChargesTab({
   jobId,
@@ -398,12 +455,13 @@ export function BillingChargesTab({
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead>
+              {/* Legacy's column set, verbatim. */}
               <tr>
-                <th className="!text-left">Requested On</th>
-                <th className="!text-right">Advance ₹</th>
-                <th className="!text-right">Job Total ₹</th>
+                <th className="!text-left">Advance Status</th>
+                <th className="!text-right">Adv Amount</th>
+                <th className="!text-left">Action By</th>
+                <th className="!text-left">Action On</th>
                 <th className="!text-left">Remarks</th>
-                <th className="!text-center">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -412,20 +470,30 @@ export function BillingChargesTab({
                   <Loader2 className="inline size-3.5 animate-spin mr-1" /> Loading…
                 </td></tr>
               ) : advanceRows.length === 0 ? (
-                <tr><td colSpan={5} className="!text-center py-4 text-xs text-muted-foreground">No advance requests for this job.</td></tr>
-              ) : advanceRows.map((a) => (
-                <tr key={a.advance_id}>
-                  <td className="!text-left text-xs">{a.initiated_on ? formatDate(a.initiated_on) : '—'}</td>
-                  <td className="!text-right font-mono">{a.advance_amt != null ? inr(n(a.advance_amt)) : '—'}</td>
-                  <td className="!text-right font-mono">{a.job_total_amt != null ? inr(n(a.job_total_amt)) : '—'}</td>
-                  <td className="!text-left text-xs">{a.pm_remarks ?? '—'}</td>
-                  <td className="!text-center">
-                    <StatusChip tone={ADVANCE_TONE[a.adv_status] ?? 'slate'} size="sm">
-                      {ADVANCE_STATUS_LABEL[a.adv_status] ?? String(a.adv_status)}
-                    </StatusChip>
-                  </td>
-                </tr>
-              ))}
+                <tr><td colSpan={5} className="!text-center py-4 text-xs text-muted-foreground">No advances available.</td></tr>
+              ) : advanceRows.flatMap((a) => {
+                const stages = advanceStages(a);
+                return stages.map((s, i) => (
+                  <tr key={s.key}>
+                    <td className="!text-left">
+                      {/* The chip carries the advance's CURRENT state and so
+                          belongs on its newest stage only; the older stages
+                          are history and read as plain labels. */}
+                      {i === 0 ? (
+                        <StatusChip tone={ADVANCE_TONE[a.adv_status] ?? 'slate'} size="sm">
+                          {s.label}
+                        </StatusChip>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{s.label}</span>
+                      )}
+                    </td>
+                    <td className="!text-right font-mono">{s.amount != null ? inr(n(s.amount)) : '—'}</td>
+                    <td className="!text-left text-xs">{s.actionBy ?? '—'}</td>
+                    <td className="!text-left text-xs">{s.actionOn ? formatDate(s.actionOn) : '—'}</td>
+                    <td className="!text-left text-xs">{s.remarks ?? '—'}</td>
+                  </tr>
+                ));
+              })}
             </tbody>
           </table>
         </div>
