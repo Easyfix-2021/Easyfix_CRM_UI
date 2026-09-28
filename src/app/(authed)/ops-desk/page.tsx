@@ -22,9 +22,9 @@
  * setInterval/cleanup needed here.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LayoutDashboard, RefreshCw, AlertTriangle } from 'lucide-react';
+import { LayoutDashboard, RefreshCw, AlertTriangle, MessageSquare } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -34,13 +34,15 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
-import { api, ApiError, type OpsDeskItem, type OpsDeskBand } from '@/lib/api';
+import { api, ApiError, type OpsDeskItem, type OpsDeskBand, type OpsDeskChatsResponse } from '@/lib/api';
 import { useFetch, useTabVisible, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { OPS_BANDS, OPS_BAND_LABEL, PENDING_ON_LABEL, formatOpsMoney, needsMeInLabel, pollIntervalMs } from '@/lib/ops-desk';
 import { JobRefLink } from '@/components/job/JobRefLink';
+import { useJobActionNav, useJobActionParams } from '@/lib/job-action-url';
+import { formatDate } from '@/lib/utils';
 import { JobModalHost } from '@/components/job/JobModalHost';
 import { AuthImage } from '@/components/job/JobDocumentsCard';
 import { VerifyWithCustomerDialog } from '@/components/job/VerifyWithCustomerDialog';
@@ -78,9 +80,29 @@ export default function OpsDeskPage() {
   const total = data?.total ?? 0;
   const counts = data?.counts;
 
+  /*
+   * Awaiting Reply — jobs whose latest chat line is the technician's
+   * (GET /admin/ops-desk/chats). Same gate, same visible-only poll as the list.
+   */
+  const chats = useFetch<OpsDeskChatsResponse>(
+    canManage ? '/admin/ops-desk/chats?limit=50' : null,
+    { enabled: canManage, refetchInterval: pollIntervalMs(tabVisible, POLL_MS) },
+  );
+  const refetchChats = chats.refetch;
+  const { openJobAction } = useJobActionNav();
+  // A reply is sent from the job's modal; re-read the list when it closes
+  // rather than leave the answered job listed until the next poll.
+  const { jobId: openJobId } = useJobActionParams();
+  const prevOpenJobId = useRef(openJobId);
+  useEffect(() => {
+    if (prevOpenJobId.current != null && openJobId == null) refetchChats();
+    prevOpenJobId.current = openJobId;
+  }, [openJobId, refetchChats]);
+
   function refreshList() {
     invalidateFetch((k) => k.startsWith('/admin/ops-desk'));
     refetch();
+    refetchChats();
   }
 
   // Row dialogs — controlled by presence of a target item/report id, like the
@@ -157,6 +179,54 @@ export default function OpsDeskPage() {
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="flex items-center gap-2 border-b px-3 py-2">
+            <MessageSquare className="size-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Awaiting Reply</h2>
+            <StatusChip tone={chats.data?.total ? 'urgent' : 'neutral'} size="sm">{chats.data?.total ?? '—'}</StatusChip>
+            {chats.error && <span className="text-xs text-urgent">{chats.error}</span>}
+          </div>
+          {(chats.data?.items.length ?? 0) === 0 ? (
+            <p className="px-3 py-3 text-sm text-muted-foreground">
+              {chats.loading ? 'Loading…' : 'No technician is waiting on a reply.'}
+            </p>
+          ) : (
+            <div className="max-h-72 overflow-auto">
+              <table className="data-table w-full">
+                <thead>
+                  <tr>
+                    <th className="!text-left">Job</th>
+                    <th className="!text-left">Technician</th>
+                    <th className="!text-left">Last Message</th>
+                    <th className="!text-left">Sent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {chats.data!.items.map((c) => (
+                    <tr key={c.jobId} className="hover:bg-ink-50">
+                      <td className="!text-left">
+                        <button
+                          type="button"
+                          onClick={() => openJobAction('view', c.jobId, { tab: 'activity' })}
+                          className="font-medium text-primary hover:underline"
+                        >
+                          #{c.jobId}
+                        </button>
+                        <div className="text-xs text-muted-foreground">{c.clientName ?? '—'}</div>
+                      </td>
+                      <td className="!text-left">{c.lastMessage.senderName ?? c.technician?.name ?? '—'}</td>
+                      <td className="!text-left text-sm"><div className="line-clamp-2 max-w-md">{c.lastMessage.body}</div></td>
+                      <td className="!text-left text-xs whitespace-nowrap">{formatDate(c.lastMessage.sentOn)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="p-0">

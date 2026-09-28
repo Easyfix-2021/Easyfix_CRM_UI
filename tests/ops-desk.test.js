@@ -21,6 +21,8 @@
  *   - pollIntervalMs     `return tabVisible ? baseMs : undefined;` inverted to
  *                          `!tabVisible ? baseMs : undefined`
  *                                  → both pollIntervalMs tests failed (visible/hidden swapped).
+ *   - chatAwaitingReply  read items[0] (the oldest line) instead of the last
+ *                                  → 'chat awaits a reply only when the LATEST line is the technician's' failed.
  */
 
 const test = require('node:test');
@@ -28,7 +30,7 @@ const assert = require('node:assert/strict');
 
 const {
   OPS_BANDS, OPS_BAND_LABEL, PENDING_ON_LABEL,
-  formatOpsMoney, formatJobMoney, needsMeInLabel, pollIntervalMs,
+  formatOpsMoney, formatJobMoney, needsMeInLabel, pollIntervalMs, chatAwaitingReply,
 } = require('../.test-build/ops-desk.js');
 
 // ─── Band labels (spec 3.2: "A On Site, Moving · B Stuck On Client · C Quality Check · D Cannot Finish As Booked") ───
@@ -138,4 +140,14 @@ test('verification: a cancel ask with no claim row is routed to the job, not the
 
 test('verification: a missing payload is an empty table, not a crash', () => {
   assert.deepEqual(toVerificationRows(null), { rows: [], total: 0 });
+});
+
+// ─── Job chat: awaiting a desk reply (same rule as GET /admin/ops-desk/chats) ───
+
+test("chat awaits a reply only when the LATEST line is the technician's", () => {
+  assert.equal(chatAwaitingReply([{ senderKind: 'desk' }, { senderKind: 'tx' }]), true);
+  assert.equal(chatAwaitingReply([{ senderKind: 'tx' }, { senderKind: 'desk' }]), false, 'a desk reply clears it');
+  assert.equal(chatAwaitingReply([]), false);
+  assert.equal(chatAwaitingReply(null), false);
+  assert.equal(chatAwaitingReply(undefined), false);
 });

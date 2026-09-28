@@ -43,8 +43,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { ShareChip, ReleaseShareButton, SHARE_RELEASE_ACTION } from '@/components/job/JobShareControls';
 import type { JobShare } from '@/lib/job-share';
-import { api, ApiError, type JobMoneyResponse } from '@/lib/api';
-import { formatJobMoney } from '@/lib/ops-desk';
+import { api, ApiError, type JobMoneyResponse, type JobChatResponse } from '@/lib/api';
+import { formatJobMoney, chatAwaitingReply } from '@/lib/ops-desk';
 import { formatApiError } from '@/lib/api-errors';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 // Booking-window vocabulary — the FOUR bands stored in tbl_job.time_slot plus
@@ -1213,6 +1213,17 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
   // Gates the inline Description pencil (Summary tab) — same isJobEdit key
   // the old ActionBar "Edit Description" button used.
   const canEditJob = actionFlags(me, ['isJobEdit']).isJobEdit;
+  /*
+   * Activity-tab dot: this job's chat awaits a desk reply (its latest line is
+   * the technician's). One read, on the SAME key JobChatPanel polls, so opening
+   * on Activity costs one request (useFetch dedupes in flight); after that the
+   * panel's onChatAwaiting keeps it live. No chat action → no read, no dot.
+   */
+  const chatKey = hasAction(me, APP_REQUEST_ACTION) && job.job_id != null ? `/admin/jobs/${job.job_id}/chat` : null;
+  const { data: chatData, dataKey: chatDataKey } = useFetch<JobChatResponse>(chatKey);
+  const [liveChatAwaiting, setLiveChatAwaiting] = useState<boolean | null>(null);
+  useEffect(() => { setLiveChatAwaiting(null); }, [chatKey]);
+  const chatAwaiting = liveChatAwaiting ?? (chatKey != null && chatDataKey === chatKey && chatAwaitingReply(chatData?.items));
   const rescheduleAsk = pendingRescheduleRequest({
     job_status: job.job_status,
     appRequest: job.appRequest as AppRequestDetail | null | undefined,
@@ -1269,7 +1280,12 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <TabsTrigger value="questionnaire">Questionnaire</TabsTrigger>
         <TabsTrigger value="comments">Comments</TabsTrigger>
         <TabsTrigger value="quotations">Quotations</TabsTrigger>
-        <TabsTrigger value="activity">Activity</TabsTrigger>
+        <TabsTrigger value="activity">
+          Activity
+          {chatAwaiting && (
+            <span className="ml-1.5 inline-block size-2 rounded-full bg-urgent" role="img" aria-label="Chat awaiting reply" title="Chat awaiting reply" />
+          )}
+        </TabsTrigger>
         {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
         {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
         </TabsList>
@@ -1687,7 +1703,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         * reading a job's own history needs no charge permission.
         */}
       <Panel value="activity" label="Activity" layout={layout}>
-        <JobActivity jobId={job.job_id != null ? Number(job.job_id) : null} />
+        <JobActivity jobId={job.job_id != null ? Number(job.job_id) : null} onChatAwaiting={setLiveChatAwaiting} />
       </Panel>
 
       {/* Billing & Charges tab — legacy CheckIn-detail right-column

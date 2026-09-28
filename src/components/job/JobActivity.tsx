@@ -1,12 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { History, MessageSquare, Send } from 'lucide-react';
 import { useFetch, useTabVisible, invalidateFetch } from '@/lib/hooks';
 import { formatDate, statusLabel } from '@/lib/utils';
 import { api, ApiError, type JobChatMessage } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
-import { pollIntervalMs } from '@/lib/ops-desk';
+import { chatAwaitingReply, pollIntervalMs } from '@/lib/ops-desk';
+import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
+import { APP_REQUEST_ACTION } from './TechRequestActions';
 
 /*
  * JobActivity — the job's event stream (V3 plan 3.1).
@@ -134,10 +137,17 @@ const SOURCE_LABEL: Record<ActivityEvent['source'], string> = {
   app: 'App', crm: 'CRM', system: 'System', legacy: 'Legacy',
 };
 
-export default function JobActivity({ jobId }: { jobId: number | null }) {
+export default function JobActivity({ jobId, onChatAwaiting }: {
+  jobId: number | null;
+  /** Told whether this job's chat awaits a desk reply each time the thread loads. */
+  onChatAwaiting?: (awaiting: boolean) => void;
+}) {
+  // The chat routes are gated on isJobAppRequestResolve (same key as the ops
+  // desk); without it the panel would only ever render a 403 as an error.
+  const { me } = useMe();
   return (
     <>
-      <JobChatPanel jobId={jobId} />
+      {hasAction(me, APP_REQUEST_ACTION) && <JobChatPanel jobId={jobId} onChatAwaiting={onChatAwaiting} />}
       <div className="mt-6 border-t pt-4">
         <ActivityFeed jobId={jobId} />
       </div>
@@ -158,7 +168,7 @@ export default function JobActivity({ jobId }: { jobId: number | null }) {
  * browser tab itself is hidden/backgrounded. Refetches immediately after a
  * successful send rather than waiting for the next tick.
  */
-function JobChatPanel({ jobId }: { jobId: number | null }) {
+function JobChatPanel({ jobId, onChatAwaiting }: { jobId: number | null; onChatAwaiting?: (awaiting: boolean) => void }) {
   const tabVisible = useTabVisible();
   const key = jobId ? `/admin/jobs/${jobId}/chat` : null;
   const { data, loading, error, dataKey, refetch } = useFetch<{ items: JobChatMessage[] }>(key, {
@@ -166,6 +176,10 @@ function JobChatPanel({ jobId }: { jobId: number | null }) {
   });
   const fresh = dataKey === key ? data : null;
   const messages = fresh?.items ?? [];
+  // Keeps JobModal's Activity-tab dot live while the thread polls / after a send.
+  useEffect(() => {
+    if (fresh) onChatAwaiting?.(chatAwaitingReply(fresh.items));
+  }, [fresh, onChatAwaiting]);
 
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
