@@ -1030,6 +1030,15 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       return;
     }
     /*
+     * A course with no content can never be completed, so it is never saved
+     * empty — the backend's PUT /content refuses [] too. Skipped only while an
+     * existing course's content is still loading (draft is empty for a moment).
+     */
+    if (draft.length === 0 && !(editing && contentFetch.loading)) {
+      setError('Add at least one video, document or assessment before saving this course.');
+      return;
+    }
+    /*
      * Blank is legitimate, so only a typed value is checked. Worth checking at
      * all because a number input happily hands back "1e5" and "12.5", and the
      * endpoint's integer Joi rejects both with a message that names neither.
@@ -1120,9 +1129,8 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
     if (contentDirty) {
       try {
         // The PUT REPLACES the whole content list — ALL kinds, not just one —
-        // so array order here is the sequence the technician sees. An empty
-        // array is a valid payload (it clears the course), which is why
-        // there's no "must have >= 1" guard.
+        // so array order here is the sequence the technician sees. Never
+        // empty: handleSubmit refuses a content-less course before this.
         //
         // /videos is deliberately NOT used even for a video-only course: it
         // replaces only the video items and leaves documents and assessments
@@ -1415,7 +1423,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
                   <div className="mt-1 text-xs text-muted-foreground">
                     A course with no content can never be completed by a technician —
                     it will show up as assigned and stay stuck at 0% forever.
-                    Add at least one video, document or assessment before assigning this course.
+                    Add at least one video, document or assessment before saving this course.
                   </div>
                 </div>
               )}
