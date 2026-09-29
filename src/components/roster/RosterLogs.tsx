@@ -1,23 +1,26 @@
 'use client';
 
 /*
- * Update Log + Action Log tabs — one component, `kind` picks the endpoint,
- * the columns and the row renderer. Both follow the Issue Queue's
- * Card > CardContent p-0 > table.data-table + border-t TablePagination
- * shape (admin-actions/issues/page.tsx).
+ * Logs tab — Actions ONLY (v2 contract: no Updates table on open). One row
+ * per action, including denied/rejected/failed attempts. Clicking the
+ * "N Employees" link inside a row's Summary opens ActionChangesDialog,
+ * which fetches the per-employee change rows for that one action on demand.
+ *
+ * `renderChange` / `dayTypeLabel` / `DayTypeChip` are exported so
+ * ActionChangesDialog reuses the exact same change-rendering logic instead
+ * of a second copy that can drift (contract item 7: "reuse the existing
+ * renderChange logic from RosterLogs").
  */
 
 import { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { StatusChip } from '@/components/ui/StatusChip';
+import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { TablePagination, type TablePageSize, pageSizeToLimit, PAGE_SIZE_OPTIONS } from '@/components/ui/table-pagination';
 import { useFetch } from '@/lib/hooks';
 import { formatDate } from '@/lib/utils';
-import type {
-  RosterActionLogAction, RosterActionLogItem, RosterActionLogResponse,
-  RosterUpdateLogItem, RosterUpdateLogResponse, RosterUpdateLogSource,
-} from './types';
+import { ActionChangesDialog } from './ActionChangesDialog';
+import type { RosterActionLogAction, RosterActionLogResponse, RosterUpdateLogItem } from './types';
 
 /* Same reasoning as the Issue Queue's ISSUE_PAGE_SIZES: 'All' renders as one
  * un-navigable page that lies past whatever the endpoint's own limit caps
@@ -25,15 +28,36 @@ import type {
 const LOG_LIMIT_CAP = 200;
 const LOG_PAGE_SIZES = PAGE_SIZE_OPTIONS.filter((o) => o.value !== 'all');
 
-const SOURCE_LABEL: Record<RosterUpdateLogSource, string> = {
-  GRID: 'Grid', PATTERN: 'Pattern', COPY: 'Copy', RESET: 'Reset', EDIT_USER: 'Edit User',
+/* FE-owned verb map (contract §logs/actions) — COPY_MONTH is old rows only,
+ * the endpoint that produced it is gone. */
+const ACTION_VERB: Record<RosterActionLogAction, string> = {
+  SAVE_GRID: 'Updated',
+  FILL_PATTERN: 'Updated',
+  COPY_MONTH: 'Updated',
+  RESET: 'Reset To Weekly Days',
+  NOTIFY: 'Notified',
+  EXPORT: 'Exported',
+  WORKING_DAYS: 'Working Days Changed',
 };
-
-function titleCaseAction(a: RosterActionLogAction | string): string {
-  return a.split('_').map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+function actionVerb(a: string): string {
+  return ACTION_VERB[a as RosterActionLogAction] ?? a;
 }
 
-function dayTypeLabel(v: string | null): string {
+/*
+ * FE-owned status map (contract §logs/actions): 2xx → Success (green), 403 →
+ * Denied (warning), other 4xx → Rejected, 5xx → Failed (urgent). The
+ * contract doesn't name a tone for "Rejected" — it sits between Denied and
+ * Failed in severity, so it renders neutral rather than borrowing either.
+ */
+function statusInfo(code: number): { label: string; tone: StatusChipTone } {
+  if (code >= 200 && code < 300) return { label: 'Success', tone: 'success' };
+  if (code === 403) return { label: 'Denied', tone: 'warning' };
+  if (code >= 400 && code < 500) return { label: 'Rejected', tone: 'neutral' };
+  if (code >= 500) return { label: 'Failed', tone: 'urgent' };
+  return { label: String(code), tone: 'neutral' };
+}
+
+export function dayTypeLabel(v: string | null): string {
   if (v === 'PR') return 'Present';
   if (v === 'WO') return 'Week Off';
   return v ?? '—';
@@ -48,7 +72,7 @@ function DayTypeChip({ type }: { type: string | null }) {
   );
 }
 
-function renderChange(item: RosterUpdateLogItem) {
+export function renderChange(item: Pick<RosterUpdateLogItem, 'field' | 'oldValue' | 'newValue'>) {
   if (item.field === 'day_type') {
     if (item.newValue === null) return <span className="text-xs text-muted-foreground">→ Weekly Days</span>;
     return (
@@ -71,17 +95,16 @@ function renderChange(item: RosterUpdateLogItem) {
   return <span className="text-xs">{item.oldValue ?? '—'} → {item.newValue ?? '—'}</span>;
 }
 
-export function RosterLogs({ kind }: { kind: 'updates' | 'actions' }) {
+export function RosterLogs() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(20);
   const limit = pageSizeToLimit(pageSize, LOG_LIMIT_CAP);
+  const [openActionId, setOpenActionId] = useState<number | null>(null);
 
-  const path = kind === 'updates' ? '/admin/roster/logs/updates' : '/admin/roster/logs/actions';
-  const key = `${path}?page=${page + 1}&limit=${limit}`;
-  const { data, loading, error } = useFetch<RosterUpdateLogResponse | RosterActionLogResponse>(key);
+  const key = `/admin/roster/logs/actions?page=${page + 1}&limit=${limit}`;
+  const { data, loading, error } = useFetch<RosterActionLogResponse>(key);
   const total = data?.total ?? 0;
-
-  const columnCount = kind === 'updates' ? 6 : 6;
+  const columnCount = 4;
 
   return (
     <Card className="mt-2">
@@ -93,29 +116,14 @@ export function RosterLogs({ kind }: { kind: 'updates' | 'actions' }) {
         )}
         <div className="overflow-x-auto">
           <table className="data-table w-full">
-            {kind === 'updates' ? (
-              <thead>
-                <tr>
-                  <th className="!text-left">Changed On</th>
-                  <th className="!text-left">Employee</th>
-                  <th className="!text-center">Date</th>
-                  <th className="!text-left">Change</th>
-                  <th className="!text-left">By</th>
-                  <th className="!text-center">Source</th>
-                </tr>
-              </thead>
-            ) : (
-              <thead>
-                <tr>
-                  <th className="!text-left">When</th>
-                  <th className="!text-left">By</th>
-                  <th className="!text-left">Action</th>
-                  <th className="!text-left">Scope</th>
-                  <th className="!text-center">Cells</th>
-                  <th className="!text-center">Result</th>
-                </tr>
-              </thead>
-            )}
+            <thead>
+              <tr>
+                <th className="!text-left">When</th>
+                <th className="!text-left">By</th>
+                <th className="!text-left">Summary</th>
+                <th className="!text-center">Status</th>
+              </tr>
+            </thead>
             <tbody>
               {loading && (
                 <tr><td colSpan={columnCount} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
@@ -123,30 +131,35 @@ export function RosterLogs({ kind }: { kind: 'updates' | 'actions' }) {
               {!loading && (data?.items.length ?? 0) === 0 && (
                 <tr><td colSpan={columnCount} className="!text-center text-muted-foreground py-6">No Entries Found.</td></tr>
               )}
-              {!loading && kind === 'updates' && (data as RosterUpdateLogResponse | undefined)?.items.map((item) => (
-                <tr key={item.id}>
-                  <td className="!text-left text-xs">{formatDate(item.createdAt)}</td>
-                  <td className="!text-left text-xs">{item.userName} <span className="text-muted-foreground">({item.empCode})</span></td>
-                  <td className="!text-center text-xs">{item.rosterDate ?? '—'}</td>
-                  <td className="!text-left">{renderChange(item)}</td>
-                  <td className="!text-left text-xs">{item.changedByName}</td>
-                  <td className="!text-center text-xs">{SOURCE_LABEL[item.source] ?? item.source}</td>
-                </tr>
-              ))}
-              {!loading && kind === 'actions' && (data as RosterActionLogResponse | undefined)?.items.map((item) => (
-                <tr key={item.id}>
-                  <td className="!text-left text-xs">{formatDate(item.createdAt)}</td>
-                  <td className="!text-left text-xs">{item.actorName}</td>
-                  <td className="!text-left text-xs">{titleCaseAction(item.action)}</td>
-                  <td className="!text-left text-xs">{item.scopeSummary}</td>
-                  <td className="!text-center text-xs">{item.affectedCells}</td>
-                  <td className="!text-center">
-                    <StatusChip tone={item.statusCode >= 200 && item.statusCode < 300 ? 'success' : 'urgent'} size="sm">
-                      {item.statusCode}
-                    </StatusChip>
-                  </td>
-                </tr>
-              ))}
+              {!loading && data?.items.map((item) => {
+                const status = statusInfo(item.statusCode);
+                return (
+                  <tr key={item.id}>
+                    <td className="!text-left text-xs">{formatDate(item.createdAt)}</td>
+                    <td className="!text-left text-xs">{item.actorName}</td>
+                    <td className="!text-left text-xs">
+                      {actionVerb(item.action)}
+                      {/* A denied / failed attempt changed nobody — no link to an empty list. */}
+                      {item.affectedUsers > 0 && (
+                        <>
+                          {' · '}
+                          <button
+                            type="button"
+                            className="font-medium text-primary underline-offset-2 hover:underline"
+                            onClick={() => setOpenActionId(item.id)}
+                          >
+                            {item.affectedUsers} {item.affectedUsers === 1 ? 'Employee' : 'Employees'}
+                          </button>
+                        </>
+                      )}
+                      {item.summary ? ` · ${item.summary}` : ''}
+                    </td>
+                    <td className="!text-center">
+                      <StatusChip tone={status.tone} size="sm">{status.label}</StatusChip>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -162,6 +175,7 @@ export function RosterLogs({ kind }: { kind: 'updates' | 'actions' }) {
           />
         </div>
       </CardContent>
+      <ActionChangesDialog actionId={openActionId} onClose={() => setOpenActionId(null)} />
     </Card>
   );
 }

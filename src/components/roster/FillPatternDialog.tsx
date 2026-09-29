@@ -12,7 +12,7 @@ import { api, ApiError } from '@/lib/api';
 import { usePostFetch, useDebouncedValue } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { cn } from '@/lib/utils';
-import { daysBetweenInclusive } from './roster-dates';
+import { daysBetweenInclusive, formatYmdLabel } from './roster-dates';
 import type { FillPatternResult, RosterMember } from './types';
 import { ShiftSelect } from './ShiftSelect';
 
@@ -26,6 +26,8 @@ export function FillPatternDialog({
   defaultTo,
   onApplied,
   initialUserIds = [],
+  minDate,
+  maxDate,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -36,6 +38,9 @@ export function FillPatternDialog({
   onApplied: (affectedUserIds: number[]) => void;
   /** Members pre-selected on open — e.g. from a row's "No Week Off" button. */
   initialUserIds?: number[];
+  /** The editable window — past dates are locked, and the server rejects them too. */
+  minDate: string;
+  maxDate: string;
 }) {
   const [userIds, setUserIds] = useState<Array<string | number>>([]);
   const [from, setFrom] = useState(defaultFrom);
@@ -76,7 +81,15 @@ export function FillPatternDialog({
   }), [userIds, from, to, weekOffDays, shiftStart, keepManual]);
   const debouncedBody = useDebouncedValue(rawBody, 400);
 
-  const canPreview = open && userIds.length > 0 && !!from && !!to;
+  /* Dates outside the editable window never reach the server: the inputs carry
+     min/max (the picker greys those days out) and a typed date is caught here. */
+  const rangeError =
+    !from || !to ? 'Pick A From And To Date.'
+    : from < minDate ? `From Can't Be Before ${formatYmdLabel(minDate)} — Past Dates Are Locked.`
+    : to > maxDate ? `To Can't Be After ${formatYmdLabel(maxDate)}.`
+    : from > to ? 'From Must Be On Or Before To.'
+    : null;
+  const canPreview = open && userIds.length > 0 && !rangeError;
   const { data: preview, loading: previewLoading, error: previewError } = usePostFetch<FillPatternResult>(
     canPreview ? '/admin/roster/fill-pattern?dryRun=1' : null,
     debouncedBody,
@@ -84,7 +97,8 @@ export function FillPatternDialog({
   );
 
   let previewText = '';
-  if (!canPreview) previewText = 'Pick At Least One Member To See A Preview.';
+  if (rangeError) previewText = rangeError;
+  else if (!canPreview) previewText = 'Pick At Least One Member To See A Preview.';
   else if (previewLoading && !preview) previewText = 'Calculating Preview…';
   else if (previewError) previewText = previewError;
   else if (preview) {
@@ -145,11 +159,11 @@ export function FillPatternDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="mb-1 block">From</Label>
-              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+              <Input type="date" value={from} min={minDate} max={maxDate} onChange={(e) => setFrom(e.target.value)} />
             </div>
             <div>
               <Label className="mb-1 block">To</Label>
-              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+              <Input type="date" value={to} min={from && from > minDate ? from : minDate} max={maxDate} onChange={(e) => setTo(e.target.value)} />
             </div>
           </div>
 
@@ -189,7 +203,7 @@ export function FillPatternDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => guardedOpenChange(false)} disabled={applying}>Cancel</Button>
-          <Button onClick={apply} disabled={applying || userIds.length === 0}>Apply Pattern</Button>
+          <Button onClick={apply} disabled={applying || userIds.length === 0 || !!rangeError}>Apply Pattern</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
