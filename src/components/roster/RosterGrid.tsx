@@ -454,7 +454,7 @@ export function RosterGrid() {
                             onChange={(v) => onRowShiftChange(member.userId, v)}
                             disabled={!member.editable}
                             title="Shift Start"
-                            className="mt-1 h-7 w-28 px-1 text-xs"
+                            className="mt-1 w-36"
                           />
                         </div>
                       </div>
