@@ -132,16 +132,20 @@ export function RosterGrid() {
   }, [dates, members, dirty]);
 
   const fullWeeks = useMemo(() => fullWeeksIn(dates), [dates]);
+  /* Member → the FIRST full Mon–Sun week in view with no Week Off (so the
+     row can say WHICH week, and its button can open Fill From Pattern for it). */
   const rowWarnings = useMemo(() => {
-    const set = new Set<number>();
+    const map = new Map<number, { from: string; to: string }>();
     for (const m of members) {
       for (const week of fullWeeks) {
         const hasWO = week.some((date) => effectiveCell(m, date, dirty).type === 'WO');
-        if (!hasWO) { set.add(m.userId); break; }
+        if (!hasWO) { map.set(m.userId, { from: week[0], to: week[6] }); break; }
       }
     }
-    return set;
+    return map;
   }, [members, fullWeeks, dirty]);
+  const [fillFor, setFillFor] = useState<number[]>([]);
+  function openFill(userIds: number[]) { setFillFor(userIds); setFillOpen(true); }
 
   // Browser-level exit guard — a hard nav (tab close, refresh) can't be
   // intercepted by useConfirm, so arm the native prompt while dirty.
@@ -365,7 +369,7 @@ export function RosterGrid() {
             <IconButton icon={ChevronRight} label="Next" onClick={() => setAnchor((a) => nextAnchor(view, a, 1))} />
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
+            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => openFill([])}>
               <Wand2 className="size-4 mr-1" /> Fill From Pattern
             </Button>
             <Button variant="outline" size="sm" disabled={actionsBusy} onClick={copyPreviousMonth}>
@@ -424,7 +428,7 @@ export function RosterGrid() {
                       </th>
                     );
                   })}
-                  <th className="!text-center" style={{ minWidth: 48 }}>Warn</th>
+                  <th className="!text-center" style={{ minWidth: 132 }}>Week Off Check</th>
                 </tr>
               </thead>
               <tbody>
@@ -448,7 +452,7 @@ export function RosterGrid() {
                         />
                         <div>
                           <div className="font-medium">{member.name}</div>
-                          <div className="text-xs text-muted-foreground">{member.empCode} · {member.roleName}</div>
+                          <div className="text-xs text-muted-foreground">{[member.empCode, member.roleName].filter(Boolean).join(' · ')}</div>
                           <ShiftSelect
                             value={rowShift[member.userId] ?? member.defaultShift ?? DEFAULT_SHIFT}
                             onChange={(v) => onRowShiftChange(member.userId, v)}
@@ -484,11 +488,34 @@ export function RosterGrid() {
                       );
                     })}
                     <td className="!text-center">
-                      {rowWarnings.has(member.userId) && (
-                        <span title="Has A Full Monday–Sunday Week With No Week Off">
-                          <AlertTriangle className="inline size-4 text-warning-strong" aria-label="No Week Off This Week" />
-                        </span>
-                      )}
+                      {/* A full Mon–Sun week with no Week Off. Editable rows get a
+                          button that opens Fill From Pattern for this member;
+                          read-only rows just state it. */}
+                      {(() => {
+                        const w = rowWarnings.get(member.userId);
+                        if (!w) return null;
+                        const text = (
+                          <>
+                            <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+                            <span className="leading-tight text-left">
+                              No Week Off<br />{formatYmdLabel(w.from)} – {formatYmdLabel(w.to)}
+                            </span>
+                          </>
+                        );
+                        const cls = 'inline-flex items-center gap-1 rounded-md bg-warning-tint text-warning-strong px-2 py-1 text-xs font-medium';
+                        return member.editable ? (
+                          <button
+                            type="button"
+                            className={`${cls} hover:ring-1 hover:ring-warning-strong/40`}
+                            title="Plan A Week Off For This Member (Opens Fill From Pattern)"
+                            onClick={() => openFill([member.userId])}
+                          >
+                            {text}
+                          </button>
+                        ) : (
+                          <span className={cls} title="No Week Off In This Week">{text}</span>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -539,6 +566,7 @@ export function RosterGrid() {
         defaultFrom={win?.editFrom ?? from}
         defaultTo={win?.editTo ?? to}
         onApplied={(userIds) => { clearDirtyFor(userIds); refreshAll(); }}
+        initialUserIds={fillFor}
       />
     </div>
   );

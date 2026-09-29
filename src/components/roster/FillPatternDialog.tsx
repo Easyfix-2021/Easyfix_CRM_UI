@@ -25,6 +25,7 @@ export function FillPatternDialog({
   defaultFrom,
   defaultTo,
   onApplied,
+  initialUserIds = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -33,6 +34,8 @@ export function FillPatternDialog({
   defaultFrom: string;
   defaultTo: string;
   onApplied: (affectedUserIds: number[]) => void;
+  /** Members pre-selected on open — e.g. from a row's "No Week Off" button. */
+  initialUserIds?: number[];
 }) {
   const [userIds, setUserIds] = useState<Array<string | number>>([]);
   const [from, setFrom] = useState(defaultFrom);
@@ -45,12 +48,13 @@ export function FillPatternDialog({
   // Reset the form to defaults every time the dialog is (re)opened.
   useEffect(() => {
     if (!open) return;
-    setUserIds([]);
+    setUserIds(initialUserIds);
     setFrom(defaultFrom);
     setTo(defaultTo);
     setWeekOffDays([]);
     setShiftStart('');
     setKeepManual(true);
+    // initialUserIds is read on open only — a new array identity each render must not reset the form.
   }, [open, defaultFrom, defaultTo]);
 
   const memberOptions: SearchOption[] = useMemo(
