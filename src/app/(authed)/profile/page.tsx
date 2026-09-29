@@ -753,10 +753,10 @@ export default function MyProfilePage() {
 
       </div>
 
-      {/* ═══ 4b. My Roster — the viewer's next 14 days (planned roster, else
+      {/* ═══ 4b. My Roster — today + the next 6 days (planned roster, else
           their weekly working days). Full width, between the two paired rows;
           renders nothing where the roster API is absent. */}
-      <MyRoster count={14} showTeam={false} />
+      <MyRoster showTeam={false} />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2">

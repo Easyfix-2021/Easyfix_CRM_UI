@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, Flag, AlertTriangle,
+  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, AlertTriangle, Bell, CalendarDays,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,12 +35,13 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { ShiftSelect, DEFAULT_SHIFT } from './ShiftSelect';
 import { cn } from '@/lib/utils';
 import {
-  addMonthsYmd, dayOfMonth, daysBetweenInclusive, formatRangeLabel, formatYmdLabel,
+  addMonthsYmd, daysBetweenInclusive, formatRangeLabel, formatYmdLabel,
   fullWeeksIn, istTodayYmd, monthKey, nextAnchor, rangeFor, startOfMonth, weekdayShort,
   type RosterView,
 } from './roster-dates';
 import type { DayType, RosterCellInput, RosterMember, RosterResponse } from './types';
 import { FillPatternDialog } from './FillPatternDialog';
+import { RosterCalendarDialog } from './RosterCalendarDialog';
 
 /* Footer "On Duty" turns red when fewer than this many people beyond the
  * bare team size are on — named so the threshold isn't a magic number
@@ -132,16 +133,45 @@ export function RosterGrid() {
   }, [dates, members, dirty]);
 
   const fullWeeks = useMemo(() => fullWeeksIn(dates), [dates]);
+  /* Member → the FIRST full Mon–Sun week in view with no Week Off (so the
+     row can say WHICH week, and its button can open Fill From Pattern for it). */
   const rowWarnings = useMemo(() => {
-    const set = new Set<number>();
+    const map = new Map<number, { from: string; to: string }>();
     for (const m of members) {
       for (const week of fullWeeks) {
         const hasWO = week.some((date) => effectiveCell(m, date, dirty).type === 'WO');
-        if (!hasWO) { set.add(m.userId); break; }
+        if (!hasWO) { map.set(m.userId, { from: week[0], to: week[6] }); break; }
       }
     }
-    return set;
+    return map;
   }, [members, fullWeeks, dirty]);
+  const [fillFor, setFillFor] = useState<number[]>([]);
+  function openFill(userIds: number[]) { setFillFor(userIds); setFillOpen(true); }
+  const [calendarFor, setCalendarFor] = useState<{ userId: number; name: string } | null>(null);
+  const [notifyingId, setNotifyingId] = useState<number | null>(null);
+
+  /* Sends the employee their roster for the range in view to their CRM inbox
+     (the backend clips a past start to today). Unsaved changes are NOT sent —
+     it says so, rather than notifying a plan that isn't stored yet. */
+  async function notifyMember(member: RosterMember) {
+    const unsaved = Array.from(dirty.values()).some((c) => c.userId === member.userId);
+    const ok = await confirm({
+      title: 'Notify Employee?',
+      description: `Send ${member.name} their roster for ${formatYmdLabel(from)} – ${formatYmdLabel(to)} in their CRM notifications.`
+        + (unsaved ? ' They have unsaved changes — save first, or those will not be included.' : ''),
+      confirmLabel: 'Notify',
+    });
+    if (!ok) return;
+    setNotifyingId(member.userId);
+    try {
+      await api.post('/admin/roster/notify', { userIds: [member.userId], from, to });
+      showToast({ variant: 'success', message: `Roster Sent To ${member.name}` });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Notify Failed' });
+    } finally {
+      setNotifyingId(null);
+    }
+  }
 
   // Browser-level exit guard — a hard nav (tab close, refresh) can't be
   // intercepted by useConfirm, so arm the native prompt while dirty.
@@ -365,7 +395,7 @@ export function RosterGrid() {
             <IconButton icon={ChevronRight} label="Next" onClick={() => setAnchor((a) => nextAnchor(view, a, 1))} />
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
+            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => openFill([])}>
               <Wand2 className="size-4 mr-1" /> Fill From Pattern
             </Button>
             <Button variant="outline" size="sm" disabled={actionsBusy} onClick={copyPreviousMonth}>
@@ -404,7 +434,7 @@ export function RosterGrid() {
                         onChange={toggleSelectAll}
                         aria-label="Select All Editable Members"
                       />
-                      <span>Member / Emp Code / Shift</span>
+                      <span>Employee</span>
                     </div>
                   </th>
                   {dates.map((date) => {
@@ -416,15 +446,26 @@ export function RosterGrid() {
                         style={{ minWidth: 60 }}
                         title={holidayName ? `Holiday: ${holidayName}` : undefined}
                       >
+                        {/* Same three lines in EVERY column — DD/MM, (Day), holiday
+                            slot — so a holiday never shifts its column's text. The
+                            slot is an invisible placeholder on ordinary days. */}
                         <div className="flex flex-col items-center gap-0.5 leading-tight">
-                          {holidayName && <Flag className="size-3 text-urgent-strong" aria-label="Holiday" />}
-                          <span className="text-xs uppercase text-muted-foreground">{weekdayShort(date)}</span>
-                          <span className="text-sm font-semibold">{dayOfMonth(date)}</span>
+                          <span className="text-sm font-semibold">{date.slice(8, 10)}/{date.slice(5, 7)}</span>
+                          <span className="text-xs text-muted-foreground">({weekdayShort(date)})</span>
+                          <span
+                            className={cn(
+                              'rounded-full px-1.5 text-xs font-medium',
+                              holidayName ? 'bg-urgent-tint text-urgent-strong' : 'invisible',
+                            )}
+                            aria-hidden={!holidayName}
+                          >
+                            Holiday
+                          </span>
                         </div>
                       </th>
                     );
                   })}
-                  <th className="!text-center" style={{ minWidth: 48 }}>Warn</th>
+                  <th className="!text-center" style={{ minWidth: 104 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -447,14 +488,20 @@ export function RosterGrid() {
                           aria-label={`Select ${member.name}`}
                         />
                         <div>
-                          <div className="font-medium">{member.name}</div>
-                          <div className="text-xs text-muted-foreground">{member.empCode} · {member.roleName}</div>
+                          {/* <EmpCode> · <Full Name> · <Designation> — CRM users have no
+                              designation field, so the role stands in (as the QuickSight
+                              admin report already does). Absent parts are skipped. */}
+                          <div className="text-sm leading-snug">
+                            {member.empCode && <span className="text-muted-foreground">{member.empCode} · </span>}
+                            <span className="font-medium">{member.name}</span>
+                            {member.roleName && <span className="text-muted-foreground"> · {member.roleName}</span>}
+                          </div>
                           <ShiftSelect
                             value={rowShift[member.userId] ?? member.defaultShift ?? DEFAULT_SHIFT}
                             onChange={(v) => onRowShiftChange(member.userId, v)}
                             disabled={!member.editable}
                             title="Shift Start"
-                            className="mt-1 h-7 w-28 px-1 text-xs"
+                            className="mt-1 w-36"
                           />
                         </div>
                       </div>
@@ -484,11 +531,39 @@ export function RosterGrid() {
                       );
                     })}
                     <td className="!text-center">
-                      {rowWarnings.has(member.userId) && (
-                        <span title="Has A Full Monday–Sunday Week With No Week Off">
-                          <AlertTriangle className="inline size-4 text-warning-strong" aria-label="No Week Off This Week" />
-                        </span>
-                      )}
+                      {/* Actions: Notify (roster → the employee's CRM inbox),
+                          Calendar (month view), and — only when a full Mon–Sun
+                          week in view has no Week Off — a warning that opens
+                          Fill From Pattern for this employee. */}
+                      <div className="inline-flex items-center justify-center gap-2">
+                        <IconButton
+                          icon={Bell}
+                          label={`Notify ${member.name} Of Their Roster (${formatYmdLabel(from)} – ${formatYmdLabel(to)})`}
+                          intent="primary"
+                          disabled={!member.editable}
+                          busy={notifyingId === member.userId}
+                          onClick={() => void notifyMember(member)}
+                        />
+                        <IconButton
+                          icon={CalendarDays}
+                          label={`Calendar View · ${member.name}`}
+                          onClick={() => setCalendarFor({ userId: member.userId, name: member.name })}
+                        />
+                        {(() => {
+                          const w = rowWarnings.get(member.userId);
+                          if (!w) return null;
+                          const what = `No Week Off ${formatYmdLabel(w.from)} – ${formatYmdLabel(w.to)}`;
+                          return (
+                            <IconButton
+                              icon={AlertTriangle}
+                              label={member.editable ? `${what} · Plan One (Fill From Pattern)` : what}
+                              className="!text-warning-strong"
+                              disabled={!member.editable}
+                              onClick={() => openFill([member.userId])}
+                            />
+                          );
+                        })()}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -517,7 +592,7 @@ export function RosterGrid() {
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="solid" /> Planned PR/WO (Solid)</span>
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="dashed" /> From Weekly Days (Dashed)</span>
             <span className="flex items-center gap-1.5"><DayChip type="WO" style="solid" dimmed /> Past / Locked</span>
-            <span className="flex items-center gap-1.5"><Flag className="size-3 text-urgent-strong" /> Holiday</span>
+            <span className="flex items-center gap-1.5"><span className="rounded-full bg-urgent-tint text-urgent-strong px-1.5 text-xs font-medium">Holiday</span> Public Holiday (Hover For Name)</span>
           </div>
 
           <div className="flex items-center justify-end gap-3 border-t px-3 py-2">
@@ -539,7 +614,9 @@ export function RosterGrid() {
         defaultFrom={win?.editFrom ?? from}
         defaultTo={win?.editTo ?? to}
         onApplied={(userIds) => { clearDirtyFor(userIds); refreshAll(); }}
+        initialUserIds={fillFor}
       />
+      <RosterCalendarDialog member={calendarFor} teamOf={teamOf} anchor={anchor} onClose={() => setCalendarFor(null)} />
     </div>
   );
 }
