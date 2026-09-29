@@ -31,10 +31,11 @@ import { hasAction } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { VerificationSection } from '@/components/easyfixer/VerificationSection';
+import { DeepSkillOptionMappingEditor } from '@/components/easyfixer/DeepSkillOptionMappingEditor';
 import { CommentsPanel, type CommentEntry } from '@/components/easyfixer/CommentsPanel';
 import { formatDate } from '@/lib/utils';
 import { SectionCard, KV } from './ui';
-import type { VerificationPayload, PincodeChip, OptionMapping, VerticalOption } from './types';
+import type { VerificationPayload, PincodeChip, VerticalOption } from './types';
 
 // 'sendback' is PARKED (Priyanka, 2026-09-29) — to be designed later.
 type DecisionKind = 'accept' | 'deny';
@@ -181,57 +182,6 @@ function KycPhotos({ docs }: { docs: VerificationPayload['registrationVerificati
   );
 }
 
-function SkillsPicked({
-  groups,
-  loading,
-  canEdit,
-  onEdit,
-}: {
-  groups: Array<{ name: string; optionCount: number; skills: Array<{ name: string; options: string[] }> }>;
-  loading: boolean;
-  canEdit: boolean;
-  onEdit: () => void;
-}) {
-  if (loading) return <p className="px-1 text-sm text-muted-foreground">Loading skills…</p>;
-  if (groups.length === 0) {
-    return (
-      <div className="px-1">
-        <p className="text-sm text-muted-foreground">No category or skills selected yet.</p>
-        {canEdit && <Button size="sm" variant="outline" className="mt-2" onClick={onEdit}>Edit skills</Button>}
-      </div>
-    );
-  }
-  return (
-    <div className="px-1 space-y-3">
-      {groups.map((g) => (
-        <div key={g.name} className="rounded-lg border">
-          {/* Category header mirrors the Deep Skill Option Mapping editor, so
-              the review and the editor read as the same thing. */}
-          <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
-            <span className="font-semibold text-ink-900">{g.name}</span>
-            <span className="text-xs text-muted-foreground">
-              {g.skills.length} deep skill{g.skills.length === 1 ? '' : 's'} · {g.optionCount} option{g.optionCount === 1 ? '' : 's'}
-            </span>
-          </div>
-          <div className="divide-y">
-            {g.skills.map((sk) => (
-              <div key={sk.name} className="px-3 py-2">
-                <div className="text-[13px] font-medium text-ink-900">{sk.name}</div>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {sk.options.map((opt) => (
-                    <span key={opt} className="rounded-md border bg-muted px-2 py-0.5 text-xs text-ink-700">{opt}</span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-      {canEdit && <Button size="sm" variant="outline" onClick={onEdit}>Edit skills</Button>}
-    </div>
-  );
-}
-
 /*
  * Mandatory training. Which videos are mandatory is LMS data (is_global), not
  * code, so ops can change the set without a release. Shown for information
@@ -308,41 +258,6 @@ export function OnboardingTab({
   );
   const pins = useMemo(() => pinData?.items ?? [], [pinData]);
 
-  // The category the technician picked during registration, with the skills
-  // under it. One category is the rule today; the grouping copes with more
-  // rather than silently showing the first.
-  const { data: mapData, loading: mapLoading } = useFetch<{ items: OptionMapping[] }>(
-    `/admin/easyfixers/${efrId}/option-mappings`,
-  );
-  /*
-   * Category → DEEP SKILL → options. Grouping only by category collapsed six
-   * deep skills into one flat strip of chips, so a reviewer could not tell
-   * which skill an option belonged to. Every mapped deep skill gets its own
-   * line, with its options under it.
-   */
-  const skillGroups = useMemo(() => {
-    const byCat = new Map<string, {
-      name: string;
-      optionCount: number;
-      skills: Map<string, { name: string; options: string[] }>;
-    }>();
-    for (const m of mapData?.items ?? []) {
-      const catKey = String(m.category_id);
-      if (!byCat.has(catKey)) {
-        byCat.set(catKey, { name: m.category_name ?? `Category ${m.category_id}`, optionCount: 0, skills: new Map() });
-      }
-      const cat = byCat.get(catKey)!;
-      const skillKey = String(m.deep_skill_id ?? m.deep_skill_name ?? 'unknown');
-      if (!cat.skills.has(skillKey)) {
-        cat.skills.set(skillKey, { name: m.deep_skill_name ?? `Deep skill ${m.deep_skill_id}`, options: [] });
-      }
-      const skill = cat.skills.get(skillKey)!;
-      const label = m.option_name ?? `Option ${m.option_id}`;
-      if (!skill.options.includes(label)) { skill.options.push(label); cat.optionCount += 1; }
-    }
-    return [...byCat.values()].map((c) => ({ ...c, skills: [...c.skills.values()] }));
-  }, [mapData]);
-
   const { data: verticals } = useFetchOnce<VerticalOption[]>('/shared/lookup/verticals');
   const [verticalId, setVerticalId] = useState<string>('');
 
@@ -362,6 +277,9 @@ export function OnboardingTab({
     if (!rv.personal.date_of_birth) missing.push('Date of birth');
     if (!String(rv.identity.adhaar_card_number ?? '').trim()) missing.push('Aadhaar');
     if (!v.activation.sidebar.profile_img) missing.push('Profile picture');
+    // The backend refuses an accept without this, so the button must say so
+    // rather than letting the reviewer discover it as a 409.
+    if (rv.identity.verification_status !== 1) missing.push('Aadhaar verification');
     if (v.additional.deep_skills_count === 0) missing.push('Skills');
     if (v.additional.serviceable_pincodes_count === 0) missing.push('Serviceable pincodes');
     return missing;
@@ -405,14 +323,15 @@ export function OnboardingTab({
     ? Math.max(0, Math.round((Date.now() - new Date(v.timeline.registered_on).getTime()) / 86400000))
     : null;
   const stages = [
-    { label: 'Registration', sub: formatDate(v.timeline.registered_on) },
-    {
-      label: 'Active',
-      sub: v.timeline.activated_on
-        ? `${formatDate(v.timeline.activated_on)}${v.timeline.days_to_activate != null ? ` · took ${v.timeline.days_to_activate}d` : ''}`
-        : waitingDays != null ? `waiting ${waitingDays}d` : null,
-    },
+    { label: 'Registered', sub: formatDate(v.timeline.registered_on) },
+    { label: 'Active', sub: v.timeline.activated_on ? formatDate(v.timeline.activated_on) : 'Not yet' },
   ];
+  // The connector carries the elapsed time — taken, or still running.
+  const elapsedLabel = v.timeline.days_to_activate != null
+    ? `activated in ${v.timeline.days_to_activate} day${v.timeline.days_to_activate === 1 ? '' : 's'}`
+    : waitingDays != null
+      ? `waiting ${waitingDays} day${waitingDays === 1 ? '' : 's'}`
+      : '—';
 
   async function recordActivityLog(kind: DecisionKind, reason: string) {
     try {
@@ -489,34 +408,45 @@ export function OnboardingTab({
   return (
     <div className="space-y-4">
       {/*
-        TWO stages, not three, and one line rather than a card. Accepting a
-        technician now activates him, so "Verification & Activation" is no
-        longer a stage anyone waits in — it was a whole card's worth of vertical
-        space describing a step that no longer exists.
+        A timeline, not two chips: the row spans the width, each stage carries
+        its date, and the connector between them is where the elapsed time is
+        written — which is the question actually asked of this row ("how long
+        did we take?"). Two chips floating at the left said the same thing in a
+        fifth of the space and answered neither.
       */}
-      <div className="flex flex-wrap items-center gap-2 text-[13px]">
-        {stages.map(({ label, sub }, i) => {
-          const n = i + 1;
-          const done = n < stage;
-          const current = n === stage;
-          return (
-            <span key={label} className="inline-flex items-center gap-2">
-              <span
-                className={`inline-flex items-baseline gap-1.5 rounded-full px-2.5 py-1 ${
-                  done
-                    ? 'bg-success-tint text-success-strong'
-                    : current
-                      ? 'bg-primary text-white'
-                      : 'bg-muted text-muted-foreground'
-                }`}
-              >
-                <span>{done ? '✓' : n} {label}</span>
-                {sub && <span className="text-xs opacity-90">· {sub}</span>}
-              </span>
-              {i < stages.length - 1 && <span className="h-px w-5 bg-border" aria-hidden />}
-            </span>
-          );
-        })}
+      <div className="rounded-xl border bg-card px-4 py-3">
+        <div className="flex items-center gap-3">
+          {stages.map((st, i) => (
+            <div key={st.label} className={i === 0 ? 'shrink-0' : 'flex flex-1 items-center gap-3'}>
+              {i > 0 && (
+                <div className="flex flex-1 items-center gap-2">
+                  <span className={`h-px flex-1 ${stage > 1 ? 'bg-success' : 'bg-border'}`} aria-hidden />
+                  <span className="whitespace-nowrap text-xs text-muted-foreground">{elapsedLabel}</span>
+                  <span className={`h-px flex-1 ${stage > 1 ? 'bg-success' : 'bg-border'}`} aria-hidden />
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <span
+                  className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+                    stage > i + 1
+                      ? 'bg-success text-white'
+                      : stage === i + 1
+                        ? 'bg-primary text-white'
+                        : 'border bg-muted text-muted-foreground'
+                  }`}
+                >
+                  {stage > i + 1 ? '✓' : i + 1}
+                </span>
+                <span>
+                  <span className={`block text-[13px] font-semibold ${stage >= i + 1 ? 'text-ink-900' : 'text-muted-foreground'}`}>
+                    {st.label}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">{st.sub ?? '—'}</span>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Consolidated read-only review */}
@@ -526,9 +456,6 @@ export function OnboardingTab({
           title="Identity & KYC"
           verified={aadhaarVerified}
           progress={rv.identity.progress}
-          rightSlot={aadhaarVerified
-            ? <span className="inline-flex items-center gap-1 text-success">✓ Aadhaar verified in the app</span>
-            : <span className="text-muted-foreground">Aadhaar not verified yet</span>}
           defaultOpen
         >
           <div className="px-1">
@@ -558,12 +485,15 @@ export function OnboardingTab({
             ((skills?50) + (pincodes?50)), so feeding it here read 50% for a
             technician with no skill mapped but one pincode picked. */}
         <VerificationSection headerTone="sub" title="Skills & service mapping" verified={skillsMapped} progress={v.additional.skills_progress}>
-          <SkillsPicked
-            groups={skillGroups}
-            loading={mapLoading && !mapData}
-            canEdit={canEditCoverage}
-            onEdit={onEditSkills}
-          />
+          <div className="px-1">
+            {/* The same component Work & Coverage edits with, read-only here,
+                so the review and the editor cannot render the mapping
+                differently. */}
+            <DeepSkillOptionMappingEditor efrId={efrId} readOnly />
+            {canEditCoverage && (
+              <Button size="sm" variant="outline" className="mt-3" onClick={onEditSkills}>Edit skills</Button>
+            )}
+          </div>
         </VerificationSection>
 
         <VerificationSection headerTone="sub" title="Serviceable pincodes" verified={pinCount > 0} progress={pinCount > 0 ? 100 : 0}>
@@ -695,7 +625,6 @@ export function OnboardingTab({
         </SectionCard>
         <SectionCard title="Onboarding action summary" icon={<span>🗂️</span>} right={<span>from the review record</span>}>
           <KV k="Lead applied on" v={formatDate(v.lead.registration.tx_applied_on)} />
-          <KV k="Handled by" v={v.lead.registration.state_user} />
           <KV k="Approved by" v={v.lead.registration.approved_by} />
           <KV k="Approved on" v={formatDate(v.lead.registration.approved_on)} />
           <KV k="Identity reviewed by" v={rv.identity.updated_by_name} />

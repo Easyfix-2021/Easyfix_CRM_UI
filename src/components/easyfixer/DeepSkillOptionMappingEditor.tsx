@@ -140,7 +140,22 @@ function mapKey(catg: number, type: number, skill: number, option: number) {
   return `${catg}|${type}|${skill}|${option}`;
 }
 
-export function DeepSkillOptionMappingEditor({ efrId, onReload }: { efrId: number; onReload?: () => Promise<void> }) {
+export function DeepSkillOptionMappingEditor({
+  efrId,
+  onReload,
+  readOnly = false,
+}: {
+  efrId: number;
+  onReload?: () => Promise<void>;
+  /*
+   * Show the same categories / deep skills / option tiles, but do not offer to
+   * change them. The Onboarding review uses this so a reviewer reads the
+   * mapping in the format it is edited in, with one editor of record over in
+   * Work & Coverage — rather than a second, plainer rendering that can drift.
+   * Browsing still works: only the option toggle and Save are withheld.
+   */
+  readOnly?: boolean;
+}) {
   const [categories, setCategories] = useState<ServiceCategoryLU[]>([]);
   const [mappings, setMappings] = useState<OptionMapping[]>([]);
   const [original, setOriginal] = useState<Set<string>>(new Set());
@@ -269,6 +284,7 @@ export function DeepSkillOptionMappingEditor({ efrId, onReload }: { efrId: numbe
   }, [ensureOptions]);
 
   function toggleOption(catgId: number, typeId: number, skillId: number, optionId: number) {
+    if (readOnly) return;
     const key = mapKey(catgId, typeId, skillId, optionId);
     const next = new Set(selected);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -496,9 +512,11 @@ export function DeepSkillOptionMappingEditor({ efrId, onReload }: { efrId: numbe
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
-            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
-              {saving ? 'Saving…' : 'Save Option Mappings'}
-            </Button>
+            {!readOnly && (
+              <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
+                {saving ? 'Saving…' : 'Save Option Mappings'}
+              </Button>
+            )}
           </div>
 
           {/* ── Options bottom sheet ── */}

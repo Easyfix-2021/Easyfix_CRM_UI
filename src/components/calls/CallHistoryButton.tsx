@@ -399,10 +399,13 @@ export function CallHistoryButton({
             the viewport actually has. */}
         <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader className="shrink-0">
+            {/* Name the SCOPE. It read "· Job #" with nothing after it when
+                opened on a number, which is exactly the moment a reader needs
+                to be told whose calls these are. */}
             <DialogTitle className="text-base">
               Call History
               <span className="ml-1 text-sm font-normal text-muted-foreground">
-                · Job #{jobId}
+                {jobId ? `· Job #${jobId}` : mobile ? `· all calls on ${mobile}` : ''}
               </span>
             </DialogTitle>
           </DialogHeader>

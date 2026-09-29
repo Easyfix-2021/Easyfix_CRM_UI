@@ -27,12 +27,17 @@ export function WorkCoverageTab({
   canManageSkills,
   canEditPincodes = false,
   focusPincodes = 0,
+  focusSkills = 0,
 }: {
   efrId: number;
   active: boolean;
   canManageSkills: boolean;
   canEditPincodes?: boolean;
   focusPincodes?: number;
+  /* Bumped when Onboarding's "Edit skills" is clicked — same treatment the
+   * pincode editor gets, so the click lands on the mapping rather than at the
+   * top of a long tab. */
+  focusSkills?: number;
 }) {
   // Parent remounts this tab (React key) after an unmap, so a plain key
   // re-fetches — no cache-buster query param.
@@ -45,6 +50,16 @@ export function WorkCoverageTab({
 
   const pinRef = useRef<HTMLDivElement>(null);
   const [ringing, setRinging] = useState(false);
+  const skillRef = useRef<HTMLDivElement>(null);
+  const [skillRinging, setSkillRinging] = useState(false);
+
+  useEffect(() => {
+    if (!focusSkills) return;
+    skillRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setSkillRinging(true);
+    const t = setTimeout(() => setSkillRinging(false), 2000);
+    return () => clearTimeout(t);
+  }, [focusSkills]);
 
   // Arriving from the Onboarding tab's coverage table: scroll here and flash a
   // ring. Skips the initial render (focusPincodes starts at 0).
@@ -74,7 +89,10 @@ export function WorkCoverageTab({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border bg-card shadow-sm">
+      <div
+        ref={skillRef}
+        className={`rounded-xl border bg-card shadow-sm ${skillRinging ? 'ring-2 ring-primary ring-offset-2' : ''} transition-shadow`}
+      >
         <div className="border-b px-4 py-3">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-ink-900">
             <span>🧭</span> Skill &amp; Service Area Mapping

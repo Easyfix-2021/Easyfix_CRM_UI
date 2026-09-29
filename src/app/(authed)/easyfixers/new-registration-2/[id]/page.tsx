@@ -122,8 +122,11 @@ export default function NewRegistration2ProfilePage() {
     setTab('work');
     setPincodeFocus((n) => n + 1);
   }, []);
-  // Skills live at the top of Work & Coverage, so the tab switch is enough.
-  const openSkillEditor = useCallback(() => { setTab('work'); }, []);
+  const [skillFocus, setSkillFocus] = useState(0);
+  const openSkillEditor = useCallback(() => {
+    setTab('work');
+    setSkillFocus((n) => n + 1);
+  }, []);
 
   // A stored profile_img whose file 404s must fall back to the initial, not
   // leave a broken-image icon in the header.
@@ -307,6 +310,7 @@ export default function NewRegistration2ProfilePage() {
             canManageSkills={!!can.isEdit}
             canEditPincodes={!!can.isEdit}
             focusPincodes={pincodeFocus}
+            focusSkills={skillFocus}
           />
         )}
         {tab === 'bank' && (
