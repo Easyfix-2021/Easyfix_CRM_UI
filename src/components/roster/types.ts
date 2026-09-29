@@ -100,7 +100,7 @@ export type RosterActionChangesResponse = {
 };
 
 export type RosterActionLogAction =
-  | 'SAVE_GRID' | 'FILL_PATTERN' | 'COPY_MONTH' | 'RESET' | 'NOTIFY' | 'EXPORT' | 'WORKING_DAYS';
+  | 'SAVE_GRID' | 'FILL_PATTERN' | 'COPY_MONTH' | 'RESET' | 'NOTIFY' | 'EXPORT' | 'WORKING_DAYS' | 'BULK_UPLOAD';
 /*
  * `affectedCells` / `scopeSummary` are gone — use `summary`. `COPY_MONTH` is
  * kept in the union: the endpoint that produced it is removed, but old rows

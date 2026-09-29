@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import {
   addDaysYmd, addMonthsYmd, endOfMonth, istTodayYmd, monthKey, startOfMonth, weekdayIndexMonday0,
 } from './roster-dates';
+import { shiftLabel } from './ShiftSelect';
 import type { RosterResponse } from './types';
 
 /*
@@ -21,12 +22,6 @@ import type { RosterResponse } from './types';
 
 const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const HEAD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-function shift12(hhmm: string | null): string | null {
-  if (!hhmm) return null;
-  const [h, m] = hhmm.split(':').map(Number);
-  return `${String(h % 12 === 0 ? 12 : h % 12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
-}
 
 export function RosterCalendarDialog({
   member, teamOf, anchor, onClose,
@@ -113,7 +108,7 @@ export function RosterCalendarDialog({
                         planned ? 'border-transparent' : 'border-dashed border-current bg-transparent',
                       )}
                     >
-                      {c.type === 'PR' ? shift12(c.shift) ?? 'Present' : 'Week Off'}
+                      {c.type === 'PR' ? (c.shift ? shiftLabel(c.shift) : 'Present') : 'Week Off'}
                     </span>
                   )}
                   {hol && <span className="truncate rounded-full bg-urgent-tint text-urgent-strong px-1.5 text-xs font-medium text-center">Holiday</span>}

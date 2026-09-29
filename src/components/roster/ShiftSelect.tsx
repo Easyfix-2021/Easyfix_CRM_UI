@@ -15,7 +15,8 @@ import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 
 export const DEFAULT_SHIFT = '10:00';
 
-function label(hhmm: string): string {
+/** '13:00' / '13:00:00' → '01:00 PM' — the one 12-hour shift format in the CRM. */
+export function shiftLabel(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number);
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
@@ -28,7 +29,7 @@ const FIRST_SLOT = 16; // 08:00
 export const SHIFT_OPTIONS: SearchOption[] = Array.from({ length: 48 }, (_, n) => {
   const i = (n + FIRST_SLOT) % 48;
   const v = `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`;
-  return { value: v, label: label(v), keywords: `${v} ${v.replace(':', '')}` };
+  return { value: v, label: shiftLabel(v), keywords: `${v} ${v.replace(':', '')}` };
 });
 
 export function ShiftSelect({

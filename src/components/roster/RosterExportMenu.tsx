@@ -3,7 +3,7 @@
 /*
  * Team Roster → Export, as a dropdown off the green Export button (owner,
  * 2026-09-29: "export button on click dropdown instead of popup modal").
- * GET /admin/roster/export?from=&to=&teamOf= — span ≤ 93 days, same teamOf
+ * GET /admin/roster/export?from=&to=&teamOf= — span ≤ 186 days (~6 months), same teamOf
  * semantics as the grid.
  *
  * The two presets download on click. Custom is an inline From/To form inside
@@ -23,7 +23,7 @@ import { showToast } from '@/components/ui/toast';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { addDaysYmd, addMonthsYmd, daysBetweenInclusive, istTodayYmd } from './roster-dates';
 
-const EXPORT_SPAN_CAP_DAYS = 93;
+const EXPORT_SPAN_CAP_DAYS = 186; // must match EXPORT_MAX_DAYS in routes/admin/roster.js
 
 export function RosterExportMenu({ teamOf }: { teamOf: string }) {
   const [open, setOpen] = useState(false);
@@ -44,7 +44,8 @@ export function RosterExportMenu({ teamOf }: { teamOf: string }) {
   const rangeError =
     !customFrom || !customTo ? 'Pick A From And To Date.'
     : customTo < customFrom ? 'To Must Be On Or After From.'
-    : daysBetweenInclusive(customFrom, customTo) > EXPORT_SPAN_CAP_DAYS ? `Range Can't Exceed ${EXPORT_SPAN_CAP_DAYS} Days.`
+    : daysBetweenInclusive(customFrom, customTo) > EXPORT_SPAN_CAP_DAYS
+      ? `Pick Up To ${EXPORT_SPAN_CAP_DAYS} Days (About 6 Months) — This Range Is ${daysBetweenInclusive(customFrom, customTo)} Days.`
     : null;
 
   async function doExport(from: string, to: string) {

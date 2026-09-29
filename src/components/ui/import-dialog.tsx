@@ -84,6 +84,11 @@ export function ImportDialog<S extends Record<string, unknown>, P extends Record
   onImported,
   sortBlockedFirst = false,
   blockCommitOnAnyBlocked = false,
+  title,
+  templateControls,
+  templateDisabled = false,
+  errorsLabel = 'Download Error Report',
+  contentClassName = 'sm:max-w-2xl',
 }: {
   open: boolean;
   onClose: () => void;
@@ -117,6 +122,17 @@ export function ImportDialog<S extends Record<string, unknown>, P extends Record
   sortBlockedFirst?: boolean;
   /* Disable Confirm while ANY row is blocked, not just when every row is (rate-card contract: one all-or-nothing transaction). */
   blockCommitOnAnyBlocked?: boolean;
+  /*
+   * Opt-ins added for Team Roster → Bulk Update (every default reproduces the
+   * old dialog exactly): a custom title, pickers rendered above the template
+   * button that shape `templateUrl` (and can disable it), the error-report
+   * button's label, and a wider dialog for a sheet-style preview.
+   */
+  title?: string;
+  templateControls?: React.ReactNode;
+  templateDisabled?: boolean;
+  errorsLabel?: string;
+  contentClassName?: string;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [rows, setRows] = useState<ImportRow[] | null>(null);
@@ -258,11 +274,12 @@ export function ImportDialog<S extends Record<string, unknown>, P extends Record
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className={contentClassName}>
         <DialogHeader>
-          <DialogTitle>Import {entityLabel}s</DialogTitle>
+          <DialogTitle>{title ?? `Import ${entityLabel}s`}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {templateControls}
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
               Download the template, fill it in, then pick the file — it validates automatically without saving anything.
@@ -270,6 +287,7 @@ export function ImportDialog<S extends Record<string, unknown>, P extends Record
             <DownloadButton
               onClick={downloadTemplate}
               downloading={downloadingTemplate}
+              disabled={templateDisabled}
               label="Download Template"
               loadingLabel="Preparing…"
             />
@@ -315,7 +333,7 @@ export function ImportDialog<S extends Record<string, unknown>, P extends Record
                 <div className="font-medium">{phase === 'committed' ? 'Import Complete' : 'Preview Results'}</div>
                 {errorsUrl && hasBlocked && (
                   <Button variant="outline" size="sm" onClick={downloadErrors} disabled={downloadingErrors}>
-                    {downloadingErrors ? 'Preparing…' : 'Download Error Report'}
+                    {downloadingErrors ? 'Preparing…' : errorsLabel}
                   </Button>
                 )}
               </div>

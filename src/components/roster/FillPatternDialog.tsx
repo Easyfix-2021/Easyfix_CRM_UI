@@ -98,12 +98,12 @@ export function FillPatternDialog({
 
   let previewText = '';
   if (rangeError) previewText = rangeError;
-  else if (!canPreview) previewText = 'Pick At Least One Member To See A Preview.';
+  else if (!canPreview) previewText = 'Pick At Least One Employee To See A Preview.';
   else if (previewLoading && !preview) previewText = 'Calculating Preview…';
   else if (previewError) previewText = previewError;
   else if (preview) {
     const days = daysBetweenInclusive(from, to);
-    previewText = `Preview: ${days} Day${days === 1 ? '' : 's'} For ${preview.users} Member${preview.users === 1 ? '' : 's'} · ${preview.wo} WO · ${preview.pr} PR · ${preview.keptManual} Hand-Edited Cell${preview.keptManual === 1 ? '' : 's'} Kept`;
+    previewText = `Preview: ${days} Day${days === 1 ? '' : 's'} For ${preview.users} Employee${preview.users === 1 ? '' : 's'} · ${preview.wo} WO · ${preview.pr} PR · ${preview.keptManual} Individually Set Day${preview.keptManual === 1 ? '' : 's'} Kept`;
   }
 
   async function apply() {
@@ -115,7 +115,7 @@ export function FillPatternDialog({
         userIds: userIds.map(Number), from, to, weekOffDays, shiftStart: shiftStart || undefined, keepManual,
       });
       dismissToast(toastId);
-      showToast({ variant: 'success', message: 'Pattern Applied' });
+      showToast({ variant: 'success', message: 'Roster Updated' });
       onApplied(userIds.map(Number));
       onOpenChange(false);
     } catch (e) {
@@ -141,18 +141,18 @@ export function FillPatternDialog({
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Fill From Pattern</DialogTitle>
+          <DialogTitle>Update Roster</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
           <div>
-            <Label className="mb-1 block">Members</Label>
+            <Label className="mb-1 block">Employee(s)</Label>
             <SearchMultiSelect
               value={userIds}
               onChange={setUserIds}
               options={memberOptions}
-              placeholder="Select Members"
-              selectedLabel="Members"
+              placeholder="Select Employee(s)"
+              selectedLabel="Employees"
             />
           </div>
 
@@ -190,20 +190,25 @@ export function FillPatternDialog({
 
           <div>
             <Label className="mb-1 block">Shift Start (Optional)</Label>
-            <ShiftSelect value={shiftStart} onChange={setShiftStart} placeholder="Each Member's Default Shift" className="max-w-[240px]" title="Shift Start" />
+            <ShiftSelect value={shiftStart} onChange={setShiftStart} placeholder="Each Employee's Default Shift" className="max-w-[240px]" title="Shift Start" />
           </div>
 
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={keepManual} onChange={(e) => setKeepManual(e.target.checked)} />
-            Keep Cells Already Edited By Hand
-          </label>
+          <div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={keepManual} onChange={(e) => setKeepManual(e.target.checked)} />
+              Don&apos;t Overwrite Days Set Individually
+            </label>
+            <p className="ml-6 text-xs text-muted-foreground">
+              Days changed one by one on the grid or through Bulk Update stay as they are. Untick to overwrite them too.
+            </p>
+          </div>
 
           <p className="min-h-[1.25rem] text-xs text-muted-foreground">{previewText}</p>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => guardedOpenChange(false)} disabled={applying}>Cancel</Button>
-          <Button onClick={apply} disabled={applying || userIds.length === 0 || !!rangeError}>Apply Pattern</Button>
+          <Button onClick={apply} disabled={applying || userIds.length === 0 || !!rangeError}>Update Roster</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
