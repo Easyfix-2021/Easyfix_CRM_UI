@@ -85,6 +85,20 @@ export type RosterUpdateLogItem = {
 };
 export type RosterUpdateLogResponse = { items: RosterUpdateLogItem[]; total: number };
 
+/** GET /admin/roster/logs/actions/:id/changes — one entry per roster date (null = weekly-days edits). */
+export type RosterActionChangesResponse = {
+  items: {
+    rosterDate: string | null;
+    employees: {
+      userId: number;
+      userName: string;
+      empCode: string | null;
+      changes: Pick<RosterUpdateLogItem, 'field' | 'oldValue' | 'newValue'>[];
+    }[];
+  }[];
+  total: number;
+};
+
 export type RosterActionLogAction =
   | 'SAVE_GRID' | 'FILL_PATTERN' | 'COPY_MONTH' | 'RESET' | 'NOTIFY' | 'EXPORT' | 'WORKING_DAYS';
 /*
