@@ -30,6 +30,7 @@ import {
   ALL_WORKING_DAYS, WORKING_DAYS_ORDER, WorkingDaysField,
   type DayKey, type WorkingDays,
 } from '@/components/users/WorkingDaysField';
+import { DEFAULT_SHIFT } from '@/components/roster/ShiftSelect';
 /*
  * The CRM's one image lightbox — a `{ url, name }` panel with a title bar and
  * the standard guarded close. Its NAME says skill because that was its first
@@ -1454,7 +1455,7 @@ function UserFormModal({
   // Working Days — defaults to all 7 Present; hydrated from
   // attendance_preference below once GET /admin/users/:id resolves.
   const [workingDays, setWorkingDays] = useState<WorkingDays>(ALL_WORKING_DAYS);
-  const [defaultShiftStart, setDefaultShiftStart] = useState('');
+  const [defaultShiftStart, setDefaultShiftStart] = useState(DEFAULT_SHIFT);
   const [roleId,  setRoleId]  = useState<number | ''>('');
   const [cityId,  setCityId]  = useState<number | ''>('');
   const [active,  setActive]  = useState(true);
@@ -1605,7 +1606,7 @@ function UserFormModal({
       // Reset to all-Present here too; the detail-hydrate effect below
       // overwrites with the saved attendance_preference once it resolves
       // (or leaves this default for a user who never had a row — see contract).
-      setWorkingDays(ALL_WORKING_DAYS); setDefaultShiftStart('');
+      setWorkingDays(ALL_WORKING_DAYS); setDefaultShiftStart(DEFAULT_SHIFT);
       /* pan/aadhaar are never hydrated — see the state comment. The removal
          flags reset with them, so a Remove clicked and then cancelled on one
          user cannot carry into the next one opened. */
@@ -1642,7 +1643,7 @@ function UserFormModal({
         monday: p.monday, tuesday: p.tuesday, wednesday: p.wednesday, thursday: p.thursday,
         friday: p.friday, saturday: p.saturday, sunday: p.sunday,
       });
-      setDefaultShiftStart(p.default_shift_start ?? '');
+      setDefaultShiftStart(p.default_shift_start ?? DEFAULT_SHIFT);
     }
   }, [open, userDetail.data]);
 

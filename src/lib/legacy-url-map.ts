@@ -83,9 +83,8 @@ export const URL_MAP: Record<string, string> = {
   'rewardClaims':          '/rewards/claims',
   'rewardLedger':          '/rewards/ledger',
   'rewardReferrals':       '/rewards/referrals',
-  // Team Roster — top-level parent, added 2026-09-29. tbl_menu row seeded
-  // with url='teamRoster' by the roster backend migration; page lives at
-  // /team-roster and gates on isRosterManage + canManageRoster.
+  // Team Roster — HRMS child (backend migrations roster-02 seed, roster-03
+  // move under HRMS). Page gates on isRosterManage + canManageRoster.
   'teamRoster':            '/team-roster',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',

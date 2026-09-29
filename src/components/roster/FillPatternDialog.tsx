@@ -14,6 +14,7 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { cn } from '@/lib/utils';
 import { daysBetweenInclusive } from './roster-dates';
 import type { FillPatternResult, RosterMember } from './types';
+import { ShiftSelect } from './ShiftSelect';
 
 const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -171,7 +172,7 @@ export function FillPatternDialog({
 
           <div>
             <Label className="mb-1 block">Shift Start (Optional)</Label>
-            <Input type="time" value={shiftStart} onChange={(e) => setShiftStart(e.target.value)} className="max-w-[160px]" />
+            <ShiftSelect value={shiftStart} onChange={setShiftStart} placeholder="Each Member's Default Shift" className="max-w-[240px]" title="Shift Start" />
           </div>
 
           <label className="flex items-center gap-2 text-sm">

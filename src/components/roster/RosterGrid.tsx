@@ -32,6 +32,7 @@ import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { downloadXlsx } from '@/lib/download-xlsx';
+import { ShiftSelect, DEFAULT_SHIFT } from './ShiftSelect';
 import { cn } from '@/lib/utils';
 import {
   addMonthsYmd, dayOfMonth, daysBetweenInclusive, formatRangeLabel, formatYmdLabel,
@@ -170,7 +171,7 @@ export function RosterGrid() {
     if (!win || cellDimmed(member, date, win)) return;
     const current = effectiveCell(member, date, dirty);
     const nextType: DayType = current.type === 'PR' ? 'WO' : 'PR';
-    const shiftStart = nextType === 'PR' ? (rowShift[member.userId] ?? member.defaultShift ?? null) : null;
+    const shiftStart = nextType === 'PR' ? (rowShift[member.userId] ?? member.defaultShift ?? DEFAULT_SHIFT) : null;
     setDirty((prev) => {
       const next = new Map(prev);
       next.set(cellKey(member.userId, date), { userId: member.userId, date, dayType: nextType, shiftStart });
@@ -448,13 +449,12 @@ export function RosterGrid() {
                         <div>
                           <div className="font-medium">{member.name}</div>
                           <div className="text-xs text-muted-foreground">{member.empCode} · {member.roleName}</div>
-                          <input
-                            type="time"
-                            value={rowShift[member.userId] ?? member.defaultShift ?? ''}
-                            onChange={(e) => onRowShiftChange(member.userId, e.target.value)}
+                          <ShiftSelect
+                            value={rowShift[member.userId] ?? member.defaultShift ?? DEFAULT_SHIFT}
+                            onChange={(v) => onRowShiftChange(member.userId, v)}
                             disabled={!member.editable}
-                            title="Default Shift Start"
-                            className="mt-1 h-7 w-24 rounded border border-input bg-card px-1 text-xs disabled:opacity-50"
+                            title="Shift Start"
+                            className="mt-1 h-7 w-28 px-1 text-xs"
                           />
                         </div>
                       </div>

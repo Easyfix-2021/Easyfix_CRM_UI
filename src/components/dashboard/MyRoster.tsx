@@ -7,7 +7,7 @@ import { useFetch } from '@/lib/hooks';
 import { istNowWallClock } from '@/lib/utils';
 
 /*
- * My Roster — dashboard right-rail widget, modelled on UpcomingEvents.tsx
+ * My Roster — dashboard full-width strip (own row above the cards), modelled on UpcomingEvents.tsx
  * (same Card shape, self-contained fetch, fails soft). Data source:
  * GET /admin/roster/me?days=14 (see roster-api-contract.md). The endpoint
  * may 404 on a host without the Roster backend yet — useFetch leaves `data`
@@ -59,72 +59,71 @@ export function MyRoster() {
 
   return (
     <Card>
-      <CardContent className="p-0">
-        <div className="px-4 py-3 border-b flex items-center gap-2">
-          <CalendarClock className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">My Roster</h2>
+      <CardContent className="p-3 flex flex-col lg:flex-row lg:items-stretch gap-3">
+        {/* Own week — seven day tiles in a row; scrolls sideways on narrow
+            screens instead of wrapping into a tall block. */}
+        <div className="min-w-0 flex-1 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">My Roster</h2>
+            </div>
+            {nextWeekOff && (
+              <span className="text-xs text-muted-foreground">
+                Next Week Off: <span className="font-medium text-foreground">{formatDayLabel(nextWeekOff)}</span>
+              </span>
+            )}
+          </div>
+
+          {fetched.loading ? (
+            <div className="grid grid-cols-7 gap-2">
+              {Array.from({ length: 7 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-muted animate-pulse" />)}
+            </div>
+          ) : (
+            <ul className="flex gap-2 overflow-x-auto pb-0.5">
+              {days.slice(0, 7).map((day) => {
+                const isToday = day.date === todayKey;
+                const tone = day.holiday
+                  ? 'bg-gold-strong dark:bg-gold-tint text-white'
+                  : day.type === 'PR' ? 'bg-success-tint text-success-strong' : 'bg-warning-tint text-warning-strong';
+                const status = day.holiday ? day.holiday.name : day.type === 'PR' ? 'Present' : 'Week Off';
+                return (
+                  <li
+                    key={day.date}
+                    title={day.holiday ? `${formatDayLabel(day.date)} · ${day.holiday.name}` : undefined}
+                    className={`min-w-[7.5rem] flex-1 rounded-md border px-2 py-1.5 flex flex-col gap-1 ${isToday ? 'border-primary' : 'border-border'}`}
+                  >
+                    <span className={`text-xs ${isToday ? 'font-semibold' : 'text-muted-foreground'}`}>
+                      {isToday ? 'Today' : formatDayLabel(day.date).split(' ')[0]} · {formatDayLabel(day.date).split(' ').slice(1).join(' ')}
+                    </span>
+                    <span className={`truncate rounded-full text-xs font-medium px-2 py-0.5 text-center ${tone}`}>
+                      {status}{!day.holiday && day.type === 'PR' && day.shift ? ` · ${day.shift}` : ''}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
 
-        {fetched.loading && (
-          <div className="p-4 space-y-2">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="h-8 rounded bg-muted animate-pulse" />
-            ))}
-          </div>
-        )}
-
-        {!fetched.loading && days.length > 0 && (
-          <ul className="divide-y">
-            {days.slice(0, 7).map((day) => {
-              const isToday = day.date === todayKey;
-              return (
-                <li key={day.date} className="flex items-center justify-between gap-2 px-4 py-1.5 text-sm">
-                  <span className={isToday ? 'font-medium' : 'text-muted-foreground'}>
-                    {isToday ? `Today · ${formatDayLabel(day.date)}` : formatDayLabel(day.date)}
-                  </span>
-                  {day.holiday ? (
-                    <span className="shrink-0 rounded-full bg-gold-strong dark:bg-gold-tint text-white text-xs font-medium px-2 py-0.5">
-                      {day.holiday.name}
-                    </span>
-                  ) : day.type === 'PR' ? (
-                    <span className="shrink-0 rounded-full bg-success-tint text-success-strong text-xs font-medium px-2 py-0.5">
-                      Present{day.shift ? ` · ${day.shift}` : ''}
-                    </span>
-                  ) : (
-                    <span className="shrink-0 rounded-full bg-warning-tint text-warning-strong text-xs font-medium px-2 py-0.5">
-                      Week Off
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        {nextWeekOff && (
-          <div className="px-4 py-2 border-t text-xs text-muted-foreground">
-            Next Week Off: <span className="font-medium text-foreground">{formatDayLabel(nextWeekOff)}</span>
-          </div>
-        )}
-
         {team && (
-          <div className="px-4 py-3 border-t space-y-2">
+          <div className="lg:w-72 shrink-0 lg:border-l lg:pl-3 border-t pt-3 lg:border-t-0 lg:pt-0 flex flex-col gap-2">
             <div className="flex items-center gap-2">
-              <Users className="h-3.5 w-3.5 text-muted-foreground" />
-              <h3 className="text-xs font-semibold">My Team Today</h3>
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold">My Team Today</h3>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-md bg-success-tint text-success-strong px-2 py-1.5 text-center">
+              <div className="rounded-md bg-success-tint text-success-strong px-2 py-1 text-center">
                 <div className="text-base font-semibold leading-tight">{team.onDuty}</div>
                 <div className="text-xs">On Duty</div>
               </div>
-              <div className="rounded-md bg-warning-tint text-warning-strong px-2 py-1.5 text-center">
+              <div className="rounded-md bg-warning-tint text-warning-strong px-2 py-1 text-center">
                 <div className="text-base font-semibold leading-tight">{team.weekOff}</div>
                 <div className="text-xs">Week Off</div>
               </div>
             </div>
             {team.offToday.length > 0 && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground truncate" title={team.offToday.map((u) => u.name).join(', ')}>
                 Off Today: {team.offToday.slice(0, OFF_TODAY_VISIBLE).map((u) => u.name).join(', ')}
                 {team.offToday.length > OFF_TODAY_VISIBLE && ` +${team.offToday.length - OFF_TODAY_VISIBLE} more`}
               </p>

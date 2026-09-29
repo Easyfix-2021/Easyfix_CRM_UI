@@ -6,7 +6,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Home, Briefcase, UserCircle2, Users, Building2,
   BarChart3, Settings, Coins, ShoppingBag, Wallet, User, MapPin,
-  Megaphone, GraduationCap, Gift, CalendarDays,
+  Megaphone, GraduationCap, Gift,
   ChevronRight, ChevronDown, Circle, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -117,9 +117,6 @@ const PARENT_META: Record<string, { icon: LucideIcon }> = {
   // it never renders here.
   'Tracking':          { icon: MapPin },
   'Easyfixer Advance': { icon: Wallet },
-  // Team Roster — top-level parent added 2026-09-29 (isRosterManage +
-  // canManageRoster gated). tbl_menu url='teamRoster' resolves via URL_MAP.
-  'Team Roster':       { icon: CalendarDays },
 };
 
 function legacyToRoute(name: string, url: string | null | undefined): string {

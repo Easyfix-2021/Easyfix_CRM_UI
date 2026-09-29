@@ -346,6 +346,13 @@ export default function DashboardPage() {
           gate themselves on the isNoticeManage action key. */}
       <NoticeStrip />
 
+      {/* My Roster — full-width horizontal strip (the caller's next 7 days +
+          My Team Today). Its own row, NOT the right rail: stacked under
+          Upcoming Events it made the rail's grid row taller than the 2×4
+          cards and pulled the card rows apart. Renders nothing where the
+          roster API is absent. */}
+      <MyRoster />
+
       {/*
         * Two-column layout below the strip (2026-05-28 refactor):
         *   - Left column (flex-1): the 8 status funnel cards
@@ -372,7 +379,10 @@ export default function DashboardPage() {
           * marquee-on-overflow behaviour inside each card handles the
           * card dimensions gracefully as the available width shifts.
           */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0">
+        {/* content-start: when the rail is TALLER than the cards (a busy
+            week of events), the rows keep their natural height and pack to
+            the top instead of spreading apart to fill the row. */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0 content-start">
           {FLOW.map((card) => (
             <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
           ))}
@@ -383,9 +393,8 @@ export default function DashboardPage() {
             allows the inner Card to shrink if needed (otherwise grid
             items refuse to go below their content's intrinsic size
             and force horizontal overflow). */}
-        <div className="min-w-0 flex flex-col gap-4">
+        <div className="min-w-0">
           <UpcomingEvents days={7} />
-          <MyRoster />
         </div>
       </div>
 
