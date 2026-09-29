@@ -45,7 +45,6 @@ import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { VideoPreviewDialog } from '@/components/lms/VideoPreviewDialog';
 import { isYouTubeUrl } from '@/lib/video-url';
-import { fmtDuration } from '@/lib/format';
 
 type TrainingVideo = {
   id: number;
@@ -60,10 +59,6 @@ type TrainingVideo = {
   /* document.url for the linked row. YouTube-only on write; historic rows hold
    * legacy .mp4 files served from core.easyfix.in. */
   video_url: string | null;
-  /* Length in seconds, READ-ONLY: the backend detects it from the video file
-   * (never entered here) and caps a technician's watched-% by time against it.
-   * null = not detected yet, or a YouTube link — that video is not time-checked. */
-  duration_seconds: number | null;
   /* Delete blockers, computed by the backend on every list read — see
    * `deleteBlockReason` below for why they are on the list response at all.
    *
@@ -273,15 +268,13 @@ export function VideosTab() {
                 React as a hydration error.
               */}
               {/* Title */}
-              <col style={{ width: '32%' }} />
+              <col style={{ width: '36%' }} />
               {/* Sub Title */}
-              <col style={{ width: '24%' }} />
+              <col style={{ width: '28%' }} />
               {/* Video */}
               <col style={{ width: '12%' }} />
-              {/* Duration */}
-              <col style={{ width: '10%' }} />
               {/* Courses */}
-              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
               {/* Actions */}
               <col style={{ width: '12%' }} />
             </colgroup>
@@ -294,9 +287,6 @@ export function VideosTab() {
                     column means an operator spots the gap while scanning,
                     instead of opening each row to find out. */}
                 <th className="!text-center whitespace-nowrap">Video</th>
-                <th className="!text-center whitespace-nowrap">
-                  <span title="Detected automatically from the video file">Duration</span>
-                </th>
                 {/* Surfaces the delete guard before the click. Its sibling
                     count — progress_count — is fetched and still enforced by
                     the guard, but NOT shown: it counts watch progress while
@@ -309,10 +299,10 @@ export function VideosTab() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={6} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={5} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={6} className="!text-center text-muted-foreground py-6">No training videos match the current search.</td></tr>
+                <tr><td colSpan={5} className="!text-center text-muted-foreground py-6">No training videos match the current search.</td></tr>
               )}
               {!loading && rows.map((v) => {
                 const blocked = deleteBlockReason(v);
@@ -350,13 +340,6 @@ export function VideosTab() {
                         <StatusChip tone="amber" size="sm" title="No video is attached — technicians will see this entry but nothing will play">
                           Not Linked
                         </StatusChip>
-                      )}
-                    </td>
-                    <td className="!text-center whitespace-nowrap tabular-nums">
-                      {v.duration_seconds ? (
-                        <span title="Detected automatically from the video file">{fmtDuration(v.duration_seconds)}</span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground" title="Not detected yet (it is read from the video file on first use), or a YouTube link — watch progress is not time-checked">—</span>
                       )}
                     </td>
                     {/* A non-zero count is a delete blocker, so it gets a chip;
