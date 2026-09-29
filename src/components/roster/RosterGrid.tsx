@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, Flag, AlertTriangle,
+  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, AlertTriangle,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,7 +35,7 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { ShiftSelect, DEFAULT_SHIFT } from './ShiftSelect';
 import { cn } from '@/lib/utils';
 import {
-  addMonthsYmd, dayOfMonth, daysBetweenInclusive, formatRangeLabel, formatYmdLabel,
+  addMonthsYmd, daysBetweenInclusive, formatRangeLabel, formatYmdLabel,
   fullWeeksIn, istTodayYmd, monthKey, nextAnchor, rangeFor, startOfMonth, weekdayShort,
   type RosterView,
 } from './roster-dates';
@@ -420,10 +420,21 @@ export function RosterGrid() {
                         style={{ minWidth: 60 }}
                         title={holidayName ? `Holiday: ${holidayName}` : undefined}
                       >
+                        {/* Same three lines in EVERY column — DD/MM, (Day), holiday
+                            slot — so a holiday never shifts its column's text. The
+                            slot is an invisible placeholder on ordinary days. */}
                         <div className="flex flex-col items-center gap-0.5 leading-tight">
-                          {holidayName && <Flag className="size-3 text-urgent-strong" aria-label="Holiday" />}
-                          <span className="text-xs uppercase text-muted-foreground">{weekdayShort(date)}</span>
-                          <span className="text-sm font-semibold">{dayOfMonth(date)}</span>
+                          <span className="text-sm font-semibold">{date.slice(8, 10)}/{date.slice(5, 7)}</span>
+                          <span className="text-xs text-muted-foreground">({weekdayShort(date)})</span>
+                          <span
+                            className={cn(
+                              'rounded-full px-1.5 text-xs font-medium',
+                              holidayName ? 'bg-urgent-tint text-urgent-strong' : 'invisible',
+                            )}
+                            aria-hidden={!holidayName}
+                          >
+                            Holiday
+                          </span>
                         </div>
                       </th>
                     );
@@ -544,7 +555,7 @@ export function RosterGrid() {
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="solid" /> Planned PR/WO (Solid)</span>
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="dashed" /> From Weekly Days (Dashed)</span>
             <span className="flex items-center gap-1.5"><DayChip type="WO" style="solid" dimmed /> Past / Locked</span>
-            <span className="flex items-center gap-1.5"><Flag className="size-3 text-urgent-strong" /> Holiday</span>
+            <span className="flex items-center gap-1.5"><span className="rounded-full bg-urgent-tint text-urgent-strong px-1.5 text-xs font-medium">Holiday</span> Public Holiday (Hover For Name)</span>
           </div>
 
           <div className="flex items-center justify-end gap-3 border-t px-3 py-2">
