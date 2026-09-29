@@ -324,6 +324,17 @@ export default function ManageCoursesPage() {
   /* `'new'` opens a blank add form; a Course opens it pre-filled for edit.
    * One piece of state for one modal — content used to have its own. */
   const [formCourse, setFormCourse] = React.useState<Course | 'new' | null>(null);
+  /*
+   * One modal MOUNT per open. useFetch keeps the previous key's data while a
+   * new key loads (its flicker fix), and the modal used to stay mounted across
+   * opens — so opening course B seeded B's draft from A's leftover content (or
+   * from B's own pre-save list after an edit, since invalidateFetch does not
+   * refetch a mounted hook), marked B seeded, and ignored B's real content when
+   * it landed. The list read empty or wrong at random, and Save would have
+   * written that wrong list over B. A fresh mount starts from data = null.
+   */
+  const [modalSeq, setModalSeq] = React.useState(0);
+  const openCourseModal = (c: Course | 'new') => { setModalSeq((n) => n + 1); setFormCourse(c); };
 
   /*
    * Every mutation path ends here. invalidateFetch only EVICTS the module
@@ -494,7 +505,7 @@ export default function ManageCoursesPage() {
         {/* Hidden rather than disabled for read-only operators: a permanently
             dead "Add" button just invites clicks that do nothing. */}
         {canManage && (
-          <Button onClick={() => setFormCourse('new')}>
+          <Button onClick={() => openCourseModal('new')}>
             <Plus className="size-4 mr-1" /> Add Course
           </Button>
         )}
@@ -758,7 +769,7 @@ export default function ManageCoursesPage() {
                         icon={canManage ? Pencil : ListVideo}
                         intent={canManage ? 'primary' : 'default'}
                         label={canManage ? 'Edit Course' : 'View Course Content'}
-                        onClick={() => setFormCourse(c)}
+                        onClick={() => openCourseModal(c)}
                       />
                       {/* Retire and Reactivate are mutually exclusive — the
                           row shows whichever transition is actually available
@@ -805,6 +816,7 @@ export default function ManageCoursesPage() {
       {/* Rendered unconditionally with `open` derived from state so its
           open-transition reset effects actually fire. */}
       <CourseModal
+        key={modalSeq}
         course={formCourse}
         canManage={canManage}
         /* Close refreshes too, not just save: a half-failed save leaves the
@@ -894,9 +906,8 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   /* Existing content — only an edit has any. All three kinds arrive in one
    * ordered list; /videos still exists for compatibility but returns only part
    * of the course, so this screen must not use it. */
-  const contentFetch = useFetch<CourseContentItem[]>(
-    editing ? `/admin/lms/courses/${editing.id}/content` : null,
-  );
+  const contentKey = editing ? `/admin/lms/courses/${editing.id}/content` : null;
+  const contentFetch = useFetch<CourseContentItem[]>(contentKey);
 
   /* Catalogue for the picker, server-filtered by the typed query. The KIND is
    * part of the key, so flipping it re-fires the fetch on its own — no manual
@@ -949,7 +960,9 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       if (seededFor.current !== 0) { seededFor.current = 0; setDraft([]); }
       return;
     }
-    if (contentFetch.data && seededFor.current !== editing.id) {
+    // Only a payload fetched for THIS course's key — useFetch keeps the previous
+    // key's data on screen while a new one loads.
+    if (contentFetch.data && contentFetch.dataKey === contentKey && seededFor.current !== editing.id) {
       seededFor.current = editing.id;
       setDraft(contentFetch.data.map((c) => ({
         kind: c.kind,
@@ -959,7 +972,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
         video_url: c.video_url ?? null,
       })));
     }
-  }, [open, editing, contentFetch.data]);
+  }, [open, editing, contentFetch.data, contentFetch.dataKey, contentKey]);
 
   // Skip the discard prompt while a save is in flight — the modal is closing
   // on its own at that point and the prompt would fire over a completed action.
