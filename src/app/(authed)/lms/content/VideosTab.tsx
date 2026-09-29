@@ -45,7 +45,7 @@ import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { VideoPreviewDialog } from '@/components/lms/VideoPreviewDialog';
 import { isYouTubeUrl } from '@/lib/video-url';
-import { fmtDuration, parseDuration } from '@/lib/format';
+import { fmtDuration } from '@/lib/format';
 
 type TrainingVideo = {
   id: number;
@@ -60,9 +60,9 @@ type TrainingVideo = {
   /* document.url for the linked row. YouTube-only on write; historic rows hold
    * legacy .mp4 files served from core.easyfix.in. */
   video_url: string | null;
-  /* Length in seconds, entered here. The backend caps a technician's
-   * watched-% by time since their first progress report against it, so a
-   * video with no duration is not time-checked. */
+  /* Length in seconds, READ-ONLY: the backend detects it from the video file
+   * (never entered here) and caps a technician's watched-% by time against it.
+   * null = not detected yet, or a YouTube link — that video is not time-checked. */
   duration_seconds: number | null;
   /* Delete blockers, computed by the backend on every list read — see
    * `deleteBlockReason` below for why they are on the list response at all.
@@ -294,7 +294,9 @@ export function VideosTab() {
                     column means an operator spots the gap while scanning,
                     instead of opening each row to find out. */}
                 <th className="!text-center whitespace-nowrap">Video</th>
-                <th className="!text-center whitespace-nowrap">Duration</th>
+                <th className="!text-center whitespace-nowrap">
+                  <span title="Detected automatically from the video file">Duration</span>
+                </th>
                 {/* Surfaces the delete guard before the click. Its sibling
                     count — progress_count — is fetched and still enforced by
                     the guard, but NOT shown: it counts watch progress while
@@ -351,8 +353,10 @@ export function VideosTab() {
                       )}
                     </td>
                     <td className="!text-center whitespace-nowrap tabular-nums">
-                      {v.duration_seconds ? fmtDuration(v.duration_seconds) : (
-                        <span className="text-xs text-muted-foreground" title="No duration — watch progress on this video is not time-checked">—</span>
+                      {v.duration_seconds ? (
+                        <span title="Detected automatically from the video file">{fmtDuration(v.duration_seconds)}</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground" title="Not detected yet (it is read from the video file on first use), or a YouTube link — watch progress is not time-checked">—</span>
                       )}
                     </td>
                     {/* A non-zero count is a delete blocker, so it gets a chip;
@@ -466,7 +470,6 @@ function TrainingVideoFormModal({
   const [description, setDescription] = useState('');
   const [subDescription, setSubDescription] = useState('');
   const [videoUrl, setVideoUrl] = useState('');
-  const [duration, setDuration] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -479,7 +482,6 @@ function TrainingVideoFormModal({
     setDescription(editing?.description ?? '');
     setSubDescription(editing?.sub_description ?? '');
     setVideoUrl(editing?.video_url ?? '');
-    setDuration(editing?.duration_seconds ? fmtDuration(editing.duration_seconds) : '');
     setError(null);
   }, [open, editing]);
 
@@ -496,11 +498,6 @@ function TrainingVideoFormModal({
      */
     if (videoUrl.trim() && !isYouTubeUrl(videoUrl.trim())) {
       setError('Video Link must be a YouTube URL (watch, youtu.be, embed or shorts).');
-      return;
-    }
-    const durationSeconds = parseDuration(duration);
-    if (durationSeconds === undefined) {
-      setError('Duration must be m:ss (e.g. 4:32) or seconds (e.g. 272), up to 24 hours.');
       return;
     }
     setSubmitting(true);
@@ -521,8 +518,6 @@ function TrainingVideoFormModal({
           // the text fields clear. The backend writes it to the joined
           // `document` row, not to a column on training_videos.
           video_url: videoUrl.trim(),
-          // null clears it on edit, and is simply not stored on add.
-          duration_seconds: durationSeconds,
         });
         showToast({ variant: 'success', message: 'Training Video Updated.' });
       } else {
@@ -535,8 +530,6 @@ function TrainingVideoFormModal({
           // the text fields clear. The backend writes it to the joined
           // `document` row, not to a column on training_videos.
           video_url: videoUrl.trim(),
-          // null clears it on edit, and is simply not stored on add.
-          duration_seconds: durationSeconds,
         });
         showToast({ variant: 'success', message: 'Training Video Added.' });
       }
@@ -606,22 +599,6 @@ function TrainingVideoFormModal({
                 Open Link In New Tab
               </a>
             )}
-          </div>
-
-          <div>
-            <Label className="block mb-1">Duration</Label>
-            <Input
-              value={duration}
-              maxLength={8}
-              inputMode="numeric"
-              onChange={(e) => setDuration(e.target.value)}
-              placeholder="m:ss or seconds, e.g. 4:32"
-              className="max-w-[12rem]"
-            />
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Optional. Used to verify training videos are actually watched — progress cannot be
-              credited faster than the video plays.
-            </p>
           </div>
 
           <div>
