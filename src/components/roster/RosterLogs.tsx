@@ -39,6 +39,7 @@ const ACTION_VERB: Record<RosterActionLogAction, string> = {
   NOTIFY: 'Notified',
   EXPORT: 'Exported',
   WORKING_DAYS: 'Working Days Changed',
+  BULK_UPLOAD: 'Bulk Updated',
 };
 function actionVerb(a: string): string {
   return ACTION_VERB[a as RosterActionLogAction] ?? a;

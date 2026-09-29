@@ -27,7 +27,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Wand2, RotateCcw, Bell, CalendarDays, Search,
+  ChevronLeft, ChevronRight, Wand2, RotateCcw, Bell, CalendarDays, Search, FileSpreadsheet,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -46,6 +46,7 @@ import {
 } from './roster-dates';
 import type { DayType, RosterCellInput, RosterMember, RosterResponse } from './types';
 import { FillPatternDialog } from './FillPatternDialog';
+import { RosterBulkDialog } from './RosterBulkDialog';
 import { RosterCalendarDialog } from './RosterCalendarDialog';
 import { RosterExportMenu } from './RosterExportMenu';
 
@@ -115,6 +116,7 @@ export function RosterGrid() {
   const [dirty, setDirty] = useState<Map<string, RosterCellInput>>(new Map());
   const [rowShift, setRowShift] = useState<Record<number, string>>({});
   const [fillOpen, setFillOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyAction, setBusyAction] = useState<'reset' | null>(null);
 
@@ -386,6 +388,9 @@ export function RosterGrid() {
               <IconButton icon={ChevronRight} label="Next" onClick={() => setAnchor((a) => nextAnchor(view, a, 1))} />
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" disabled={actionsBusy || !win} onClick={() => setBulkOpen(true)}>
+                <FileSpreadsheet className="size-4 mr-1" /> Bulk Update
+              </Button>
               <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
                 <Wand2 className="size-4 mr-1" /> Fill From Pattern
               </Button>
@@ -583,6 +588,15 @@ export function RosterGrid() {
         initialUserIds={[]}
         minDate={win?.editFrom ?? from}
         maxDate={win?.editTo ?? to}
+      />
+      <RosterBulkDialog
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        members={editableMembers}
+        initialUserIds={bulkOpen ? scopeUserIds() : []}
+        editFrom={win?.editFrom ?? ''}
+        editTo={win?.editTo ?? ''}
+        onSaved={() => { clearDirtyFor(editableMembers.map((m) => m.userId)); refreshAll(); }}
       />
       <RosterCalendarDialog member={calendarFor} teamOf={teamOf} anchor={anchor} onClose={() => setCalendarFor(null)} />
     </div>
