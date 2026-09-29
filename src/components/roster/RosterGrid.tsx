@@ -615,6 +615,8 @@ export function RosterGrid() {
         defaultTo={win?.editTo ?? to}
         onApplied={(userIds) => { clearDirtyFor(userIds); refreshAll(); }}
         initialUserIds={fillFor}
+        minDate={win?.editFrom ?? from}
+        maxDate={win?.editTo ?? to}
       />
       <RosterCalendarDialog member={calendarFor} teamOf={teamOf} anchor={anchor} onClose={() => setCalendarFor(null)} />
     </div>

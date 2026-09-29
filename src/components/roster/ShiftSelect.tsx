@@ -21,8 +21,12 @@ function label(hhmm: string): string {
   return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
-// keywords: the 24-hour forms, so typing "14", "1430" or "14:30" finds 02:30 PM.
-export const SHIFT_OPTIONS: SearchOption[] = Array.from({ length: 48 }, (_, i) => {
+// Listed from 08:00 AM round to 07:30 AM (owner, 2026-09-29) — office hours first,
+// night slots last. keywords: the 24-hour forms, so typing "14", "1430" or
+// "14:30" finds 02:30 PM.
+const FIRST_SLOT = 16; // 08:00
+export const SHIFT_OPTIONS: SearchOption[] = Array.from({ length: 48 }, (_, n) => {
+  const i = (n + FIRST_SLOT) % 48;
   const v = `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`;
   return { value: v, label: label(v), keywords: `${v} ${v.replace(':', '')}` };
 });
