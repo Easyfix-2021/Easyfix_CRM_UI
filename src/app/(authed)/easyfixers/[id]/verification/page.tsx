@@ -39,6 +39,13 @@ import { AnimatedLoadingBar } from '@/components/ui/animated-loading-bar';
 import { TeleprompterPanel } from '@/components/teleprompter/TeleprompterPanel';
 import { showToast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/utils';
+import { StatusChip } from '@/components/ui/StatusChip';
+import {
+  aadhaarAiBadge,
+  aadhaarAiDifferences,
+  aadhaarAiReason,
+  type AadhaarAiCheck,
+} from '@/lib/aadhaar-ai-check';
 
 /*
  * Tiny bridge wrapper (2026-06-11) that memoises the `value` object and the
@@ -130,6 +137,8 @@ type VerificationPayload = {
       adhaar_card_number: string | null; pan_card_number: string | null;
       driving_lisence_img: string | null;
       rejected_reason: string | null;
+      /** The app's AI Aadhaar check behind the latest identity save; absent on an older backend. */
+      ai_check?: AadhaarAiCheck | null;
       updated_by_name: string | null; update_date: string | null;
       comments: Comment[];
     };
@@ -921,6 +930,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-3">
+        <AadhaarAiCheckPanel check={d.ai_check ?? null} />
         <div className="space-y-1">
           <Label>Aadhaar Card No.</Label>
           <Input value={aadhaar} maxLength={12} onChange={(e) => setAadhaar(e.target.value.replace(/\D/g, ''))} />
@@ -968,6 +978,62 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
       <aside className="lg:col-span-1 border-l pl-4">
         <CommentsPanel entries={d.comments as CommentEntry[]} onAdd={addComment} addLabel="Add Your Notes" />
       </aside>
+    </div>
+  );
+}
+
+/*
+ * The AI Aadhaar check the technician app ran before this identity was saved
+ * (owner, 2026-09-29). Display only — Approve / Reject / Not Eligible below are
+ * unchanged, and the reviewer decides. No check on record (a save from before
+ * the check existed) says so rather than rendering nothing.
+ */
+function AadhaarAiCheckPanel({ check }: { check: AadhaarAiCheck | null }) {
+  const badge = aadhaarAiBadge(check?.verdict);
+  if (!check || !badge) {
+    return (
+      <div className="rounded-md border border-ink-100 bg-ink-50 p-3 text-xs text-ink-500">
+        No AI Aadhaar Check On Record For This Identity — Verify The Documents Manually.
+      </div>
+    );
+  }
+  const differences = aadhaarAiDifferences(check);
+  return (
+    <div className="rounded-md border border-ink-100 bg-ink-50 p-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold text-ink-700">AI Aadhaar Check</span>
+        <StatusChip tone={badge.tone}>{badge.label}</StatusChip>
+        {check.masked_number && (
+          <span className="text-xs text-ink-500 tabular-nums">Card: {check.masked_number}</span>
+        )}
+        {check.name_score != null && (
+          <span className="text-xs text-ink-500 tabular-nums">Name Match: {Math.round(check.name_score * 100)}%</span>
+        )}
+      </div>
+      {check.verdict === 'not_run' && (
+        <p className="text-xs text-ink-700">{aadhaarAiReason(check.reason)}</p>
+      )}
+      {differences.length > 0 && (
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-ink-500">
+              <th className="!text-left font-medium py-1">Field</th>
+              <th className="!text-left font-medium py-1">Entered In App</th>
+              <th className="!text-left font-medium py-1">On Aadhaar Card</th>
+            </tr>
+          </thead>
+          <tbody>
+            {differences.map((row) => (
+              <tr key={row.label} className="text-ink-700">
+                <td className="py-1">{row.label}</td>
+                <td className="py-1">{row.entered}</td>
+                <td className="py-1">{row.onCard}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="text-xs text-ink-500">Checked {formatDate(check.checked_at)}</div>
     </div>
   );
 }

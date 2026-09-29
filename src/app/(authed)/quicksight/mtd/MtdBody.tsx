@@ -52,8 +52,11 @@
  * most MAX_WINDOW_DAYS days and never past today, checked here first so the
  * message is a clear toast rather than a 400. Beside it:
  *
- *   Vertical and Zonal Manager are EXPORT PREDICATES — they narrow the SQL, so
- *   they apply to every section AND to the per-SPOC table at the foot.
+ *   Vertical is an EXPORT PREDICATE — it narrows the SQL, so it applies to
+ *   every section AND to the per-SPOC table at the foot. (Zonal Manager was
+ *   here too until 2026-09-29; the owner's MIS report has no such filter and
+ *   asked for it out. The backend still accepts zonalManagerId, so restoring
+ *   it is one SearchSelect.)
  *   Client and Primary SPOC are the MIS filter bar's multi-selects, applied in
  *   memory over the rows already read, with the job counts the report itself
  *   supplies (counted with their own picker ignored, so an unticked option
@@ -110,6 +113,7 @@ import { CompletionVsCancellationSection } from './sections/CompletionVsCancella
 import { WhyCancelledSection } from './sections/WhyCancelledSection';
 import { CityWiseSection } from './sections/CityWiseSection';
 import { StatusAgingSection } from './sections/StatusAgingSection';
+import { ClientReportSection } from './sections/client-report/ClientReportSection';
 
 /* A BE 403 (requireQuickSight) arrives as one of these messages. */
 const DENIED_RE = /permission|quicksight access|access denied/i;
@@ -217,7 +221,6 @@ export function MtdBody() {
   /* ── lookups (fetch-hooks only; both are shared, cached endpoints) ──────── */
 
   const verticalsRes = useFetchOnce<Vertical[]>('/shared/lookup/verticals');
-  const zonalRes = useFetchOnce<ManagerLite[]>('/shared/lookup/zonal-managers');
 
   const verticalOptions = useMemo<SearchOption[]>(
     () => [
@@ -225,13 +228,6 @@ export function MtdBody() {
       ...(verticalsRes.data ?? []).map((v) => ({ value: v.vertical_id, label: v.vertical_name })),
     ],
     [verticalsRes.data],
-  );
-  const zonalOptions = useMemo<SearchOption[]>(
-    () => [
-      { value: 0, label: 'All Zonal Managers' },
-      ...(zonalRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
-    ],
-    [zonalRes.data],
   );
 
   /* ── the report ─────────────────────────────────────────────────────────── */
@@ -419,14 +415,6 @@ export function MtdBody() {
           required
         />
       </FilterField>
-      <FilterField label="Zonal Manager" hint="Every section">
-        <SearchSelect
-          value={filters.zonalManagerId}
-          onChange={(next) => applyFilters({ zonalManagerId: Number(next) || 0 })}
-          options={zonalOptions}
-          required
-        />
-      </FilterField>
       <FilterField label="Date Range" hint={`Up to ${MAX_WINDOW_DAYS} days, until today`}>
         {/* The shared picker holds no cap of its own: All Dates is THIS
             report's widest window, and onRangeChange above is the only thing
@@ -516,24 +504,28 @@ export function MtdBody() {
           {/* ── the six KPI tiles, in the MIS report's order ──────────────── */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <QsKpiTile
+              wrap
               label="Orders Created"
               accent={QS_COLORS[0]}
               icon={<ClipboardList className="size-5" />}
               value={<TileValue figure={num(k.ordersCreated)} note="tickets created in these dates" />}
             />
             <QsKpiTile
+              wrap
               label="Completed"
               accent={QS_SEMANTIC.good}
               icon={<CheckCircle2 className="size-5" />}
               value={<TileValue figure={num(k.completed)} note="by closure date" />}
             />
             <QsKpiTile
+              wrap
               label="Cancelled"
               accent={QS_SEMANTIC.bad}
               icon={<XCircle className="size-5" />}
               value={<TileValue figure={num(k.cancelled)} note="by cancel date" />}
             />
             <QsKpiTile
+              wrap
               label="Completion %"
               accent={QS_SEMANTIC.info}
               icon={<Percent className="size-5" />}
@@ -545,6 +537,7 @@ export function MtdBody() {
               )}
             />
             <QsKpiTile
+              wrap
               label="TAT %"
               accent={QS_COLORS[2]}
               icon={<Timer className="size-5" />}
@@ -553,6 +546,7 @@ export function MtdBody() {
               value={<TileValue figure={pct1(k.tatPct)} note={`${pctFraction(k.tatPct)} completed in TAT`} />}
             />
             <QsKpiTile
+              wrap
               label="Cancelled %"
               accent={QS_COLORS[8]}
               icon={<TrendingDown className="size-5" />}
@@ -577,6 +571,18 @@ export function MtdBody() {
             more than it created. Completion % is (completed + open) over the {num(k.inHand)} jobs in hand, so it
             is exactly 100% minus Cancelled %.
           </p>
+
+          {/* ── the per-client document, v2's addition ───────────────
+
+                 It appears only when exactly ONE client is ticked, which is how
+                 the MIS page scopes its own Word report; with none or several
+                 the card says so in place. It is the LAYOUT ONLY — the .docx
+                 export and any emailing of it are still to be decided, so the
+                 download control is present and disabled, and Escalated, SDA %
+                 and the tier matrix render as explicit placeholders rather than
+                 as zeroes. It sits above the eleven sections because it is a
+                 document about this client, not another view of the tab.  ── */}
+          <ClientReportSection report={report} clientIds={filters.clientIds} period={period} />
 
           {/* ── section 1 ────────────────────────────────────────────────── */}
           <TicketsCreatedVsCompletedSection daily={report.daily} />
@@ -826,7 +832,7 @@ function PerSpocSection({
               <span className="font-medium text-foreground">
                 The Client and Primary SPOC filters do not apply to this table
               </span>{' '}
-              — it reads the whole window for the selected Vertical and Zonal Manager, so its totals will be
+              — it reads the whole window for the selected Vertical, so its totals will be
               larger than the sections above.
             </>
           )}

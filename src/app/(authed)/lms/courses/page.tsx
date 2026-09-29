@@ -83,6 +83,14 @@ type Course = {
    * TINYINT on the wire, so compare against 1, not true.
    */
   is_mandatory: number;
+  /*
+   * 1 = "Introduction to Easyfix", the default course (owner, 2026-09-29):
+   * every technician must finish it, assigned or not. The backend refuses to
+   * retire it, make it optional, unassign it, or save it with anything but
+   * 1+ videos; this page just doesn't offer those actions. Absent before the
+   * backend migration, hence optional.
+   */
+  is_system?: number;
   created_at: string | null;
   updated_at: string | null;
   /* Misnamed on the wire and kept that way: it counts CONTENT ITEMS of all
@@ -316,6 +324,17 @@ export default function ManageCoursesPage() {
   /* `'new'` opens a blank add form; a Course opens it pre-filled for edit.
    * One piece of state for one modal — content used to have its own. */
   const [formCourse, setFormCourse] = React.useState<Course | 'new' | null>(null);
+  /*
+   * One modal MOUNT per open. useFetch keeps the previous key's data while a
+   * new key loads (its flicker fix), and the modal used to stay mounted across
+   * opens — so opening course B seeded B's draft from A's leftover content (or
+   * from B's own pre-save list after an edit, since invalidateFetch does not
+   * refetch a mounted hook), marked B seeded, and ignored B's real content when
+   * it landed. The list read empty or wrong at random, and Save would have
+   * written that wrong list over B. A fresh mount starts from data = null.
+   */
+  const [modalSeq, setModalSeq] = React.useState(0);
+  const openCourseModal = (c: Course | 'new') => { setModalSeq((n) => n + 1); setFormCourse(c); };
 
   /*
    * Every mutation path ends here. invalidateFetch only EVICTS the module
@@ -486,7 +505,7 @@ export default function ManageCoursesPage() {
         {/* Hidden rather than disabled for read-only operators: a permanently
             dead "Add" button just invites clicks that do nothing. */}
         {canManage && (
-          <Button onClick={() => setFormCourse('new')}>
+          <Button onClick={() => openCourseModal('new')}>
             <Plus className="size-4 mr-1" /> Add Course
           </Button>
         )}
@@ -599,6 +618,15 @@ export default function ManageCoursesPage() {
                   <td className="!text-left max-w-[360px]">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="font-medium truncate" title={c.name}>{c.name}</span>
+                      {c.is_system === 1 && (
+                        <StatusChip
+                          tone="info"
+                          size="sm"
+                          title="The default course. Mandatory for every technician, new and existing, and cannot be retired."
+                        >
+                          Default
+                        </StatusChip>
+                      )}
                     </div>
                     {c.description && (
                       <div className="text-xs text-muted-foreground truncate" title={c.description}>
@@ -741,12 +769,12 @@ export default function ManageCoursesPage() {
                         icon={canManage ? Pencil : ListVideo}
                         intent={canManage ? 'primary' : 'default'}
                         label={canManage ? 'Edit Course' : 'View Course Content'}
-                        onClick={() => setFormCourse(c)}
+                        onClick={() => openCourseModal(c)}
                       />
                       {/* Retire and Reactivate are mutually exclusive — the
                           row shows whichever transition is actually available
                           rather than a greyed-out pair. */}
-                      {canManage && c.status === 1 && (
+                      {canManage && c.status === 1 && c.is_system !== 1 && (
                         <IconButton
                           icon={Trash2}
                           intent="danger"
@@ -788,6 +816,7 @@ export default function ManageCoursesPage() {
       {/* Rendered unconditionally with `open` derived from state so its
           open-transition reset effects actually fire. */}
       <CourseModal
+        key={modalSeq}
         course={formCourse}
         canManage={canManage}
         /* Close refreshes too, not just save: a half-failed save leaves the
@@ -849,6 +878,8 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [mandatory, setMandatory] = React.useState(false);
+  // The default course: always mandatory, videos only, never empty.
+  const isSystem = editing?.is_system === 1;
   /* Kept as a STRING, not a number: '' is a real value here ("this course pays
    * nothing") and 0 would be indistinguishable from an untouched field. */
   const [rewardPoints, setRewardPoints] = React.useState('');
@@ -875,9 +906,8 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   /* Existing content — only an edit has any. All three kinds arrive in one
    * ordered list; /videos still exists for compatibility but returns only part
    * of the course, so this screen must not use it. */
-  const contentFetch = useFetch<CourseContentItem[]>(
-    editing ? `/admin/lms/courses/${editing.id}/content` : null,
-  );
+  const contentKey = editing ? `/admin/lms/courses/${editing.id}/content` : null;
+  const contentFetch = useFetch<CourseContentItem[]>(contentKey);
 
   /* Catalogue for the picker, server-filtered by the typed query. The KIND is
    * part of the key, so flipping it re-fires the fetch on its own — no manual
@@ -930,7 +960,9 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       if (seededFor.current !== 0) { seededFor.current = 0; setDraft([]); }
       return;
     }
-    if (contentFetch.data && seededFor.current !== editing.id) {
+    // Only a payload fetched for THIS course's key — useFetch keeps the previous
+    // key's data on screen while a new one loads.
+    if (contentFetch.data && contentFetch.dataKey === contentKey && seededFor.current !== editing.id) {
       seededFor.current = editing.id;
       setDraft(contentFetch.data.map((c) => ({
         kind: c.kind,
@@ -940,7 +972,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
         video_url: c.video_url ?? null,
       })));
     }
-  }, [open, editing, contentFetch.data]);
+  }, [open, editing, contentFetch.data, contentFetch.dataKey, contentKey]);
 
   // Skip the discard prompt while a save is in flight — the modal is closing
   // on its own at that point and the prompt would fire over a completed action.
@@ -1019,6 +1051,10 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   async function handleSubmit() {
     const trimmedName = name.trim();
     const trimmedDesc = description.trim();
+    if (isSystem && !draft.some((d) => d.kind === 'video')) {
+      setError(`${editing?.name ?? 'This course'} must have at least 1 video.`);
+      return;
+    }
     // Validate client-side first so the common mistakes never cost a round trip
     // — the backend enforces the same bounds and stays the real authority.
     if (trimmedName.length < NAME_MIN || trimmedName.length > NAME_MAX) {
@@ -1247,17 +1283,20 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           */}
           <label className="flex items-start gap-2">
             <Checkbox
-              checked={mandatory}
-              disabled={!canManage}
+              checked={mandatory || isSystem}
+              disabled={!canManage || isSystem}
               onChange={setMandatory}
               className="mt-0.5"
             />
             <span className="min-w-0">
               <span className="block text-sm font-medium">Mandatory Course</span>
               <span className="block text-xs text-muted-foreground">
-                Technicians who complete registration from now on are given this course automatically and
-                must watch its videos before their app unlocks jobs. Technicians already registered are
-                not affected unless you assign it to them.
+                {isSystem
+                  ? 'The default course. Every technician, new and existing, must watch its videos before '
+                    + 'their app unlocks jobs. It is always mandatory, holds videos only, and cannot be retired.'
+                  : 'Technicians who complete registration from now on are given this course automatically and '
+                    + 'must watch its videos before their app unlocks jobs. Technicians already registered are '
+                    + 'not affected unless you assign it to them.'}
               </span>
             </span>
           </label>
@@ -1343,7 +1382,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
                     className="w-40 shrink-0"
                     value={addKind}
                     onChange={(e) => { setAddKind(e.target.value as ContentKind); setVq(''); }}
-                    options={(Object.keys(KIND_LABEL) as ContentKind[]).map((k) => ({
+                    options={(Object.keys(KIND_LABEL) as ContentKind[]).filter((k) => !isSystem || k === 'video').map((k) => ({
                       value: k,
                       label: KIND_LABEL[k],
                     }))}
@@ -1415,7 +1454,9 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
                   <div className="mt-1 text-xs text-muted-foreground">
                     A course with no content can never be completed by a technician —
                     it will show up as assigned and stay stuck at 0% forever.
-                    Add at least one video, document or assessment before assigning this course.
+                    {isSystem
+                      ? 'This is the default course every technician must finish. Add at least 1 video — it cannot be saved without one.'
+                      : 'Add at least one video, document or assessment before assigning this course.'}
                   </div>
                 </div>
               )}
@@ -1505,7 +1546,11 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           <div className="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background pt-3 pb-1">
             <CancelButton onCancel={onClose} disabled={submitting} />
             {canManage && (
-              <Button onClick={handleSubmit} disabled={submitting}>
+              <Button
+                onClick={handleSubmit}
+                disabled={submitting || (isSystem && !draft.some((d) => d.kind === 'video'))}
+                title={isSystem && !draft.some((d) => d.kind === 'video') ? 'Add at least 1 video to save' : undefined}
+              >
                 {submitting ? 'Saving…' : editing ? 'Save Changes' : 'Add Course'}
               </Button>
             )}

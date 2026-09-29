@@ -16,6 +16,7 @@ import {
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { NoticeStrip } from '@/components/notice/NoticeStrip';
 import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents';
+import { MyRoster } from '@/components/dashboard/MyRoster';
 import { AttentionSummary } from '@/components/dashboard/AttentionSummary';
 import { MarqueeOnHover } from '@/components/dashboard/MarqueeOnHover';
 import { Card, CardContent } from '@/components/ui/card';
@@ -384,6 +385,13 @@ export default function DashboardPage() {
           gate themselves on the isNoticeManage action key. */}
       <NoticeStrip />
 
+      {/* My Roster — full-width horizontal strip (the caller's next 7 days +
+          My Team Today). Its own row, NOT the right rail: stacked under
+          Upcoming Events it made the rail's grid row taller than the 2×4
+          cards and pulled the card rows apart. Renders nothing where the
+          roster API is absent. */}
+      <MyRoster />
+
       {/*
         * Filter bar — Client / City / Project Manager / Zonal Manager.
         *
@@ -431,6 +439,9 @@ export default function DashboardPage() {
           * marquee-on-overflow behaviour inside each card handles the
           * card dimensions gracefully as the available width shifts.
           */}
+        {/* content-start: when the rail is TALLER than the cards (a busy
+            week of events), the rows keep their natural height and pack to
+            the top instead of spreading apart to fill the row. */}
         {/*
           * `refreshing` dims the grid while a filter change is in flight.
           * useFetch deliberately KEEPS the previous payload mounted on a key
@@ -441,7 +452,7 @@ export default function DashboardPage() {
           * indistinguishable from the real ones.
           */}
         <div
-          className={`grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0 transition-opacity ${
+          className={`grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0 content-start transition-opacity ${
             countsFetch.refreshing ? 'opacity-50' : ''
           }`}
           aria-busy={countsFetch.refreshing}

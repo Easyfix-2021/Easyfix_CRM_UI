@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { BULK_TRANSFER_MAX_JOBS as MAX_JOB_IDS } from '@/lib/utils';
@@ -103,6 +104,7 @@ export function TransferJobOwnershipDialog({
   onApplied?: () => void;
 }) {
   const lk = useLookup();
+  const confirm = useConfirm();
   const [fromOwner, setFromOwner] = useState<string>('');
   const [toOwner,   setToOwner]   = useState<string>('');
   const [reason,    setReason]    = useState<string>('');
@@ -147,6 +149,17 @@ export function TransferJobOwnershipDialog({
     if (!fromOwner || !toOwner) { setError('Pick both From and To owners.'); return; }
     if (fromOwner === toOwner)  { setError('From and To owners must be different.'); return; }
     if (!reason.trim() || reason.trim().length < 2) { setError('Reason is required (min 2 characters).'); return; }
+
+    // Never blocks — just confirms. The To-owner list carries week_off_today
+    // from /shared/lookup/users (see use-lookup.ts).
+    const toOwnerUser = lk.adminUsers.find((u) => String(u.user_id) === toOwner);
+    if (toOwnerUser?.week_off_today) {
+      const ok = await confirm({
+        title: 'Assign Anyway?',
+        description: `${toOwnerUser.user_name} Is On Week Off Today. Assign Anyway?`,
+      });
+      if (!ok) return;
+    }
 
     const body: Record<string, unknown> = {
       fromOwnerId: Number(fromOwner),

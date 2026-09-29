@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import { Download } from 'lucide-react';
 import { Button } from './button';
 import { cn } from '@/lib/utils';
@@ -36,17 +37,12 @@ import { cn } from '@/lib/utils';
  *     behaviourally identical, which is the point.
  */
 
-export function DownloadButton({
-  onClick,
-  disabled = false,
-  downloading = false,
-  label = 'Download',
-  loadingLabel = 'Preparing…',
-  title,
-  className,
-  type = 'button',
-}: {
-  onClick: () => void;
+/*
+ * forwardRef + rest props so it can sit under a Radix `asChild` trigger
+ * (e.g. Team Roster's Export dropdown) — Radix hands the trigger its ref,
+ * aria-* and pointer/key handlers through these.
+ */
+type DownloadButtonProps = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'type'> & {
   /*
    * `disabled` ONLY reflects business state (nothing to download,
    * required filter missing, etc.). The component itself disables the
@@ -65,13 +61,23 @@ export function DownloadButton({
   title?: string;
   className?: string;
   type?: 'button' | 'submit';
-}) {
+};
+
+export const DownloadButton = React.forwardRef<HTMLButtonElement, DownloadButtonProps>(function DownloadButton({
+  disabled = false,
+  downloading = false,
+  label = 'Download',
+  loadingLabel = 'Preparing…',
+  className,
+  type = 'button',
+  ...rest
+}, ref) {
   return (
     <Button
+      {...rest}
+      ref={ref}
       type={type}
-      onClick={onClick}
       disabled={disabled || downloading}
-      title={title}
       className={cn(
         // md:w-auto / w-full: full-width on mobile so it doesn't look
         // orphaned, fixed-width on desktop where the toolbar has room.
@@ -97,4 +103,4 @@ export function DownloadButton({
       {downloading ? loadingLabel : label}
     </Button>
   );
-}
+});
