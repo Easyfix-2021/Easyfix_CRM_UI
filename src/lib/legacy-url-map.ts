@@ -84,7 +84,7 @@ export const URL_MAP: Record<string, string> = {
   'rewardLedger':          '/rewards/ledger',
   'rewardReferrals':       '/rewards/referrals',
   // Team Roster — HRMS child (backend migrations roster-02 seed, roster-03
-  // move under HRMS). Page gates on isRosterManage + canManageRoster.
+  // move under HRMS). Page gates on isRosterManage (role only).
   'teamRoster':            '/team-roster',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
