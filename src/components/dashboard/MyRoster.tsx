@@ -46,11 +46,16 @@ function formatDayLabel(ymd: string): string {
 
 const OFF_TODAY_VISIBLE = 3;
 
-export function MyRoster() {
-  const fetched = useFetch<RosterMeResp>('/admin/roster/me?days=14');
+/*
+ * `count` days from today (7 on the dashboard, 14 on /profile), in a grid that
+ * holds 7 per row at lg and wraps below. `showTeam` = the My Team Today block
+ * (dashboard only — the profile page is about the viewer alone).
+ */
+export function MyRoster({ count = 7, showTeam = true }: { count?: number; showTeam?: boolean } = {}) {
+  const fetched = useFetch<RosterMeResp>(`/admin/roster/me?days=${count}`);
   const days = fetched.data?.days ?? [];
   const todayKey = istNowWallClock().slice(0, 10);
-  const team = fetched.data?.team ?? null;
+  const team = showTeam ? fetched.data?.team ?? null : null;
   const nextWeekOff = fetched.data?.nextWeekOff ?? null;
 
   // Fails soft: no data (endpoint missing/erroring) and not loading →
@@ -76,12 +81,12 @@ export function MyRoster() {
           </div>
 
           {fetched.loading ? (
-            <div className="grid grid-cols-7 gap-2">
-              {Array.from({ length: 7 }).map((_, i) => <div key={i} className="h-14 rounded-md bg-muted animate-pulse" />)}
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {Array.from({ length: count }).map((_, i) => <div key={i} className="h-14 rounded-md bg-muted animate-pulse" />)}
             </div>
           ) : (
-            <ul className="flex gap-2 overflow-x-auto pb-0.5">
-              {days.slice(0, 7).map((day) => {
+            <ul className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {days.slice(0, count).map((day) => {
                 const isToday = day.date === todayKey;
                 const tone = day.holiday
                   ? 'bg-gold-strong dark:bg-gold-tint text-white'
@@ -91,7 +96,7 @@ export function MyRoster() {
                   <li
                     key={day.date}
                     title={day.holiday ? `${formatDayLabel(day.date)} · ${day.holiday.name}` : undefined}
-                    className={`min-w-[7.5rem] flex-1 rounded-md border px-2 py-1.5 flex flex-col gap-1 ${isToday ? 'border-primary' : 'border-border'}`}
+                    className={`min-w-0 rounded-md border px-2 py-1.5 flex flex-col gap-1 ${isToday ? 'border-primary' : 'border-border'}`}
                   >
                     <span className={`text-xs ${isToday ? 'font-semibold' : 'text-muted-foreground'}`}>
                       {isToday ? 'Today' : formatDayLabel(day.date).split(' ')[0]} · {formatDayLabel(day.date).split(' ').slice(1).join(' ')}
