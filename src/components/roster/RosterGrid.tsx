@@ -488,8 +488,14 @@ export function RosterGrid() {
                           aria-label={`Select ${member.name}`}
                         />
                         <div>
-                          <div className="font-medium">{member.name}</div>
-                          <div className="text-xs text-muted-foreground">{[member.empCode, member.roleName].filter(Boolean).join(' · ')}</div>
+                          {/* <EmpCode> · <Full Name> · <Designation> — CRM users have no
+                              designation field, so the role stands in (as the QuickSight
+                              admin report already does). Absent parts are skipped. */}
+                          <div className="text-sm leading-snug">
+                            {member.empCode && <span className="text-muted-foreground">{member.empCode} · </span>}
+                            <span className="font-medium">{member.name}</span>
+                            {member.roleName && <span className="text-muted-foreground"> · {member.roleName}</span>}
+                          </div>
                           <ShiftSelect
                             value={rowShift[member.userId] ?? member.defaultShift ?? DEFAULT_SHIFT}
                             onChange={(v) => onRowShiftChange(member.userId, v)}
