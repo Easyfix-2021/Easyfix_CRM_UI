@@ -820,7 +820,7 @@ export default function ManageCoursesPage() {
  *
  * ─── Why the save is ordered, and what happens when half of it fails ─────
  *
- * Content is saved through PUT /courses/:id/videos, which needs an id — and on
+ * Content is saved through PUT /courses/:id/content, which needs an id — and on
  * the Add path there is no id until the POST returns. So the save is
  * necessarily two calls, and the interesting case is the POST succeeding and
  * the PUT failing: the course now EXISTS. Reporting that as "create failed"
@@ -873,8 +873,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   const createdIdRef = React.useRef<number | null>(null);
 
   /* Existing content — only an edit has any. All three kinds arrive in one
-   * ordered list; /videos still exists for compatibility but returns only part
-   * of the course, so this screen must not use it. */
+   * ordered list. */
   const contentFetch = useFetch<CourseContentItem[]>(
     editing ? `/admin/lms/courses/${editing.id}/content` : null,
   );
@@ -1131,11 +1130,6 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
         // The PUT REPLACES the whole content list — ALL kinds, not just one —
         // so array order here is the sequence the technician sees. Never
         // empty: handleSubmit refuses a content-less course before this.
-        //
-        // /videos is deliberately NOT used even for a video-only course: it
-        // replaces only the video items and leaves documents and assessments
-        // in place, so a course whose last document the operator just removed
-        // would keep it.
         await api.put(`/admin/lms/courses/${courseId}/content`, {
           items: draft.map((d) => ({ kind: d.kind, ref_id: d.ref_id })),
         });
