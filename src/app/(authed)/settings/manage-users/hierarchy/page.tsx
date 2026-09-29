@@ -9,19 +9,20 @@
  *      and indirect reports, expanded server-side via DFS)
  *   - `ancestors`: the chain of reporting managers above them
  *
- * Rendered as an indented tree (CSS only, no graph lib) so the entire
- * subtree is visible at once without needing a viewport-sizing canvas.
- * Each node shows name + role + email; click to drill into THAT user's
- * sub-hierarchy.
+ * Rendered as a top-down org chart (CSS connectors, no graph lib) with
+ * the manager chain above the root. Click a card to expand/collapse its
+ * reports; the crosshair re-roots the chart on THAT user.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Users, Search, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, ArrowUp } from 'lucide-react';
+import { Users, Search, ChevronLeft, AlertTriangle, ArrowUp, Plus, Minus, Crosshair, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
+import { cn } from '@/lib/utils';
+import { UserAvatar } from '@/components/users/UserAvatar';
 
 type Node = {
   user_id: number;
@@ -31,6 +32,7 @@ type Node = {
   user_role: number | null;
   role_name: string | null;
   reporting_manager: number | null;
+  photo_url?: string | null; // presigned; null → monogram (same contract as Manage Users)
   children: Node[];
 };
 type HierarchyResponse = { tree: Node; ancestors: Node[] };
@@ -78,10 +80,6 @@ export default function HierarchyPage() {
       setError(err instanceof ApiError ? err.message : 'Failed to load hierarchy');
     } finally { setLoading(false); }
   }, []);
-
-  function totalCount(n: Node): number {
-    return 1 + n.children.reduce((s, c) => s + totalCount(c), 0);
-  }
 
   return (
     <div className="space-y-4">
@@ -155,91 +153,198 @@ export default function HierarchyPage() {
 
       {loading && <div className="text-sm text-muted-foreground text-center py-6">Loading hierarchy…</div>}
 
-      {hierarchy && (
-        <>
-          {hierarchy.ancestors.length > 0 && (
-            <Card>
-              <CardContent className="p-3">
-                <div className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-2">
-                  <ArrowUp className="size-3.5" /> Reports up to
-                </div>
-                <div className="flex items-center gap-1 flex-wrap text-sm">
-                  {hierarchy.ancestors.map((a, i) => (
-                    <span key={a.user_id} className="flex items-center gap-1">
-                      <button
-                        className="text-primary hover:underline"
-                        onClick={() => loadHierarchy(a.user_id)}
-                      >
-                        {a.user_name}{a.role_name ? ` (${a.role_name})` : ''}
-                      </button>
-                      {i < hierarchy.ancestors.length - 1 && <ChevronRight className="size-3 text-muted-foreground" />}
-                    </span>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          <Card>
-            <CardContent className="p-3">
-              <div className="text-xs font-medium text-muted-foreground mb-2">
-                Subtree — {totalCount(hierarchy.tree)} user(s) including root
-              </div>
-              <TreeNode node={hierarchy.tree} onDrillInto={loadHierarchy} root />
-            </CardContent>
-          </Card>
-        </>
-      )}
+      {hierarchy && <OrgChart key={hierarchy.tree.user_id} data={hierarchy} onDrillInto={loadHierarchy} />}
     </div>
   );
 }
 
-// Recursive node — uses a disclosure toggle so deep trees stay scannable.
-function TreeNode({ node, onDrillInto, root }: {
-  node: Node;
-  onDrillInto: (id: number) => void;
-  root?: boolean;
-}) {
-  const hasChildren = node.children.length > 0;
-  const [open, setOpen] = useState(root ?? false);
+
+function countAll(n: Node): number {
+  return 1 + n.children.reduce((s, c) => s + countAll(c), 0);
+}
+
+function managerIds(n: Node, out: number[] = []): number[] {
+  if (n.children.length) out.push(n.user_id);
+  n.children.forEach((c) => managerIds(c, out));
+  return out;
+}
+
+/*
+ * Top-down org chart. Connectors are plain 1px divs (no graph lib, no
+ * canvas): each child column draws the two halves of the horizontal bus
+ * above it plus its own vertical stem, so the first/last child simply
+ * omit the outer half. Expansion state lives here (not per node) so
+ * Expand All / Collapse All can drive it.
+ */
+function OrgChart({ data, onDrillInto }: { data: HierarchyResponse; onDrillInto: (id: number) => void }) {
+  const root = data.tree;
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set([root.user_id]));
+  const scroller = useRef<HTMLDivElement>(null);
+
+  // Keyed by root id at the call site, so a new root remounts with one
+  // level open; centre the viewport on it once.
+  useEffect(() => {
+    const el = scroller.current;
+    if (el) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+  }, []);
+
+  const toggle = (id: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+
+  // Nearest manager comes first from the API; draw top-most boss first.
+  const chain = [...data.ancestors].reverse();
 
   return (
-    <div className={root ? '' : 'ml-5 mt-1 border-l border-ink-100 pl-3'}>
-      <div className="flex items-center gap-1.5 group">
-        {hasChildren ? (
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label={open ? 'Collapse' : 'Expand'}
-          >
-            {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-          </button>
-        ) : (
-          <span className="size-3.5 inline-block" />
+    <Card>
+      <CardContent className="p-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+          <div className="text-xs font-medium text-muted-foreground">
+            {countAll(root)} user(s) under {root.user_name}, including them
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setExpanded(new Set(managerIds(root)))}>
+              <ChevronsUpDown className="size-3.5" /> Expand All
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setExpanded(new Set([root.user_id]))}>
+              <ChevronsDownUp className="size-3.5" /> Collapse All
+            </Button>
+          </div>
+        </div>
+
+        <div ref={scroller} className="overflow-x-auto pb-2">
+          <div className="mx-auto w-max px-4 py-2 flex flex-col items-center">
+            {chain.length > 0 && (
+              <>
+                <div className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-1">
+                  <ArrowUp className="size-3" /> Reports Up To
+                </div>
+                {chain.map((a) => (
+                  <div key={a.user_id} className="flex flex-col items-center">
+                    <button
+                      onClick={() => onDrillInto(a.user_id)}
+                      className="rounded-full border border-dashed bg-card px-3 py-1 text-xs hover:border-primary hover:text-primary"
+                      title="View hierarchy from this manager"
+                    >
+                      <span className="font-medium">{a.user_name}</span>
+                      {a.role_name && <span className="text-muted-foreground"> · {a.role_name}</span>}
+                    </button>
+                    <span className="h-4 w-px bg-border" />
+                  </div>
+                ))}
+              </>
+            )}
+            <OrgNode node={root} isRoot expanded={expanded} onToggle={toggle} onDrillInto={onDrillInto} />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OrgNode({ node, isRoot, expanded, onToggle, onDrillInto }: {
+  node: Node;
+  isRoot?: boolean;
+  expanded: Set<number>;
+  onToggle: (id: number) => void;
+  onDrillInto: (id: number) => void;
+}) {
+  const kids = node.children;
+  const open = kids.length > 0 && expanded.has(node.user_id);
+  const total = countAll(node) - 1;
+  const stack = kids.length > 1 && kids.every((k) => k.children.length === 0);
+
+  return (
+    <div className="flex flex-col items-center">
+      <div
+        onClick={() => kids.length && onToggle(node.user_id)}
+        className={cn(
+          'w-56 rounded-lg border bg-card p-3 shadow-sm transition-colors',
+          kids.length > 0 && 'cursor-pointer hover:border-primary',
+          isRoot && 'border-primary ring-1 ring-primary',
         )}
-        <div className="flex-1 flex items-center gap-2 text-sm">
-          <span className="font-medium">{node.user_name}</span>
-          <span className="text-xs text-muted-foreground font-mono">#{node.user_id}</span>
-          {node.role_name && <span className="text-xs text-info-strong bg-info-tint rounded px-1.5">{node.role_name}</span>}
-          <span className="text-xs text-muted-foreground">{node.official_email}</span>
-          {hasChildren && (
-            <span className="text-xs text-muted-foreground">· {node.children.length} report{node.children.length === 1 ? '' : 's'}</span>
+      >
+        <div className="flex items-start gap-2">
+          {/* A photo click opens a lightbox, and React portals bubble to
+              this card's expand toggle — so stop it there. A monogram is
+              not clickable and lets the card toggle as usual. */}
+          <span className="flex" onClick={node.photo_url ? (e) => e.stopPropagation() : undefined}>
+            <UserAvatar name={node.user_name} photoUrl={node.photo_url} className="size-9" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold" title={node.user_name}>{node.user_name}</div>
+            <div className="truncate text-xs text-muted-foreground" title={node.official_email}>{node.official_email}</div>
+          </div>
+          {!isRoot && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDrillInto(node.user_id); }}
+              className="text-muted-foreground hover:text-primary"
+              title="View hierarchy from this user"
+              aria-label={`View hierarchy from ${node.user_name}`}
+            >
+              <Crosshair className="size-4" />
+            </button>
           )}
-          <button
-            onClick={() => onDrillInto(node.user_id)}
-            className="ml-auto text-xs text-primary opacity-0 group-hover:opacity-100 hover:underline"
-            title="Focus hierarchy on this user"
-          >
-            focus →
-          </button>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {node.role_name
+            ? <span className="truncate text-xs text-info-strong bg-info-tint rounded px-1.5">{node.role_name}</span>
+            : <span />}
+          <span className="text-xs text-muted-foreground font-mono">#{node.user_id}</span>
         </div>
       </div>
-      {open && hasChildren && (
-        <div>
-          {node.children.map((c) => (
-            <TreeNode key={c.user_id} node={c} onDrillInto={onDrillInto} />
-          ))}
-        </div>
+
+      {kids.length > 0 && (
+        <>
+          <span className="h-3 w-px bg-border" />
+          <button
+            onClick={() => onToggle(node.user_id)}
+            aria-expanded={open}
+            className="flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary"
+            title={`${kids.length} direct · ${total} total`}
+          >
+            {open ? <Minus className="size-3" /> : <Plus className="size-3" />}
+            {kids.length} Report{kids.length === 1 ? '' : 's'}
+            {total > kids.length && <span className="opacity-70">· {total}</span>}
+          </button>
+        </>
+      )}
+
+      {open && (
+        <>
+          <span className="h-4 w-px bg-border" />
+          {stack ? (
+            // All leaves: hang them down a rail instead of fanning sideways,
+            // so a 5-person team costs one column, not five. The empty left
+            // cell mirrors the right one, putting the rail under the stem.
+            <div className="grid grid-cols-2">
+              <div />
+              <div>
+                {kids.map((c, i) => (
+                  <div key={c.user_id} className={cn('relative pl-5', i < kids.length - 1 && 'pb-2')}>
+                    <span className={cn('absolute left-0 top-0 w-px bg-border', i < kids.length - 1 ? 'h-full' : 'h-11')} />
+                    <span className="absolute left-0 top-11 h-px w-5 bg-border" />
+                    <OrgNode node={c} expanded={expanded} onToggle={onToggle} onDrillInto={onDrillInto} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex">
+              {kids.map((c, i) => (
+                <div key={c.user_id} className="relative flex flex-col items-center px-2 pt-4">
+                  {i > 0 && <span className="absolute top-0 left-0 h-px w-1/2 bg-border" />}
+                  {i < kids.length - 1 && <span className="absolute top-0 right-0 h-px w-1/2 bg-border" />}
+                  <span className="absolute top-0 left-1/2 h-4 w-px bg-border" />
+                  <OrgNode node={c} expanded={expanded} onToggle={onToggle} onDrillInto={onDrillInto} />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
