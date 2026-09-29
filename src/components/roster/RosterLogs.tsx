@@ -20,6 +20,7 @@ import { TablePagination, type TablePageSize, pageSizeToLimit, PAGE_SIZE_OPTIONS
 import { useFetch } from '@/lib/hooks';
 import { formatDate } from '@/lib/utils';
 import { ActionChangesDialog } from './ActionChangesDialog';
+import { shiftLabel } from './ShiftSelect';
 import type { RosterActionLogAction, RosterActionLogResponse, RosterUpdateLogItem } from './types';
 
 /* Same reasoning as the Issue Queue's ISSUE_PAGE_SIZES: 'All' renders as one
@@ -82,7 +83,7 @@ export function renderChange(item: Pick<RosterUpdateLogItem, 'field' | 'oldValue
     );
   }
   if (item.field === 'shift_start' || item.field === 'pref.shift') {
-    return <span className="text-xs">Shift {item.oldValue || '—'} → {item.newValue || '—'}</span>;
+    return <span className="text-xs">Shift {item.oldValue ? shiftLabel(item.oldValue) : '—'} → {item.newValue ? shiftLabel(item.newValue) : '—'}</span>;
   }
   if (item.field === 'pref.working_days') {
     return <span className="text-xs">Working Days {item.oldValue ?? '—'} → {item.newValue ?? '—'}</span>;
