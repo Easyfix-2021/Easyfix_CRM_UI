@@ -23,7 +23,7 @@
  */
 
 import * as React from 'react';
-import { Info, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
+import { Headphones, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -224,9 +224,10 @@ function RecordingCell({ row }: { row: CallRow }) {
 }
 
 /*
- * CallHistoryTable — the job-scoped call log (loading / error / empty / table),
- * with the party-aware "With" column. Shared by the ⓘ popup below and the
- * job-detail modal's inline "Calling History" section so the two never drift.
+ * CallHistoryTable — the call log (loading / error / empty / table), with the
+ * party-aware "With" column. Scope is the caller's: a job's calls, or every
+ * call on one number. Shared by the headset popup below and the job-detail
+ * modal's inline "Calling History" section so the two never drift.
  */
 export function CallHistoryTable({
   items: rawItems,
@@ -355,12 +356,18 @@ export function CallHistoryButton({
   const [open, setOpen] = React.useState(false);
 
   // Fetch only once the popup is opened (key null → disabled until then).
+  /*
+   * 200 is the endpoint's ceiling (validators/calls.validator.js). A job's
+   * history never approaches it; a technician's whole call history since his
+   * first call can, so the footer says so rather than silently truncating.
+   */
+  const PAGE_LIMIT = 200;
   const key = !open
     ? null
     : jobId
-      ? `/admin/calls?jobId=${jobId}&limit=100`
+      ? `/admin/calls?jobId=${jobId}&limit=${PAGE_LIMIT}`
       : mobile
-        ? `/admin/calls?mobile=${encodeURIComponent(mobile)}&limit=100`
+        ? `/admin/calls?mobile=${encodeURIComponent(mobile)}&limit=${PAGE_LIMIT}`
         : null;
   const { data, loading, error } = useFetch<CallHistoryResp>(key, { enabled: !!key });
   const items = data?.items ?? [];
@@ -371,13 +378,14 @@ export function CallHistoryButton({
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(true); }}
         title={jobId ? 'View call history for this job' : 'View call history for this number'}
-        aria-label="View call history for this job"
+        aria-label={jobId ? 'View call history for this job' : 'View call history for this number'}
         className={cn(
           'inline-flex items-center align-middle text-primary hover:text-brand-600',
           className,
         )}
       >
-        <Info className="h-4 w-4" />
+        {/* Headset, not an info glyph: this opens call recordings. */}
+        <Headphones className="h-4 w-4" />
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

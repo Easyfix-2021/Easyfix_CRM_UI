@@ -25,7 +25,6 @@ import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycl
 import { EasyfixerStatusDialog } from '@/components/easyfixer/EasyfixerStatusDialog';
 import { EasyfixerBankDialog } from '@/components/easyfixer/EasyfixerBankDialog';
 import { EasyfixerMobileDialog } from '@/components/easyfixer/EasyfixerMobileDialog';
-import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
 import {
@@ -107,7 +106,6 @@ export default function NewRegistration2ProfilePage() {
   const [statusOpen, setStatusOpen] = useState(false);
   const [bankOpen, setBankOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [deepSkillOpen, setDeepSkillOpen] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [clientMapOpen, setClientMapOpen] = useState(false);
 
@@ -134,7 +132,6 @@ export default function NewRegistration2ProfilePage() {
     [v, row, efrId],
   );
   const active = v?.activation.is_activated ?? (row?.efr_status_label === 'Active' || row?.efr_status_label === 'Idle');
-  const bankVerified = v?.registrationVerification.banking.verification_status === 1;
   const strength = row?.efr_profile_perc ?? v?.registrationVerification.overall_progress ?? 0;
   const leadsTeam = row?.ef_account === 'Master';
 
@@ -231,16 +228,7 @@ export default function NewRegistration2ProfilePage() {
         </div>
       </div>
 
-      {/* Bank-not-verified banner */}
-      {!bankVerified && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-urgent-tint p-4">
-          <div className="flex-1 text-sm text-ink-900">
-            <strong className="block font-semibold">⚠ Bank account not verified by Finance</strong>
-            Payouts are on hold until finance verifies the account details &amp; documents.
-          </div>
-          <Button size="sm" onClick={() => setTab('bank')}>Review bank details</Button>
-        </div>
-      )}
+
 
       {/* Tab nav */}
       <div className="flex flex-wrap gap-1 border-b">
@@ -255,7 +243,6 @@ export default function NewRegistration2ProfilePage() {
             )}
           >
             {label}
-            {key === 'bank' && !bankVerified && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-destructive align-middle" />}
           </button>
         ))}
       </div>
@@ -296,7 +283,6 @@ export default function NewRegistration2ProfilePage() {
             efrId={efrId}
             active={!!active}
             canManageSkills={!!can.isEdit}
-            onManageSkills={() => setDeepSkillOpen(true)}
             canEditPincodes={!!can.isEdit}
             focusPincodes={pincodeFocus}
           />
@@ -330,13 +316,6 @@ export default function NewRegistration2ProfilePage() {
         easyfixer={mobileOpen ? { efr_id: efrId, efr_name: displayName, efr_no: row?.efr_no ?? v.header.mobile ?? null } : null}
         onClose={() => setMobileOpen(false)}
         onUpdated={() => { void reloadAll(); }}
-      />
-      <EasyfixerDeepSkillModal
-        open={deepSkillOpen}
-        onClose={() => setDeepSkillOpen(false)}
-        easyfixerId={deepSkillOpen ? efrId : null}
-        easyfixerName={displayName}
-        onUnmapped={() => { setMappingsBump((n) => n + 1); }}
       />
       <EasyfixerTransactionsModal
         open={txOpen}

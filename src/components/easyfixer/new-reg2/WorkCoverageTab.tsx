@@ -16,8 +16,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFetch } from '@/lib/hooks';
-import { Button } from '@/components/ui/button';
 import { ServiceablePincodesEditor } from '@/components/easyfixer/ServiceablePincodesEditor';
+import { DeepSkillOptionMappingEditor } from '@/components/easyfixer/DeepSkillOptionMappingEditor';
 import { SectionCard, EndpointPending, LockedBody } from './ui';
 import type { OptionMapping, PincodeChip } from './types';
 
@@ -25,20 +25,18 @@ export function WorkCoverageTab({
   efrId,
   active,
   canManageSkills,
-  onManageSkills,
   canEditPincodes = false,
   focusPincodes = 0,
 }: {
   efrId: number;
   active: boolean;
   canManageSkills: boolean;
-  onManageSkills: () => void;
   canEditPincodes?: boolean;
   focusPincodes?: number;
 }) {
   // Parent remounts this tab (React key) after an unmap, so a plain key
   // re-fetches — no cache-buster query param.
-  const { data: mapData, loading: mapLoading } = useFetch<{ items: OptionMapping[] }>(
+  const { data: mapData, loading: mapLoading, refetch: refetchMappings } = useFetch<{ items: OptionMapping[] }>(
     `/admin/easyfixers/${efrId}/option-mappings`,
   );
   const { data: pinData, refetch: refetchPins } = useFetch<{ items: PincodeChip[] }>(
@@ -76,42 +74,44 @@ export function WorkCoverageTab({
 
   return (
     <div className="space-y-4">
-      <SectionCard
-        title="Skill & Service Area Mapping"
-        icon={<span>🧭</span>}
-        right={canManageSkills ? <Button size="sm" onClick={onManageSkills}>Manage mappings</Button> : undefined}
-      >
-        {mapLoading && !mapData ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : grouped.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No deep-skill options mapped yet.</p>
-        ) : (
-          <div className="space-y-3">
-            {grouped.map((g) => (
-              <details key={g.name} className="rounded-lg border">
-                <summary className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3">
-                  <span className="font-semibold text-ink-900">{g.name}</span>
-                  <span className="text-xs text-muted-foreground">{g.options.size} option{g.options.size === 1 ? '' : 's'} mapped</span>
-                </summary>
-                <div className="border-t bg-muted/40 px-4 py-3">
-                  <ul className="space-y-1.5 text-[13px]">
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="border-b px-4 py-3">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-ink-900">
+            <span>🧭</span> Skill &amp; Service Area Mapping
+          </h3>
+        </div>
+        <div className="p-4">
+          {canManageSkills ? (
+            // The same editor the verification workflow renders: pick the
+            // category, its deep skills and their options, then Save.
+            <DeepSkillOptionMappingEditor efrId={efrId} onReload={async () => { refetchMappings(); }} />
+          ) : mapLoading && !mapData ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : grouped.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No deep-skill options mapped yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {grouped.map((g) => (
+                <div key={g.name} className="rounded-lg border px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-semibold text-ink-900">{g.name}</span>
+                    <span className="text-xs text-muted-foreground">{g.options.size} option{g.options.size === 1 ? '' : 's'} mapped</span>
+                  </div>
+                  <ul className="mt-2 space-y-1.5 text-[13px]">
                     {g.rows.map((r) => (
                       <li key={r.mapping_id} className="flex flex-wrap items-center gap-x-2 text-ink-700">
                         <span className="font-medium text-ink-900">{r.option_name ?? `Option ${r.option_id}`}</span>
                         {r.deep_skill_name && <span className="text-muted-foreground">· {r.deep_skill_name}</span>}
-                        {r.service_type_name && <span className="rounded border bg-info-tint px-1.5 py-0.5 text-xs text-info-strong">{r.service_type_name}</span>}
                       </li>
                     ))}
                   </ul>
                 </div>
-              </details>
-            ))}
-          </div>
-        )}
-        <p className="mt-3 text-xs text-muted-foreground">
-          Per-category option totals (the &quot;X of Y&quot; denominator) need a category-catalogue count endpoint; only the mapped count is shown today.
-        </p>
-      </SectionCard>
+              ))}
+              <p className="text-xs text-muted-foreground">You do not have permission to change skill mappings.</p>
+            </div>
+          )}
+        </div>
+      </div>
 
       <div ref={pinRef} className={ringing ? 'rounded-xl ring-2 ring-primary ring-offset-2 transition-shadow' : 'transition-shadow'}>
         <SectionCard title="Serviceable Pincodes" icon={<span>📍</span>} right={<span>{pins.length} selected</span>}>

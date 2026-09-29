@@ -145,6 +145,42 @@ function CoverageByCity({
  * Read-only: editing happens in Work & Coverage, which owns the mapping modal,
  * so there is one editor rather than two that can disagree.
  */
+/*
+ * The photographs the technician took during registration: selfie first,
+ * because that is the face a reviewer matches against the Aadhaar, then the
+ * Aadhaar front and back. Each opens full size in a new tab — the URLs are
+ * short-lived signed links, so they are not embedded anywhere else.
+ *
+ * A missing photo shows its own empty tile rather than vanishing: "no Aadhaar
+ * back" is a review finding, and a tile that silently disappears hides it.
+ */
+function KycPhotos({ docs }: { docs: VerificationPayload['registrationVerification']['identity']['documents'] }) {
+  const tiles: Array<[string, string | null]> = [
+    ['Selfie', docs?.selfie_url ?? null],
+    ['Aadhaar front', docs?.aadhaar_front_url ?? null],
+    ['Aadhaar back', docs?.aadhaar_back_url ?? null],
+  ];
+  return (
+    <div className="mb-3 flex flex-wrap gap-3">
+      {tiles.map(([label, url]) => (
+        <figure key={label} className="w-32">
+          {url ? (
+            <a href={url} target="_blank" rel="noopener noreferrer" title={`Open ${label} full size`}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt={label} className="h-24 w-32 rounded-md border object-cover hover:opacity-90" />
+            </a>
+          ) : (
+            <div className="grid h-24 w-32 place-items-center rounded-md border border-dashed bg-muted text-xs text-muted-foreground">
+              Not uploaded
+            </div>
+          )}
+          <figcaption className="mt-1 text-xs text-muted-foreground">{label}</figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
 function SkillsPicked({
   groups,
   loading,
@@ -246,6 +282,9 @@ export function OnboardingTab({
   const activated = v.activation.is_activated;
   const rv = v.registrationVerification;
   const skillsMapped = v.additional.deep_skills_count > 0;
+  // is_identity_details_verified_by_crm = 1 means the app already verified the
+  // Aadhaar, so the reviewer is confirming, not checking from scratch.
+  const aadhaarVerified = rv.identity.verification_status === 1;
   // Onboarding stops being the place to change coverage the moment the
   // technician is live — edits then belong in Work & Coverage, which stays
   // open. Read-only here, not hidden: the reviewer still needs to see it.
@@ -402,13 +441,26 @@ export function OnboardingTab({
       </SectionCard>
 
       {/* Consolidated read-only review */}
-      <SectionCard title="Review — everything the technician filled" icon={<span>🔎</span>} right={<span>read-only</span>} bodyClassName="space-y-3">
-        <VerificationSection headerTone="sub" title="Identity & KYC" verified={rv.identity.is_verified} progress={rv.identity.progress} defaultOpen>
+      <SectionCard title="Review — everything the technician filled" icon={<span>🔎</span>} bodyClassName="space-y-3">
+        <VerificationSection
+          headerTone="sub"
+          title="Identity & KYC"
+          verified={aadhaarVerified}
+          progress={rv.identity.progress}
+          rightSlot={aadhaarVerified
+            ? <span className="inline-flex items-center gap-1 text-success">✓ Aadhaar verified in the app</span>
+            : <span className="text-muted-foreground">Aadhaar not verified yet</span>}
+          defaultOpen
+        >
           <div className="px-1">
+            <KycPhotos docs={rv.identity.documents} />
             <KV k="Legal name" v={v.header.full_name} />
             <KV k="Date of birth" v={formatDate(rv.personal.date_of_birth)} />
-            <KV k="Aadhaar" v={rv.identity.adhaar_card_number} mono />
-            <KV k="Profile picture" v={v.activation.sidebar.profile_img ? 'Uploaded' : null} />
+            <KV
+              k="Aadhaar"
+              v={rv.identity.adhaar_card_number ? `${rv.identity.adhaar_card_number}${aadhaarVerified ? ' ✓' : ''}` : null}
+              mono
+            />
             {rv.identity.rejected_reason && <KV k="Rejection reason" v={rv.identity.rejected_reason} />}
           </div>
         </VerificationSection>
@@ -455,9 +507,23 @@ export function OnboardingTab({
       {/* Decision bar */}
       {!activated && (
         <SectionCard title="Decision" icon={<span>🧭</span>} right={<span>each decision records who, when &amp; why</span>}>
+          {/* A decided lead has no buttons, so the card must say WHY it is
+              empty — an unexplained blank box reads as a broken screen. */}
           {leadDenied && (
             <div className="mb-3 rounded-md border border-urgent/30 bg-urgent-tint px-3 py-2 text-sm text-urgent-strong">
               This technician lead was <span className="font-semibold">denied</span>. See the review notes below.
+            </div>
+          )}
+          {leadAccepted && (
+            <div className="mb-3 rounded-md border border-success/30 bg-success-tint px-3 py-2 text-sm text-ink-900">
+              This technician lead is <span className="font-semibold">accepted</span>
+              {v.vertical.vertical_name ? <> · onboarded for <span className="font-semibold">{v.vertical.vertical_name}</span></> : null}
+              . Nothing further is decided here — activation runs in its own step. A note can still be added below.
+            </div>
+          )}
+          {leadPending && !canDecideLead && (
+            <div className="mb-3 rounded-md border bg-muted px-3 py-2 text-sm text-ink-900">
+              You do not have permission to accept or deny a lead. You can still add a note.
             </div>
           )}
           <textarea

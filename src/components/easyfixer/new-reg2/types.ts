@@ -71,6 +71,12 @@ export type VerificationPayload = {
       progress: number; is_verified: boolean; verification_status: number | null;
       adhaar_card_number: string | null; pan_card_number: string | null;
       driving_lisence_img: string | null;
+      /** Photos the technician uploaded in the app. Null when absent or unsignable. */
+      documents: {
+        aadhaar_front_url: string | null;
+        aadhaar_back_url: string | null;
+        selfie_url: string | null;
+      };
       rejected_reason: string | null;
       updated_by_name: string | null; update_date: string | null;
       comments: VComment[];
