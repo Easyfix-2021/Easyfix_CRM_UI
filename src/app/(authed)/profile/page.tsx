@@ -78,6 +78,7 @@ import {
   bankHolderMasked, bankAccountMasked,
   type ProfileDetails, type RequestableField, type RevealedBank,
 } from '@/components/profile/ProfileFields';
+import { MyRoster } from '@/components/dashboard/MyRoster';
 
 /* Same rule as the client and technician headers: first + last initial. */
 function initialsOf(name?: string | null): string {
@@ -751,6 +752,11 @@ export default function MyProfilePage() {
       </Section>
 
       </div>
+
+      {/* ═══ 4b. My Roster — today + the next 6 days (planned roster, else
+          their weekly working days). Full width, between the two paired rows;
+          renders nothing where the roster API is absent. */}
+      <MyRoster showTeam={false} />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2">

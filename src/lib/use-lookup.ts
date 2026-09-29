@@ -29,7 +29,7 @@ type State = { state_id: number; state_name: string };
 type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number; display: number };
 type ClientLite = { client_id: number; client_name: string; vertical_id: number | null };
-type UserLite = { user_id: number; user_name: string; role_name?: string };
+type UserLite = { user_id: number; user_name: string; role_name?: string; week_off_today?: boolean };
 type RoleLite = { role_id: number; role_name: string; role_desc: string | null; role_status: number; group: string };
 type EasyfixerLite = { efr_id: number; efr_name: string; efr_no: string; city_name: string | null; is_technician_verified: boolean };
 type Reason = { id: number; reason: string };
@@ -100,7 +100,10 @@ export function useLookup() {
       serviceTypes: serviceTypes.map<SelectOption>((t) => ({ value: t.service_type_id, label: t.service_type_name })),
       clients: clients.map<SelectOption>((c) => ({ value: c.client_id, label: c.client_name })),
       verticals: verticals.map<SelectOption>((v) => ({ value: v.vertical_id, label: v.vertical_name })),
-      adminUsers: adminUsers.map<SelectOption>((u) => ({ value: u.user_id, label: `${u.user_name} · ${u.role_name ?? ''}` })),
+      adminUsers: adminUsers.map<SelectOption>((u) => ({
+        value: u.user_id,
+        label: `${u.user_name} · ${u.role_name ?? ''}${u.week_off_today ? ' · Week Off Today' : ''}`,
+      })),
       roles: roles.map<SelectOption>((r) => ({ value: r.role_id, label: r.role_name })),
       // Easyfixer label embeds mobile + city so the SearchSelect typeahead
       // matches on any of them: "Pune", "9810…", or the technician's name.
