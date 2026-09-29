@@ -121,6 +121,27 @@ export function fmtDuration(sec: number | null): string {
 }
 
 /*
+ * parseDuration — the inverse of fmtDuration, for an operator typing a length.
+ * Accepts plain seconds ("272") or m:ss ("4:32"; minutes may exceed 59).
+ *
+ *   ''     → null       (blank: no duration / clear it)
+ *   '272'  → 272
+ *   '4:32' → 272
+ *   '0', '4:75', '1.5', 'abc', over 24 h → undefined (invalid)
+ *
+ * The 1..86400 range mirrors the backend Joi rule on
+ * /admin/aux/training-videos duration_seconds.
+ */
+export function parseDuration(raw: string): number | null | undefined {
+  const v = raw.trim();
+  if (!v) return null;
+  const m = /^(?:(\d+):([0-5]\d)|(\d+))$/.exec(v);
+  if (!m) return undefined;
+  const sec = m[3] != null ? Number(m[3]) : Number(m[1]) * 60 + Number(m[2]);
+  return sec >= 1 && sec <= 86400 ? sec : undefined;
+}
+
+/*
  * Title-case a display label coming from a DB key that may arrive as
  * lower-snake ("store_name"), lower-space ("store name"), or already
  * Title Case ("Store Name"). Normalises separators (_ / - / spaces) to

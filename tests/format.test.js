@@ -159,6 +159,28 @@ test('fmtDuration floors fractional seconds', () => {
   assert.equal(F.fmtDuration(75.9), '1:15');
 });
 
+// ─── parseDuration ────────────────────────────────────────────────────────
+
+test('parseDuration reads seconds or m:ss, and blank as null', () => {
+  assert.equal(F.parseDuration(''), null);
+  assert.equal(F.parseDuration('   '), null);
+  assert.equal(F.parseDuration('272'), 272);
+  assert.equal(F.parseDuration(' 4:32 '), 272);
+  assert.equal(F.parseDuration('0:52'), 52);
+  assert.equal(F.parseDuration('75:00'), 4500);
+});
+
+test('parseDuration rejects what the backend would 400', () => {
+  for (const v of ['0', '0:00', '4:75', '4:5', '1.5', 'abc', '-3', '1:2:3', '86401']) {
+    assert.equal(F.parseDuration(v), undefined, v);
+  }
+  assert.equal(F.parseDuration('86400'), 86400);
+});
+
+test('parseDuration round-trips fmtDuration', () => {
+  for (const sec of [1, 52, 60, 272, 3665]) assert.equal(F.parseDuration(F.fmtDuration(sec)), sec);
+});
+
 // ─── titleCaseLabel ───────────────────────────────────────────────────────
 
 test('titleCaseLabel normalises DB keys into Title Case labels', () => {
