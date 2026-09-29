@@ -4086,6 +4086,10 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   // inline-arrow prop in its deps, which changes identity every render.
   const onLoadedRef = useRef(onLoaded);
   useEffect(() => { onLoadedRef.current = onLoaded; });
+  // Same reason: the reconciliation effect needs the parent's current pendings
+  // without listing a prop that gets a new array identity on every render.
+  const pendingRef = useRef(pendingComments);
+  useEffect(() => { pendingRef.current = pendingComments; });
 
   /*
    * The parent bumps `refreshKey` after AddRemarksDialog saves from the
@@ -4107,11 +4111,37 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
    * canonical rows exist, so this is keyed on `data` arriving rather than on
    * an awaited load() returning: refetch() is fire-and-forget, so dropping the
    * pendings at call time would blank the row until the response landed.
+   *
+   * A pending is dropped only once its CANONICAL row is actually in the
+   * payload. This used to `setLocalPending([])` on ANY `data` arrival, which
+   * assumed the refetch following a POST always carries the new comment. When
+   * it did not — the GET reaching the DB before the INSERT was visible to it —
+   * the optimistic row was removed with nothing to replace it, so the comment
+   * vanished and came back only when the operator reloaded the page by hand.
+   * That is the defect ops reported.
+   *
+   * Matched on the comment TEXT: the id cannot be used because the optimistic
+   * row carries a local negative temp id, and the text is the one field both
+   * copies are guaranteed to share. A pending therefore survives exactly until
+   * its real row lands. Worst case the operator sees "Sending…" a moment
+   * longer; they never watch their own comment disappear.
    */
   useEffect(() => {
     if (data == null) return;
-    setLocalPending([]);
-    onLoadedRef.current?.();
+    const canonical = new Set(
+      (Array.isArray(data) ? data : [])
+        .map((r) => (r.comments ?? '').trim())
+        .filter(Boolean),
+    );
+    setLocalPending((prev) => prev.filter((p) => !canonical.has((p.comments ?? '').trim())));
+    /*
+     * The parent's pendings (AddRemarksDialog, which lives outside this tree)
+     * are cleared wholesale by `onLoaded`, so they carried the same defect.
+     * Only tell the parent once every row it is holding has a canonical twin.
+     */
+    const parentPendings = pendingRef.current;
+    const allLanded = parentPendings.every((p) => canonical.has((p.comments ?? '').trim()));
+    if (allLanded) onLoadedRef.current?.();
   }, [data]);
 
   async function postComment() {
