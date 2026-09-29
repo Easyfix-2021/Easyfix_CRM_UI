@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, AlertTriangle,
+  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, AlertTriangle, Bell, CalendarDays,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,7 @@ import {
 } from './roster-dates';
 import type { DayType, RosterCellInput, RosterMember, RosterResponse } from './types';
 import { FillPatternDialog } from './FillPatternDialog';
+import { RosterCalendarDialog } from './RosterCalendarDialog';
 
 /* Footer "On Duty" turns red when fewer than this many people beyond the
  * bare team size are on — named so the threshold isn't a magic number
@@ -146,6 +147,31 @@ export function RosterGrid() {
   }, [members, fullWeeks, dirty]);
   const [fillFor, setFillFor] = useState<number[]>([]);
   function openFill(userIds: number[]) { setFillFor(userIds); setFillOpen(true); }
+  const [calendarFor, setCalendarFor] = useState<{ userId: number; name: string } | null>(null);
+  const [notifyingId, setNotifyingId] = useState<number | null>(null);
+
+  /* Sends the employee their roster for the range in view to their CRM inbox
+     (the backend clips a past start to today). Unsaved changes are NOT sent —
+     it says so, rather than notifying a plan that isn't stored yet. */
+  async function notifyMember(member: RosterMember) {
+    const unsaved = Array.from(dirty.values()).some((c) => c.userId === member.userId);
+    const ok = await confirm({
+      title: 'Notify Employee?',
+      description: `Send ${member.name} their roster for ${formatYmdLabel(from)} – ${formatYmdLabel(to)} in their CRM notifications.`
+        + (unsaved ? ' They have unsaved changes — save first, or those will not be included.' : ''),
+      confirmLabel: 'Notify',
+    });
+    if (!ok) return;
+    setNotifyingId(member.userId);
+    try {
+      await api.post('/admin/roster/notify', { userIds: [member.userId], from, to });
+      showToast({ variant: 'success', message: `Roster Sent To ${member.name}` });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Notify Failed' });
+    } finally {
+      setNotifyingId(null);
+    }
+  }
 
   // Browser-level exit guard — a hard nav (tab close, refresh) can't be
   // intercepted by useConfirm, so arm the native prompt while dirty.
@@ -408,7 +434,7 @@ export function RosterGrid() {
                         onChange={toggleSelectAll}
                         aria-label="Select All Editable Members"
                       />
-                      <span>Member / Emp Code / Shift</span>
+                      <span>Employee</span>
                     </div>
                   </th>
                   {dates.map((date) => {
@@ -439,7 +465,7 @@ export function RosterGrid() {
                       </th>
                     );
                   })}
-                  <th className="!text-center" style={{ minWidth: 132 }}>Week Off Check</th>
+                  <th className="!text-center" style={{ minWidth: 104 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -499,34 +525,39 @@ export function RosterGrid() {
                       );
                     })}
                     <td className="!text-center">
-                      {/* A full Mon–Sun week with no Week Off. Editable rows get a
-                          button that opens Fill From Pattern for this member;
-                          read-only rows just state it. */}
-                      {(() => {
-                        const w = rowWarnings.get(member.userId);
-                        if (!w) return null;
-                        const text = (
-                          <>
-                            <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-                            <span className="leading-tight text-left">
-                              No Week Off<br />{formatYmdLabel(w.from)} – {formatYmdLabel(w.to)}
-                            </span>
-                          </>
-                        );
-                        const cls = 'inline-flex items-center gap-1 rounded-md bg-warning-tint text-warning-strong px-2 py-1 text-xs font-medium';
-                        return member.editable ? (
-                          <button
-                            type="button"
-                            className={`${cls} hover:ring-1 hover:ring-warning-strong/40`}
-                            title="Plan A Week Off For This Member (Opens Fill From Pattern)"
-                            onClick={() => openFill([member.userId])}
-                          >
-                            {text}
-                          </button>
-                        ) : (
-                          <span className={cls} title="No Week Off In This Week">{text}</span>
-                        );
-                      })()}
+                      {/* Actions: Notify (roster → the employee's CRM inbox),
+                          Calendar (month view), and — only when a full Mon–Sun
+                          week in view has no Week Off — a warning that opens
+                          Fill From Pattern for this employee. */}
+                      <div className="inline-flex items-center justify-center gap-2">
+                        <IconButton
+                          icon={Bell}
+                          label={`Notify ${member.name} Of Their Roster (${formatYmdLabel(from)} – ${formatYmdLabel(to)})`}
+                          intent="primary"
+                          disabled={!member.editable}
+                          busy={notifyingId === member.userId}
+                          onClick={() => void notifyMember(member)}
+                        />
+                        <IconButton
+                          icon={CalendarDays}
+                          label={`Calendar View · ${member.name}`}
+                          onClick={() => setCalendarFor({ userId: member.userId, name: member.name })}
+                        />
+                        {(() => {
+                          const w = rowWarnings.get(member.userId);
+                          if (!w) return null;
+                          const what = `No Week Off ${formatYmdLabel(w.from)} – ${formatYmdLabel(w.to)}`;
+                          return (
+                            <IconButton
+                              icon={AlertTriangle}
+                              label={member.editable ? `${what} · Plan One (Fill From Pattern)` : what}
+                              className="!text-warning-strong"
+                              disabled={!member.editable}
+                              onClick={() => openFill([member.userId])}
+                            />
+                          );
+                        })()}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -579,6 +610,7 @@ export function RosterGrid() {
         onApplied={(userIds) => { clearDirtyFor(userIds); refreshAll(); }}
         initialUserIds={fillFor}
       />
+      <RosterCalendarDialog member={calendarFor} teamOf={teamOf} anchor={anchor} onClose={() => setCalendarFor(null)} />
     </div>
   );
 }
