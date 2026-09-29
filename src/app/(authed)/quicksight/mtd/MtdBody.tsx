@@ -52,8 +52,11 @@
  * most MAX_WINDOW_DAYS days and never past today, checked here first so the
  * message is a clear toast rather than a 400. Beside it:
  *
- *   Vertical and Zonal Manager are EXPORT PREDICATES — they narrow the SQL, so
- *   they apply to every section AND to the per-SPOC table at the foot.
+ *   Vertical is an EXPORT PREDICATE — it narrows the SQL, so it applies to
+ *   every section AND to the per-SPOC table at the foot. (Zonal Manager was
+ *   here too until 2026-09-29; the owner's MIS report has no such filter and
+ *   asked for it out. The backend still accepts zonalManagerId, so restoring
+ *   it is one SearchSelect.)
  *   Client and Primary SPOC are the MIS filter bar's multi-selects, applied in
  *   memory over the rows already read, with the job counts the report itself
  *   supplies (counted with their own picker ignored, so an unticked option
@@ -218,7 +221,6 @@ export function MtdBody() {
   /* ── lookups (fetch-hooks only; both are shared, cached endpoints) ──────── */
 
   const verticalsRes = useFetchOnce<Vertical[]>('/shared/lookup/verticals');
-  const zonalRes = useFetchOnce<ManagerLite[]>('/shared/lookup/zonal-managers');
 
   const verticalOptions = useMemo<SearchOption[]>(
     () => [
@@ -226,13 +228,6 @@ export function MtdBody() {
       ...(verticalsRes.data ?? []).map((v) => ({ value: v.vertical_id, label: v.vertical_name })),
     ],
     [verticalsRes.data],
-  );
-  const zonalOptions = useMemo<SearchOption[]>(
-    () => [
-      { value: 0, label: 'All Zonal Managers' },
-      ...(zonalRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
-    ],
-    [zonalRes.data],
   );
 
   /* ── the report ─────────────────────────────────────────────────────────── */
@@ -417,14 +412,6 @@ export function MtdBody() {
           value={filters.verticalId}
           onChange={(next) => applyFilters({ verticalId: Number(next) || 0 })}
           options={verticalOptions}
-          required
-        />
-      </FilterField>
-      <FilterField label="Zonal Manager" hint="Every section">
-        <SearchSelect
-          value={filters.zonalManagerId}
-          onChange={(next) => applyFilters({ zonalManagerId: Number(next) || 0 })}
-          options={zonalOptions}
           required
         />
       </FilterField>
@@ -845,7 +832,7 @@ function PerSpocSection({
               <span className="font-medium text-foreground">
                 The Client and Primary SPOC filters do not apply to this table
               </span>{' '}
-              — it reads the whole window for the selected Vertical and Zonal Manager, so its totals will be
+              — it reads the whole window for the selected Vertical, so its totals will be
               larger than the sections above.
             </>
           )}
