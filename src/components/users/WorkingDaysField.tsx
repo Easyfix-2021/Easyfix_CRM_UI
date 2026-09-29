@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { ShiftSelect } from '@/components/roster/ShiftSelect';
 
 /*
  * Working Days — the day-card control for Add/Edit User's "Working Days"
@@ -101,8 +101,8 @@ export function WorkingDaysField({
       </div>
 
       <div className="max-w-[220px]">
-        <Label className="block mb-1">Default Shift (Optional)</Label>
-        <Input type="time" value={shiftStart} onChange={(e) => onShiftStart(e.target.value)} />
+        <Label className="block mb-1">Default Shift</Label>
+        <ShiftSelect value={shiftStart} onChange={onShiftStart} title="Default Shift" />
       </div>
     </div>
   );

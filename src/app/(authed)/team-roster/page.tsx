@@ -3,8 +3,9 @@
 /*
  * Team Roster — Manage Roster (grid) + Update Log + Action Log.
  *
- * Gate copied from admin-actions/issues/page.tsx: useMe() + a feature flag,
- * redirect only after BOTH have settled (never eject a user mid-flight).
+ * Gate: the isRosterManage action key ONLY — role-based, no email allowlist
+ * (owner decision 2026-09-29: if you can see the menu, you can use the page).
+ * Redirect only after `me` has settled (never eject a user mid-flight).
  * Tabs copied from admin-actions/webhooks/page.tsx (shared @/components/ui/tabs).
  * See src/components/roster/roster-api-contract usage in RosterGrid /
  * RosterLogs for the backend shape this page is coded against.
@@ -15,7 +16,6 @@ import { useRouter } from 'next/navigation';
 import { CalendarDays } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useMe } from '@/lib/auth-context';
-import { useFetchOnce } from '@/lib/hooks';
 import { hasAction } from '@/lib/permissions';
 import { RosterGrid } from '@/components/roster/RosterGrid';
 import { RosterLogs } from '@/components/roster/RosterLogs';
@@ -23,14 +23,12 @@ import { RosterLogs } from '@/components/roster/RosterLogs';
 export default function TeamRosterPage() {
   const router = useRouter();
   const { me, loading: meLoading } = useMe();
-  const features = useFetchOnce<{ canManageRoster?: boolean }>('/admin/access/features');
-  const canManage = hasAction(me, 'isRosterManage') && features.data?.canManageRoster === true;
+  const canManage = hasAction(me, 'isRosterManage');
 
-  // Fail closed, and only once BOTH signals have settled — see issues/page.tsx.
-  const gateSettled = !meLoading && !features.loading;
+  // Fail closed, but only once `me` has settled.
   useEffect(() => {
-    if (gateSettled && !canManage) router.replace('/dashboard');
-  }, [gateSettled, canManage, router]);
+    if (!meLoading && !canManage) router.replace('/dashboard');
+  }, [meLoading, canManage, router]);
 
   const [tab, setTab] = useState<'manage' | 'updates' | 'actions'>('manage');
 
