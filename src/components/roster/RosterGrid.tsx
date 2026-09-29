@@ -304,7 +304,7 @@ export function RosterGrid() {
 
   async function resetToWeekly() {
     const scope = scopeUserIds();
-    if (!scope.length) { showToast({ variant: 'error', message: 'No Editable Members In View' }); return; }
+    if (!scope.length) { showToast({ variant: 'error', message: 'No Editable Employees In View' }); return; }
     // Clamp the visible range to the edit window — the default view includes
     // today and past days, which the backend rejects (past is locked).
     if (!win) return;
@@ -313,7 +313,7 @@ export function RosterGrid() {
     if (resetFrom > resetTo) { showToast({ variant: 'error', message: 'Nothing Editable In This Range' }); return; }
     const ok = await confirm({
       title: 'Reset To Weekly Days?',
-      description: `Removes planned overrides for ${scope.length} member(s) between ${formatYmdLabel(resetFrom)} and ${formatYmdLabel(resetTo)}; those days fall back to each member's weekly working days.`,
+      description: `Removes planned overrides for ${scope.length} employee(s) between ${formatYmdLabel(resetFrom)} and ${formatYmdLabel(resetTo)}; those days fall back to each employee's weekly working days.`,
       confirmLabel: 'Reset',
       variant: 'destructive',
     });
@@ -392,7 +392,7 @@ export function RosterGrid() {
                 <FileSpreadsheet className="size-4 mr-1" /> Bulk Update
               </Button>
               <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
-                <Wand2 className="size-4 mr-1" /> Fill From Pattern
+                <Wand2 className="size-4 mr-1" /> Update Roster
               </Button>
               <Button variant="outline" size="sm" disabled={actionsBusy} onClick={resetToWeekly}>
                 <RotateCcw className="size-4 mr-1" /> Reset To Weekly Days
@@ -419,7 +419,7 @@ export function RosterGrid() {
                         type="checkbox"
                         checked={allEditableSelected}
                         onChange={toggleSelectAll}
-                        aria-label="Select All Editable Members"
+                        aria-label="Select All Editable Employees"
                       />
                       <span>Employee</span>
                     </div>
@@ -460,7 +460,7 @@ export function RosterGrid() {
                   <tr><td colSpan={colSpan} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
                 )}
                 {!loading && filteredMembers.length === 0 && (
-                  <tr><td colSpan={colSpan} className="!text-center text-muted-foreground py-6">No Members In View</td></tr>
+                  <tr><td colSpan={colSpan} className="!text-center text-muted-foreground py-6">No Employees In View</td></tr>
                 )}
                 {!loading && filteredMembers.map((member) => (
                   <tr key={member.userId}>
