@@ -187,7 +187,7 @@ function SkillsPicked({
   canEdit,
   onEdit,
 }: {
-  groups: Array<{ name: string; skills: string[] }>;
+  groups: Array<{ name: string; optionCount: number; skills: Array<{ name: string; options: string[] }> }>;
   loading: boolean;
   canEdit: boolean;
   onEdit: () => void;
@@ -204,19 +204,30 @@ function SkillsPicked({
   return (
     <div className="px-1 space-y-3">
       {groups.map((g) => (
-        <div key={g.name}>
-          <div className="text-[13px] font-semibold text-ink-900">{g.name}</div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {g.skills.map((skill) => (
-              <span key={skill} className="rounded-md border bg-muted px-2 py-0.5 text-xs text-ink-700">{skill}</span>
+        <div key={g.name} className="rounded-lg border">
+          {/* Category header mirrors the Deep Skill Option Mapping editor, so
+              the review and the editor read as the same thing. */}
+          <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
+            <span className="font-semibold text-ink-900">{g.name}</span>
+            <span className="text-xs text-muted-foreground">
+              {g.skills.length} deep skill{g.skills.length === 1 ? '' : 's'} · {g.optionCount} option{g.optionCount === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="divide-y">
+            {g.skills.map((sk) => (
+              <div key={sk.name} className="px-3 py-2">
+                <div className="text-[13px] font-medium text-ink-900">{sk.name}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {sk.options.map((opt) => (
+                    <span key={opt} className="rounded-md border bg-muted px-2 py-0.5 text-xs text-ink-700">{opt}</span>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">{g.skills.length} skill{g.skills.length === 1 ? '' : 's'}</div>
         </div>
       ))}
-      {canEdit && (
-        <Button size="sm" variant="outline" onClick={onEdit}>Edit skills</Button>
-      )}
+      {canEdit && <Button size="sm" variant="outline" onClick={onEdit}>Edit skills</Button>}
     </div>
   );
 }
@@ -303,16 +314,33 @@ export function OnboardingTab({
   const { data: mapData, loading: mapLoading } = useFetch<{ items: OptionMapping[] }>(
     `/admin/easyfixers/${efrId}/option-mappings`,
   );
+  /*
+   * Category → DEEP SKILL → options. Grouping only by category collapsed six
+   * deep skills into one flat strip of chips, so a reviewer could not tell
+   * which skill an option belonged to. Every mapped deep skill gets its own
+   * line, with its options under it.
+   */
   const skillGroups = useMemo(() => {
-    const byCat = new Map<string, { name: string; skills: string[] }>();
+    const byCat = new Map<string, {
+      name: string;
+      optionCount: number;
+      skills: Map<string, { name: string; options: string[] }>;
+    }>();
     for (const m of mapData?.items ?? []) {
-      const key = String(m.category_id);
-      if (!byCat.has(key)) byCat.set(key, { name: m.category_name ?? `Category ${m.category_id}`, skills: [] });
-      const label = m.option_name ?? m.deep_skill_name ?? `Option ${m.option_id}`;
-      const g = byCat.get(key)!;
-      if (!g.skills.includes(label)) g.skills.push(label);
+      const catKey = String(m.category_id);
+      if (!byCat.has(catKey)) {
+        byCat.set(catKey, { name: m.category_name ?? `Category ${m.category_id}`, optionCount: 0, skills: new Map() });
+      }
+      const cat = byCat.get(catKey)!;
+      const skillKey = String(m.deep_skill_id ?? m.deep_skill_name ?? 'unknown');
+      if (!cat.skills.has(skillKey)) {
+        cat.skills.set(skillKey, { name: m.deep_skill_name ?? `Deep skill ${m.deep_skill_id}`, options: [] });
+      }
+      const skill = cat.skills.get(skillKey)!;
+      const label = m.option_name ?? `Option ${m.option_id}`;
+      if (!skill.options.includes(label)) { skill.options.push(label); cat.optionCount += 1; }
     }
-    return [...byCat.values()];
+    return [...byCat.values()].map((c) => ({ ...c, skills: [...c.skills.values()] }));
   }, [mapData]);
 
   const { data: verticals } = useFetchOnce<VerticalOption[]>('/shared/lookup/verticals');
@@ -367,9 +395,24 @@ export function OnboardingTab({
     return [...map.values()].sort((a, b) => a.city.localeCompare(b.city));
   }, [pins]);
 
-  // Accepting activates, so there is no waiting room between the two.
+  /*
+   * Two stages, each carrying its own date, because "when did he register" and
+   * "how long did we take to activate him" are the questions asked of this row.
+   * Still waiting → the Active chip says how long he has been waiting instead.
+   */
   const stage = activated ? 2 : 1;
-  const stages = ['Registration', 'Active'];
+  const waitingDays = v.timeline.registered_on && !v.timeline.activated_on
+    ? Math.max(0, Math.round((Date.now() - new Date(v.timeline.registered_on).getTime()) / 86400000))
+    : null;
+  const stages = [
+    { label: 'Registration', sub: formatDate(v.timeline.registered_on) },
+    {
+      label: 'Active',
+      sub: v.timeline.activated_on
+        ? `${formatDate(v.timeline.activated_on)}${v.timeline.days_to_activate != null ? ` · took ${v.timeline.days_to_activate}d` : ''}`
+        : waitingDays != null ? `waiting ${waitingDays}d` : null,
+    },
+  ];
 
   async function recordActivityLog(kind: DecisionKind, reason: string) {
     try {
@@ -390,8 +433,8 @@ export function OnboardingTab({
   }
 
   async function run(kind: DecisionKind) {
-    if (kind === 'deny' && note.trim().length === 0) {
-      showToast({ variant: 'error', message: 'A note is required to deny a lead.' });
+    if (note.trim().length === 0) {
+      showToast({ variant: 'error', message: 'A note is required — it becomes the accept or reject comment on record.' });
       return;
     }
     setBusy(true);
@@ -414,6 +457,30 @@ export function OnboardingTab({
     }
   }
 
+  /*
+   * Marking the Aadhaar verified is the same endpoint the verification
+   * workflow uses, so both surfaces set the same flag. The activity log entry
+   * is what makes it answerable later: WHO verified this Aadhaar, and when.
+   */
+  async function verifyAadhaar() {
+    setBusy(true);
+    try {
+      await api.put(`/admin/easyfixers/${efrId}/verification/identity`, { verification_status: 1 });
+      await api.post(`/admin/easyfixers/${efrId}/activity-log`, {
+        eventType: 'AADHAAR_VERIFIED',
+        section: 'onboarding',
+        summary: capSummary(`Aadhaar verified by ${me?.user?.user_name ?? 'CRM user'}`),
+        metadata: { aadhaar_last4: (rv.identity.adhaar_card_number ?? '').slice(-4) || null },
+      });
+      showToast({ variant: 'success', message: 'Aadhaar marked verified.' });
+      await onReload();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not verify the Aadhaar' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const addNote = async (text: string) => {
     await api.post(`/admin/easyfixers/${efrId}/verification/comments`, { text, section: 'Registration Details Section' });
     await onReload();
@@ -428,14 +495,14 @@ export function OnboardingTab({
         space describing a step that no longer exists.
       */}
       <div className="flex flex-wrap items-center gap-2 text-[13px]">
-        {stages.map((label, i) => {
+        {stages.map(({ label, sub }, i) => {
           const n = i + 1;
           const done = n < stage;
           const current = n === stage;
           return (
             <span key={label} className="inline-flex items-center gap-2">
               <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 ${
+                className={`inline-flex items-baseline gap-1.5 rounded-full px-2.5 py-1 ${
                   done
                     ? 'bg-success-tint text-success-strong'
                     : current
@@ -443,7 +510,8 @@ export function OnboardingTab({
                       : 'bg-muted text-muted-foreground'
                 }`}
               >
-                {done ? '✓' : n} {label}
+                <span>{done ? '✓' : n} {label}</span>
+                {sub && <span className="text-xs opacity-90">· {sub}</span>}
               </span>
               {i < stages.length - 1 && <span className="h-px w-5 bg-border" aria-hidden />}
             </span>
@@ -467,11 +535,20 @@ export function OnboardingTab({
             <KycPhotos docs={rv.identity.documents} />
             <KV k="Legal name" v={v.header.full_name} />
             <KV k="Date of birth" v={formatDate(rv.personal.date_of_birth)} />
-            <KV
-              k="Aadhaar"
-              v={rv.identity.adhaar_card_number ? `${rv.identity.adhaar_card_number}${aadhaarVerified ? ' ✓' : ''}` : null}
-              mono
-            />
+            <div className="flex items-center justify-between gap-3 border-b py-1.5 last:border-0">
+              <span className="text-sm text-muted-foreground">Aadhaar</span>
+              <span className="flex items-center gap-2">
+                {aadhaarVerified ? (
+                  <span className="rounded-full bg-success-tint px-2 py-0.5 text-xs font-semibold text-success-strong">Verified</span>
+                ) : (
+                  <span className="rounded-full bg-warning-tint px-2 py-0.5 text-xs font-semibold text-ink-900">Not verified</span>
+                )}
+                <span className="font-mono text-sm text-ink-900">{rv.identity.adhaar_card_number || '—'}</span>
+                {!aadhaarVerified && canDecideLead && rv.identity.adhaar_card_number && (
+                  <Button size="sm" variant="outline" disabled={busy} onClick={verifyAadhaar}>Verify</Button>
+                )}
+              </span>
+            </div>
             {rv.identity.rejected_reason && <KV k="Rejection reason" v={rv.identity.rejected_reason} />}
           </div>
         </VerificationSection>
@@ -537,71 +614,77 @@ export function OnboardingTab({
               You do not have permission to accept or deny a lead. You can still add a note.
             </div>
           )}
-          <textarea
-            rows={2}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Note (required for Deny)"
-            className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
+          {/* One column, in the order a reviewer works: note → vertical →
+              attestation → act. The vertical used to sit between the note and
+              the checkbox as a stray inline row, which read as if it belonged
+              to neither. */}
+          <div className="space-y-3">
+            <textarea
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Note — required for both Accept and Deny"
+              aria-label="Decision note"
+              className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
 
-          {/* A note can always be left, even on a half-filled profile — only
-              the decision itself waits for the mandatory fields. */}
-          {!profileComplete && (
-            <div className="mt-3 rounded-md border border-warning/40 bg-warning-tint px-3 py-2 text-sm text-ink-900">
-              <span className="font-semibold">Not ready for a decision.</span>{' '}
-              Still to be filled by the technician: {missingMandatory.join(', ')}.
-            </div>
-          )}
+            {!profileComplete && (
+              <div className="rounded-md border border-warning/40 bg-warning-tint px-3 py-2 text-sm text-ink-900">
+                <span className="font-semibold">Not ready for a decision.</span>{' '}
+                Still to be filled by the technician: {missingMandatory.join(', ')}.
+              </div>
+            )}
 
-          {leadPending && canDecideLead && profileComplete && (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <label htmlFor="onboarding-vertical" className="text-sm text-ink-900">Onboarding for vertical</label>
-              <select
-                id="onboarding-vertical"
-                value={verticalId}
-                onChange={(e) => setVerticalId(e.target.value)}
-                className="rounded-md border bg-card px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-              >
-                <option value="">Select a vertical…</option>
-                {(verticals ?? []).map((vt) => (
-                  <option key={vt.vertical_id} value={String(vt.vertical_id)}>{vt.vertical_name}</option>
-                ))}
-              </select>
-              <span className="text-xs text-muted-foreground">
-                Recorded against the technician. He can still work jobs in any vertical.
-              </span>
-            </div>
-          )}
-
-          {leadPending && canDecideLead && profileComplete && (
-            <label className="mt-3 flex items-start gap-2 text-sm">
-              <input type="checkbox" className="mt-1" checked={eligible} onChange={(e) => setEligible(e.target.checked)} />
-              <span>Yes, This Is A Valid Technician Lead And I Find Him Eligible To Represent Easyfix Customers And Brands.</span>
-            </label>
-          )}
-
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
-            {leadPending && canDecideLead && (
+            {leadPending && canDecideLead && profileComplete && (
               <>
+                <div className="rounded-md border bg-muted/40 px-3 py-2">
+                  <label htmlFor="onboarding-vertical" className="block text-sm font-medium text-ink-900">
+                    Onboarding for vertical
+                  </label>
+                  <select
+                    id="onboarding-vertical"
+                    value={verticalId}
+                    onChange={(e) => setVerticalId(e.target.value)}
+                    className="mt-1 w-full max-w-xs rounded-md border bg-card px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
+                    <option value="">Select a vertical…</option>
+                    {(verticals ?? []).map((vt) => (
+                      <option key={vt.vertical_id} value={String(vt.vertical_id)}>{vt.vertical_name}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Recorded against the technician. He can still work jobs in any vertical.
+                  </p>
+                </div>
+
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" className="mt-1" checked={eligible} onChange={(e) => setEligible(e.target.checked)} />
+                  <span>Yes, This Is A Valid Technician Lead And I Find Him Eligible To Represent Easyfix Customers And Brands.</span>
+                </label>
+              </>
+            )}
+
+            {leadPending && canDecideLead && (
+              <div className="flex flex-wrap justify-end gap-2">
                 <Button
                   size="sm"
-                  disabled={!profileComplete || !eligible || !verticalId || busy}
+                  disabled={!profileComplete || !eligible || !verticalId || !note.trim() || busy}
                   onClick={() => run('accept')}
                   className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white"
                 >
                   Accept lead
                 </Button>
-                <Button variant="destructive" size="sm" disabled={!profileComplete || busy} onClick={() => run('deny')}>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={!profileComplete || !note.trim() || busy}
+                  onClick={() => run('deny')}
+                >
                   Deny lead
                 </Button>
-              </>
+              </div>
             )}
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Identity approval, bank verification and final activation are not part of onboarding — they run in their own steps.
-            Training can be finished after acceptance and never blocks it.
-          </p>
         </SectionCard>
       )}
 

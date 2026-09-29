@@ -106,6 +106,18 @@ export type VerificationPayload = {
     pincodes_progress: number;
     is_complete: boolean;
   };
+  /** When he registered, when he went live, and how long that took. */
+  timeline: {
+    registered_on: string | null;
+    activated_on: string | null;
+    days_to_activate: number | null;
+  };
+  /** The mandatory-field gate, computed once by the backend. */
+  completion: {
+    percent: number;
+    is_complete: boolean;
+    missing: string[];
+  };
   /** Videos flagged global in the LMS. Read-only — never gates a decision. */
   training: {
     videos: Array<{

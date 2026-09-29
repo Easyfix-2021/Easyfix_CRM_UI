@@ -182,14 +182,6 @@ export default function NewRegistration2ProfilePage() {
           card it cost a full line of vertical space on every profile. */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="flex flex-wrap items-center gap-4 p-4">
-          <Link
-            href="/easyfixers/new-registration-2"
-            aria-label="Back to all Easyfixers"
-            title="All Easyfixers"
-            className="self-start text-muted-foreground hover:text-primary"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
           <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-brand-50 text-2xl font-semibold text-brand-700">
             {v.activation.sidebar.profile_img && !photoBroken
               ? (
@@ -231,13 +223,29 @@ export default function NewRegistration2ProfilePage() {
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <EasyfixerLifecycleChip value={row?.lifecycle_status} fallbackLabel={row?.efr_status_label} />
+              {v.vertical.vertical_name && (
+                <span
+                  className="rounded-full border bg-muted px-2.5 py-0.5 text-xs text-ink-700"
+                  title="The vertical this technician was onboarded for. Not a restriction on the work he can take."
+                >
+                  {v.vertical.vertical_name}
+                </span>
+              )}
               {serviceCategoryNames && <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs text-ink-700">{serviceCategoryNames}</span>}
             </div>
           </div>
           <StrengthRing pct={strength} />
+          {/* One action column. The back link sits here as a button rather
+              than as a row of its own above the card — same look, and the next
+              action added lands beside it instead of somewhere new. */}
           <div className="flex flex-col gap-2">
             {can.isEdit && <Button size="sm" onClick={() => setStatusOpen(true)}>Change status</Button>}
             <Button size="sm" variant="outline" onClick={() => setClientMapOpen(true)}>Client mapping</Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/easyfixers/new-registration-2">
+                <ArrowLeft className="mr-1 h-4 w-4" /> All Easyfixers
+              </Link>
+            </Button>
           </div>
         </div>
       </div>
