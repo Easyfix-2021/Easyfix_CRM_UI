@@ -9,18 +9,21 @@
  *      and indirect reports, expanded server-side via DFS)
  *   - `ancestors`: the chain of reporting managers above them
  *
- * Rendered as a top-down org chart (CSS connectors, no graph lib) with
- * the manager chain above the root. Click a card to expand/collapse its
+ * Opens on the LOGGED-IN user's hierarchy; search re-roots it on anyone.
+ * Rendered as a left-to-right tree (CSS connectors, no graph lib) with the
+ * manager chain to the left of the root. Click a card to expand/collapse its
  * reports; the crosshair re-roots the chart on THAT user.
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
-import { Users, Search, ChevronLeft, AlertTriangle, ArrowUp, Plus, Minus, Crosshair, ChevronsUpDown, ChevronsDownUp } from 'lucide-react';
+import { Users, Search, ChevronLeft, AlertTriangle, Plus, Minus, Crosshair, ChevronsUpDown, ChevronsDownUp, UserRound } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
+import { useFetch } from '@/lib/hooks';
+import { useMe } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
 import { UserAvatar } from '@/components/users/UserAvatar';
 
@@ -42,44 +45,45 @@ export default function HierarchyPage() {
   const [q, setQ] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [hierarchy, setHierarchy] = useState<HierarchyResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  // null = "me": the page opens on the logged-in user until a search re-roots it.
+  const [rootId, setRootId] = useState<number | null>(null);
+  const { me } = useMe();
+  const myId = me?.user?.user_id ?? null;
+  const viewId = rootId ?? myId;
+  const { data: hierarchy, loading, error: loadError } = useFetch<HierarchyResponse>(
+    viewId ? `/admin/users/${viewId}/hierarchy` : null,
+  );
+  const error = searchError ?? loadError;
+
+  function loadHierarchy(userId: number) {
+    setSearchError(null);
+    setResults([]);
+    setRootId(userId);
+  }
 
   async function search() {
-    setError(null);
-    setHierarchy(null);
+    setSearchError(null);
     const term = q.trim();
     if (!term) { setResults([]); return; }
     setSearching(true);
     try {
       // If purely numeric, treat as user_id and load directly.
       if (/^\d+$/.test(term)) {
-        await loadHierarchy(Number(term));
+        loadHierarchy(Number(term));
         return;
       }
       // Otherwise: search the admin user lookup.
       const params = new URLSearchParams({ q: term, limit: '20' });
       const r = await api.get<{ items: SearchResult[] }>(`/admin/users?${params}`);
       setResults(r.items || []);
-      if ((r.items || []).length === 1) await loadHierarchy(r.items[0].user_id);
+      if ((r.items || []).length === 1) loadHierarchy(r.items[0].user_id);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Search failed');
+      setSearchError(err instanceof ApiError ? err.message : 'Search failed');
     } finally {
       setSearching(false);
     }
   }
-
-  const loadHierarchy = useCallback(async (userId: number) => {
-    setLoading(true); setError(null);
-    try {
-      const data = await api.get<HierarchyResponse>(`/admin/users/${userId}/hierarchy`);
-      setHierarchy(data);
-      setResults([]);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load hierarchy');
-    } finally { setLoading(false); }
-  }, []);
 
   return (
     <div className="space-y-4">
@@ -100,7 +104,7 @@ export default function HierarchyPage() {
             <Users className="size-6" /> Hierarchy
           </h1>
           <p className="text-sm text-muted-foreground">
-            View the reporting tree rooted at any user. Search by id, email, or name.
+            Your reporting tree. Search by id, email, or name to view anyone else's.
           </p>
         </div>
       </div>
@@ -119,6 +123,11 @@ export default function HierarchyPage() {
             <Button onClick={search} disabled={searching || !q.trim()}>
               {searching ? 'Searching…' : 'Search'}
             </Button>
+            {myId && viewId !== myId && (
+              <Button variant="outline" onClick={() => { setQ(''); loadHierarchy(myId); }}>
+                <UserRound className="size-4" /> My Hierarchy
+              </Button>
+            )}
           </div>
 
           {results.length > 0 && (
@@ -170,23 +179,19 @@ function managerIds(n: Node, out: number[] = []): number[] {
 }
 
 /*
- * Top-down org chart. Connectors are plain 1px divs (no graph lib, no
- * canvas): each child column draws the two halves of the horizontal bus
- * above it plus its own vertical stem, so the first/last child simply
- * omit the outer half. Expansion state lives here (not per node) so
- * Expand All / Collapse All can drive it.
+ * Left-to-right tree. Connectors are plain 1px divs (no graph lib, no
+ * canvas): each child row draws its half of the vertical bus on its left
+ * edge plus a horizontal tick into its card, so the first/last child omit
+ * the outer half. Each node is a flex row centred on its own subtree, so a
+ * row's vertical midpoint is always its card's midpoint — the ticks line up
+ * at any depth. Siblings stack downward, so a wide team costs height, not
+ * width. Expansion state lives here (not per node) so Expand All /
+ * Collapse All can drive it.
  */
 function OrgChart({ data, onDrillInto }: { data: HierarchyResponse; onDrillInto: (id: number) => void }) {
   const root = data.tree;
+  // Keyed by root id at the call site, so a new root remounts with one level open.
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set([root.user_id]));
-  const scroller = useRef<HTMLDivElement>(null);
-
-  // Keyed by root id at the call site, so a new root remounts with one
-  // level open; centre the viewport on it once.
-  useEffect(() => {
-    const el = scroller.current;
-    if (el) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
-  }, []);
 
   const toggle = (id: number) =>
     setExpanded((prev) => {
@@ -195,7 +200,7 @@ function OrgChart({ data, onDrillInto }: { data: HierarchyResponse; onDrillInto:
       return next;
     });
 
-  // Nearest manager comes first from the API; draw top-most boss first.
+  // Nearest manager comes first from the API; draw top-most boss on the left.
   const chain = [...data.ancestors].reverse();
 
   return (
@@ -215,28 +220,21 @@ function OrgChart({ data, onDrillInto }: { data: HierarchyResponse; onDrillInto:
           </div>
         </div>
 
-        <div ref={scroller} className="overflow-x-auto pb-2">
-          <div className="mx-auto w-max px-4 py-2 flex flex-col items-center">
-            {chain.length > 0 && (
-              <>
-                <div className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-1">
-                  <ArrowUp className="size-3" /> Reports Up To
-                </div>
-                {chain.map((a) => (
-                  <div key={a.user_id} className="flex flex-col items-center">
-                    <button
-                      onClick={() => onDrillInto(a.user_id)}
-                      className="rounded-full border border-dashed bg-card px-3 py-1 text-xs hover:border-primary hover:text-primary"
-                      title="View hierarchy from this manager"
-                    >
-                      <span className="font-medium">{a.user_name}</span>
-                      {a.role_name && <span className="text-muted-foreground"> · {a.role_name}</span>}
-                    </button>
-                    <span className="h-4 w-px bg-border" />
-                  </div>
-                ))}
-              </>
-            )}
+        <div className="overflow-x-auto pb-2">
+          <div className="w-max px-2 py-2 flex items-center">
+            {chain.map((a) => (
+              <div key={a.user_id} className="flex items-center">
+                <button
+                  onClick={() => onDrillInto(a.user_id)}
+                  className="rounded-full border border-dashed bg-card px-3 py-1 text-xs hover:border-primary hover:text-primary"
+                  title="View hierarchy from this manager"
+                >
+                  <span className="font-medium">{a.user_name}</span>
+                  {a.role_name && <span className="text-muted-foreground"> · {a.role_name}</span>}
+                </button>
+                <span className="h-px w-5 bg-border" />
+              </div>
+            ))}
             <OrgNode node={root} isRoot expanded={expanded} onToggle={toggle} onDrillInto={onDrillInto} />
           </div>
         </div>
@@ -255,14 +253,13 @@ function OrgNode({ node, isRoot, expanded, onToggle, onDrillInto }: {
   const kids = node.children;
   const open = kids.length > 0 && expanded.has(node.user_id);
   const total = countAll(node) - 1;
-  const stack = kids.length > 1 && kids.every((k) => k.children.length === 0);
 
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex items-center">
       <div
         onClick={() => kids.length && onToggle(node.user_id)}
         className={cn(
-          'w-56 rounded-lg border bg-card p-3 shadow-sm transition-colors',
+          'w-56 shrink-0 rounded-lg border bg-card p-3 shadow-sm transition-colors',
           kids.length > 0 && 'cursor-pointer hover:border-primary',
           isRoot && 'border-primary ring-1 ring-primary',
         )}
@@ -299,11 +296,11 @@ function OrgNode({ node, isRoot, expanded, onToggle, onDrillInto }: {
 
       {kids.length > 0 && (
         <>
-          <span className="h-3 w-px bg-border" />
+          <span className="h-px w-3 shrink-0 bg-border" />
           <button
             onClick={() => onToggle(node.user_id)}
             aria-expanded={open}
-            className="flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary"
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary"
             title={`${kids.length} direct · ${total} total`}
           >
             {open ? <Minus className="size-3" /> : <Plus className="size-3" />}
@@ -315,35 +312,17 @@ function OrgNode({ node, isRoot, expanded, onToggle, onDrillInto }: {
 
       {open && (
         <>
-          <span className="h-4 w-px bg-border" />
-          {stack ? (
-            // All leaves: hang them down a rail instead of fanning sideways,
-            // so a 5-person team costs one column, not five. The empty left
-            // cell mirrors the right one, putting the rail under the stem.
-            <div className="grid grid-cols-2">
-              <div />
-              <div>
-                {kids.map((c, i) => (
-                  <div key={c.user_id} className={cn('relative pl-5', i < kids.length - 1 && 'pb-2')}>
-                    <span className={cn('absolute left-0 top-0 w-px bg-border', i < kids.length - 1 ? 'h-full' : 'h-11')} />
-                    <span className="absolute left-0 top-11 h-px w-5 bg-border" />
-                    <OrgNode node={c} expanded={expanded} onToggle={onToggle} onDrillInto={onDrillInto} />
-                  </div>
-                ))}
+          <span className="h-px w-4 shrink-0 bg-border" />
+          <div className="flex flex-col">
+            {kids.map((c, i) => (
+              <div key={c.user_id} className="relative flex items-center py-1.5 pl-5">
+                {i > 0 && <span className="absolute left-0 top-0 h-1/2 w-px bg-border" />}
+                {i < kids.length - 1 && <span className="absolute left-0 bottom-0 h-1/2 w-px bg-border" />}
+                <span className="absolute left-0 top-1/2 h-px w-5 bg-border" />
+                <OrgNode node={c} expanded={expanded} onToggle={onToggle} onDrillInto={onDrillInto} />
               </div>
-            </div>
-          ) : (
-            <div className="flex">
-              {kids.map((c, i) => (
-                <div key={c.user_id} className="relative flex flex-col items-center px-2 pt-4">
-                  {i > 0 && <span className="absolute top-0 left-0 h-px w-1/2 bg-border" />}
-                  {i < kids.length - 1 && <span className="absolute top-0 right-0 h-px w-1/2 bg-border" />}
-                  <span className="absolute top-0 left-1/2 h-4 w-px bg-border" />
-                  <OrgNode node={c} expanded={expanded} onToggle={onToggle} onDrillInto={onDrillInto} />
-                </div>
-              ))}
-            </div>
-          )}
+            ))}
+          </div>
         </>
       )}
     </div>
