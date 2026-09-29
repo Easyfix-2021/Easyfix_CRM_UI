@@ -30,7 +30,7 @@ export default function TeamRosterPage() {
     if (!meLoading && !canManage) router.replace('/dashboard');
   }, [meLoading, canManage, router]);
 
-  const [tab, setTab] = useState<'manage' | 'updates' | 'actions'>('manage');
+  const [tab, setTab] = useState<'manage' | 'logs'>('manage');
 
   if (meLoading || !canManage) {
     return <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>;
@@ -46,15 +46,27 @@ export default function TeamRosterPage() {
           Plan who is present or on a week off, day by day, for your team.
         </p>
       </div>
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'manage' | 'updates' | 'actions')}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'manage' | 'logs')}>
         <TabsList>
           <TabsTrigger value="manage">Manage Roster</TabsTrigger>
-          <TabsTrigger value="updates">Update Log</TabsTrigger>
-          <TabsTrigger value="actions">Action Log</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
         <TabsContent value="manage"><RosterGrid /></TabsContent>
-        <TabsContent value="updates"><RosterLogs kind="updates" /></TabsContent>
-        <TabsContent value="actions"><RosterLogs kind="actions" /></TabsContent>
+        {/* One Logs tab: WHAT was done (one row per action — Save Grid, Fill
+            From Pattern, Notify…) above WHICH values changed (one row per day
+            or Working Days field). Each section pages independently. */}
+        <TabsContent value="logs" className="space-y-6">
+          <section>
+            <h2 className="text-sm font-semibold">Actions</h2>
+            <p className="text-xs text-muted-foreground">One row per action, including denied attempts.</p>
+            <RosterLogs kind="actions" />
+          </section>
+          <section>
+            <h2 className="text-sm font-semibold">Updates</h2>
+            <p className="text-xs text-muted-foreground">One row per changed day or Working Days field.</p>
+            <RosterLogs kind="updates" />
+          </section>
+        </TabsContent>
       </Tabs>
     </div>
   );

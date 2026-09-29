@@ -97,7 +97,7 @@ export function RosterLogs({ kind }: { kind: 'updates' | 'actions' }) {
               <thead>
                 <tr>
                   <th className="!text-left">Changed On</th>
-                  <th className="!text-left">Member</th>
+                  <th className="!text-left">Employee</th>
                   <th className="!text-center">Date</th>
                   <th className="!text-left">Change</th>
                   <th className="!text-left">By</th>
