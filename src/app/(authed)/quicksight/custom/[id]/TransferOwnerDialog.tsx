@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { SearchSelect } from '@/components/ui/search-select';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const API_BASE = '/admin/quicksight/dynamic-reports';
 
@@ -33,12 +34,23 @@ export function TransferOwnerDialog({
   onTransferred: () => void;
 }) {
   const lookup = useLookup();
+  const confirm = useConfirm();
   const [userId, setUserId] = React.useState<number | ''>('');
   const [submitting, setSubmitting] = React.useState(false);
   const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty: () => userId !== '', when: () => !submitting });
 
   async function submit() {
     if (!userId || submitting) return;
+    // Never blocks — just confirms. week_off_today comes from
+    // /shared/lookup/users via useLookup().
+    const toUser = lookup.adminUsers.find((u) => u.user_id === userId);
+    if (toUser?.week_off_today) {
+      const ok = await confirm({
+        title: 'Assign Anyway?',
+        description: `${toUser.user_name} Is On Week Off Today. Assign Anyway?`,
+      });
+      if (!ok) return;
+    }
     setSubmitting(true);
     try {
       await api.put(`${API_BASE}/${reportId}/owner`, { userId });

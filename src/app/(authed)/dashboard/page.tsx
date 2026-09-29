@@ -12,6 +12,7 @@ import { useFetchOnce } from '@/lib/hooks';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { NoticeStrip } from '@/components/notice/NoticeStrip';
 import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents';
+import { MyRoster } from '@/components/dashboard/MyRoster';
 import { AttentionSummary } from '@/components/dashboard/AttentionSummary';
 import { MarqueeOnHover } from '@/components/dashboard/MarqueeOnHover';
 
@@ -382,8 +383,9 @@ export default function DashboardPage() {
             allows the inner Card to shrink if needed (otherwise grid
             items refuse to go below their content's intrinsic size
             and force horizontal overflow). */}
-        <div className="min-w-0">
+        <div className="min-w-0 flex flex-col gap-4">
           <UpcomingEvents days={7} />
+          <MyRoster />
         </div>
       </div>
 

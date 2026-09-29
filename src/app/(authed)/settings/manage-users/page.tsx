@@ -26,6 +26,10 @@ import {
   AlertTriangle, ChevronDown, ChevronRight, Info, Layers, KeyRound,
 } from 'lucide-react';
 import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog';
+import {
+  ALL_WORKING_DAYS, WORKING_DAYS_ORDER, WorkingDaysField,
+  type DayKey, type WorkingDays,
+} from '@/components/users/WorkingDaysField';
 /*
  * The CRM's one image lightbox — a `{ url, name }` panel with a title bar and
  * the standard guarded close. Its NAME says skill because that was its first
@@ -1447,6 +1451,10 @@ function UserFormModal({
     takenBy?: { user_id: number; user_name: string };
     suggestion?: string;
   }>>(new Map());
+  // Working Days — defaults to all 7 Present; hydrated from
+  // attendance_preference below once GET /admin/users/:id resolves.
+  const [workingDays, setWorkingDays] = useState<WorkingDays>(ALL_WORKING_DAYS);
+  const [defaultShiftStart, setDefaultShiftStart] = useState('');
   const [roleId,  setRoleId]  = useState<number | ''>('');
   const [cityId,  setCityId]  = useState<number | ''>('');
   const [active,  setActive]  = useState(true);
@@ -1509,6 +1517,7 @@ function UserFormModal({
     date_of_birth?: string | null; date_of_joining?: string | null;
     uan?: string | null; address?: string | null;
     pan_masked?: string | null; aadhaar_masked?: string | null;
+    attendance_preference?: WorkingDays & { default_shift_start: string | null; working_days: number };
   }>(open && editing ? `/admin/users/${editing.user_id}` : null);
 
   const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
@@ -1593,6 +1602,10 @@ function UserFormModal({
        * between opening the modal and the fetch returning.
        */
       setDob(''); setDoj(''); setUan(''); setAddress('');
+      // Reset to all-Present here too; the detail-hydrate effect below
+      // overwrites with the saved attendance_preference once it resolves
+      // (or leaves this default for a user who never had a row — see contract).
+      setWorkingDays(ALL_WORKING_DAYS); setDefaultShiftStart('');
       /* pan/aadhaar are never hydrated — see the state comment. The removal
          flags reset with them, so a Remove clicked and then cancelled on one
          user cannot carry into the next one opened. */
@@ -1623,7 +1636,19 @@ function UserFormModal({
     setDoj(d.date_of_joining ?? '');
     setUan(d.uan ?? '');
     setAddress(d.address ?? '');
+    if (d.attendance_preference) {
+      const p = d.attendance_preference;
+      setWorkingDays({
+        monday: p.monday, tuesday: p.tuesday, wednesday: p.wednesday, thursday: p.thursday,
+        friday: p.friday, saturday: p.saturday, sunday: p.sunday,
+      });
+      setDefaultShiftStart(p.default_shift_start ?? '');
+    }
   }, [open, userDetail.data]);
+
+  function toggleWorkingDay(key: DayKey) {
+    setWorkingDays((prev) => ({ ...prev, [key]: prev[key] === 'PR' ? 'WO' : 'PR' }));
+  }
 
   function toggleManageClient(id: number) {
     setManageClients((prev) => {
@@ -2119,6 +2144,10 @@ function UserFormModal({
     }
     if (!roleId) { setError('Role is required'); return; }
 
+    if (WORKING_DAYS_ORDER.every((d) => workingDays[d.key] === 'WO')) {
+      setError('Select At Least One Working Day'); return;
+    }
+
     // Vertical-touched → client-mandatory rule (mirrors the BE bulk
     // route). If the operator toggled All or picked any verticals,
     // they must explicitly pick (or All) clients too — prevents the
@@ -2213,9 +2242,18 @@ function UserFormModal({
       if (aadhaar.trim())      identifierPayload.aadhaar = aadhaar.trim();
       else if (aadhaarCleared) identifierPayload.aadhaar = null;
 
+      // Sent on BOTH create and edit — always, per the contract, so the
+      // backend can backfill a user who has no attendance_preference row yet.
+      // working_days is never sent; the server derives it.
+      const attendancePreferencePayload = {
+        ...workingDays,
+        default_shift_start: defaultShiftStart.trim() || null,
+      };
+
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
           ...identifierPayload,
+          attendance_preference: attendancePreferencePayload,
           user_code:        empCode,
           // null (not '') when cleared — the column is NULLable and '' would
           // store an address that can never be mailed but reads as "present".
@@ -2235,6 +2273,7 @@ function UserFormModal({
       } else {
         created = await api.post<CreatedUser>('/admin/users', {
           ...identifierPayload,
+          attendance_preference: attendancePreferencePayload,
           user_name:        name.trim(),
           user_code:        empCode,
           // The PRE-FLIGHT's answer, not the raw field — on a collision this is
@@ -2859,6 +2898,13 @@ function UserFormModal({
               </p>
             </div>
           </div>
+
+          <WorkingDaysField
+            days={workingDays}
+            onToggle={toggleWorkingDay}
+            shiftStart={defaultShiftStart}
+            onShiftStart={setDefaultShiftStart}
+          />
 
           {/* Role helper text — kept under the Email | Role row above
               (instead of inside the picker block) so the grid stays
