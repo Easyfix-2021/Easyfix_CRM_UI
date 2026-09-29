@@ -17,6 +17,8 @@ import { useParams } from 'next/navigation';
 import { useFetch, useFetchOnce, usePostFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import Link from 'next/link';
+import { ArrowLeft } from 'lucide-react';
 import { BackLink } from '@/components/ui/back-link';
 import { Button } from '@/components/ui/button';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -175,12 +177,19 @@ export default function NewRegistration2ProfilePage() {
   }
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
-      <BackLink href="/easyfixers/new-registration-2" label="All Easyfixers" />
-
-      {/* Header card */}
+    <div className="space-y-3 p-3 md:p-4">
+      {/* Header card. The back arrow lives INSIDE it — as its own row above the
+          card it cost a full line of vertical space on every profile. */}
       <div className="rounded-xl border bg-card shadow-sm">
-        <div className="flex flex-wrap items-center gap-4 p-5">
+        <div className="flex flex-wrap items-center gap-4 p-4">
+          <Link
+            href="/easyfixers/new-registration-2"
+            aria-label="Back to all Easyfixers"
+            title="All Easyfixers"
+            className="self-start text-muted-foreground hover:text-primary"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
           <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-brand-50 text-2xl font-semibold text-brand-700">
             {v.activation.sidebar.profile_img && !photoBroken
               ? (
@@ -213,7 +222,12 @@ export default function NewRegistration2ProfilePage() {
                 <CallHistoryButton mobile={v.header.mobile ?? row?.efr_no ?? undefined} className="text-primary" />
               </span>
               <span>·</span>
-              <span>{[row?.city_name, row?.state_name].filter(Boolean).join(', ') || v.header.city_name || '—'}</span>
+              {/* His registered city, from his home PIN — NOT his serviceable
+                  areas, which are a different thing and live on Onboarding /
+                  Work & Coverage. Labelled so the two are not confused. */}
+              <span title="Registered city, from the technician's home PIN code">
+                Based in {[row?.city_name, row?.state_name].filter(Boolean).join(', ') || v.header.city_name || '—'}
+              </span>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <EasyfixerLifecycleChip value={row?.lifecycle_status} fallbackLabel={row?.efr_status_label} />

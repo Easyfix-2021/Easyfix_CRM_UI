@@ -39,6 +39,15 @@ type EfRow = LifecycleRowFields & {
   state_name: string | null;
   efr_service_category: string | null;
   efr_profile_perc: number | null;
+  /*
+   * Computed by the backend from the canonical completion rule. The stored
+   * efr_profile_perc beside it is legacy — the technician app never writes it,
+   * so every new registration read 0% however much they had filled in.
+   */
+  computed_profile_perc: number | null;
+  /* efr_service_category when the old CRM wrote it, else the categories the
+   * technician's deep-skill mappings actually name. */
+  derived_service_category: string | null;
   efr_status_label: EfStatusLabel;
   job_count?: number;
 };
@@ -264,7 +273,7 @@ export default function NewRegistration2ListPage() {
                 )}
                 {!loading && !error && rows.map((e) => {
                   const name = formatEasyfixerName(e.efr_name) || `${e.efr_first_name ?? ''} ${e.efr_last_name ?? ''}`.trim() || '—';
-                  const pct = e.efr_profile_perc ?? 0;
+                  const pct = e.computed_profile_perc ?? e.efr_profile_perc ?? 0;
                   const fresher = typeof e.job_count === 'number' && e.job_count < 5;
                   return (
                     <tr key={e.efr_id} className="group">
@@ -285,7 +294,7 @@ export default function NewRegistration2ListPage() {
                         <div>{e.city_name ?? '—'}</div>
                         <div className="text-xs text-ink-300">{e.state_name ?? ''}</div>
                       </td>
-                      <td>{serviceCategoryNames(e.efr_service_category, categoryById) || '—'}</td>
+                      <td>{serviceCategoryNames(e.derived_service_category ?? e.efr_service_category, categoryById) || '—'}</td>
                       <td>
                         <div className="flex items-center gap-2">
                           <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
@@ -306,7 +315,8 @@ export default function NewRegistration2ListPage() {
                           href={`/easyfixers/new-registration-2/${e.efr_id}`}
                           className="text-sm font-semibold text-primary hover:underline"
                         >
-                          View Profile →
+                          <span aria-hidden>→</span>
+                          <span className="sr-only">View profile</span>
                         </Link>
                       </td>
                     </tr>

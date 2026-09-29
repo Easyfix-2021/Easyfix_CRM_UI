@@ -367,8 +367,9 @@ export function OnboardingTab({
     return [...map.values()].sort((a, b) => a.city.localeCompare(b.city));
   }, [pins]);
 
-  const stage = !leadAccepted ? 1 : !activated ? 2 : 3; // 1 registration, 2 verification, 3 active
-  const stages = ['Registration', 'Verification & Activation', 'Active'];
+  // Accepting activates, so there is no waiting room between the two.
+  const stage = activated ? 2 : 1;
+  const stages = ['Registration', 'Active'];
 
   async function recordActivityLog(kind: DecisionKind, reason: string) {
     try {
@@ -420,25 +421,35 @@ export function OnboardingTab({
 
   return (
     <div className="space-y-4">
-      {/* Stage stepper */}
-      <SectionCard title="Onboarding stage" icon={<span>🚦</span>}>
-        <div className="flex flex-wrap items-center gap-2">
-          {stages.map((s, i) => {
-            const n = i + 1;
-            const done = n < stage;
-            const cur = n === stage;
-            return (
-              <div key={s} className="flex items-center gap-2">
-                <span className={`grid h-6 w-6 place-items-center rounded-full font-mono text-xs font-semibold ${done ? 'bg-success text-white' : cur ? 'bg-primary text-white' : 'border bg-muted text-ink-300'}`}>
-                  {done ? '✓' : n}
-                </span>
-                <b className={`text-[13px] ${n <= stage ? 'text-ink-900' : 'text-ink-300'}`}>{s}</b>
-                {i < stages.length - 1 && <span className={`mx-1 block h-0.5 w-8 ${n < stage ? 'bg-success' : 'bg-border'}`} />}
-              </div>
-            );
-          })}
-        </div>
-      </SectionCard>
+      {/*
+        TWO stages, not three, and one line rather than a card. Accepting a
+        technician now activates him, so "Verification & Activation" is no
+        longer a stage anyone waits in — it was a whole card's worth of vertical
+        space describing a step that no longer exists.
+      */}
+      <div className="flex flex-wrap items-center gap-2 text-[13px]">
+        {stages.map((label, i) => {
+          const n = i + 1;
+          const done = n < stage;
+          const current = n === stage;
+          return (
+            <span key={label} className="inline-flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 ${
+                  done
+                    ? 'bg-success-tint text-success-strong'
+                    : current
+                      ? 'bg-primary text-white'
+                      : 'bg-muted text-muted-foreground'
+                }`}
+              >
+                {done ? '✓' : n} {label}
+              </span>
+              {i < stages.length - 1 && <span className="h-px w-5 bg-border" aria-hidden />}
+            </span>
+          );
+        })}
+      </div>
 
       {/* Consolidated read-only review */}
       <SectionCard title="Review — everything the technician filled" icon={<span>🔎</span>} bodyClassName="space-y-3">
