@@ -110,6 +110,7 @@ import { CompletionVsCancellationSection } from './sections/CompletionVsCancella
 import { WhyCancelledSection } from './sections/WhyCancelledSection';
 import { CityWiseSection } from './sections/CityWiseSection';
 import { StatusAgingSection } from './sections/StatusAgingSection';
+import { ClientReportSection } from './sections/client-report/ClientReportSection';
 
 /* A BE 403 (requireQuickSight) arrives as one of these messages. */
 const DENIED_RE = /permission|quicksight access|access denied/i;
@@ -516,24 +517,28 @@ export function MtdBody() {
           {/* ── the six KPI tiles, in the MIS report's order ──────────────── */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <QsKpiTile
+              wrap
               label="Orders Created"
               accent={QS_COLORS[0]}
               icon={<ClipboardList className="size-5" />}
               value={<TileValue figure={num(k.ordersCreated)} note="tickets created in these dates" />}
             />
             <QsKpiTile
+              wrap
               label="Completed"
               accent={QS_SEMANTIC.good}
               icon={<CheckCircle2 className="size-5" />}
               value={<TileValue figure={num(k.completed)} note="by closure date" />}
             />
             <QsKpiTile
+              wrap
               label="Cancelled"
               accent={QS_SEMANTIC.bad}
               icon={<XCircle className="size-5" />}
               value={<TileValue figure={num(k.cancelled)} note="by cancel date" />}
             />
             <QsKpiTile
+              wrap
               label="Completion %"
               accent={QS_SEMANTIC.info}
               icon={<Percent className="size-5" />}
@@ -545,6 +550,7 @@ export function MtdBody() {
               )}
             />
             <QsKpiTile
+              wrap
               label="TAT %"
               accent={QS_COLORS[2]}
               icon={<Timer className="size-5" />}
@@ -553,6 +559,7 @@ export function MtdBody() {
               value={<TileValue figure={pct1(k.tatPct)} note={`${pctFraction(k.tatPct)} completed in TAT`} />}
             />
             <QsKpiTile
+              wrap
               label="Cancelled %"
               accent={QS_COLORS[8]}
               icon={<TrendingDown className="size-5" />}
@@ -577,6 +584,18 @@ export function MtdBody() {
             more than it created. Completion % is (completed + open) over the {num(k.inHand)} jobs in hand, so it
             is exactly 100% minus Cancelled %.
           </p>
+
+          {/* ── the per-client document, v2's addition ───────────────
+
+                 It appears only when exactly ONE client is ticked, which is how
+                 the MIS page scopes its own Word report; with none or several
+                 the card says so in place. It is the LAYOUT ONLY — the .docx
+                 export and any emailing of it are still to be decided, so the
+                 download control is present and disabled, and Escalated, SDA %
+                 and the tier matrix render as explicit placeholders rather than
+                 as zeroes. It sits above the eleven sections because it is a
+                 document about this client, not another view of the tab.  ── */}
+          <ClientReportSection report={report} clientIds={filters.clientIds} period={period} />
 
           {/* ── section 1 ────────────────────────────────────────────────── */}
           <TicketsCreatedVsCompletedSection daily={report.daily} />

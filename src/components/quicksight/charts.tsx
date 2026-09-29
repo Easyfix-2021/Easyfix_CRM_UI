@@ -25,6 +25,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts';
 import { Card, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 /*
  * Vibrant but harmonious palette (Tailwind-derived 500/600 hues). Ordered
@@ -225,12 +226,26 @@ export function QsLineChart({
 
 /* ── KPI stat tile — for dashboard-style headline numbers ──────────── */
 export function QsKpiTile({
-  label, value, accent = QS_COLORS[0], icon,
+  label, value, accent = QS_COLORS[0], icon, wrap = false,
 }: {
   label: string;
   value: ReactNode;
   accent?: string;
   icon?: ReactNode;
+  /*
+   * Let the value and label WRAP instead of truncating with an ellipsis.
+   *
+   * The default clips, which is right for the tiles this component was built
+   * for: a short figure and a one- or two-word label, where an overlong value
+   * would otherwise push the row out of shape. It is wrong for a tile whose
+   * text carries meaning — MTD's tiles state their own denominator
+   * ("1,466 of 1,470 jobs completed or still open"), and "1,466 of 1,47…" is
+   * worse than no denominator at all, because it reads as a number.
+   *
+   * Opt-in rather than a change of default, so the twelve existing callers
+   * keep the clipping they were laid out against.
+   */
+  wrap?: boolean;
 }) {
   return (
     /*
@@ -252,8 +267,10 @@ export function QsKpiTile({
           {icon}
         </div>
         <div className="min-w-0">
-          <div className="text-2xl font-semibold text-ink-900 tabular-nums truncate">{value}</div>
-          <div className="text-xs text-muted-foreground truncate">{label}</div>
+          <div className={cn('text-2xl font-semibold text-ink-900 tabular-nums', wrap ? 'break-words' : 'truncate')}>
+            {value}
+          </div>
+          <div className={cn('text-xs text-muted-foreground', wrap ? 'break-words' : 'truncate')}>{label}</div>
         </div>
       </CardContent>
     </Card>
