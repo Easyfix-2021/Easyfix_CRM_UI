@@ -21,7 +21,7 @@
  * v2 (roster-v2-contract.md): a client-side search box (Emp Code + name)
  * filters the visible member rows; the On Duty footer and "select all"
  * count only that filtered set. Copy Previous Month is gone (endpoint
- * removed), and Export moved into its own dialog (RosterExportDialog) that
+ * removed), and Export is a dropdown (RosterExportMenu) that
  * picks a from/to range instead of a single month.
  */
 
@@ -33,7 +33,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { IconButton } from '@/components/ui/icon-button';
-import { DownloadButton } from '@/components/ui/download-button';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
@@ -48,7 +47,7 @@ import {
 import type { DayType, RosterCellInput, RosterMember, RosterResponse } from './types';
 import { FillPatternDialog } from './FillPatternDialog';
 import { RosterCalendarDialog } from './RosterCalendarDialog';
-import { RosterExportDialog } from './RosterExportDialog';
+import { RosterExportMenu } from './RosterExportMenu';
 
 /* Footer "On Duty" turns red when fewer than this many people beyond the
  * bare team size are on — named so the threshold isn't a magic number
@@ -116,7 +115,6 @@ export function RosterGrid() {
   const [dirty, setDirty] = useState<Map<string, RosterCellInput>>(new Map());
   const [rowShift, setRowShift] = useState<Record<number, string>>({});
   const [fillOpen, setFillOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyAction, setBusyAction] = useState<'reset' | null>(null);
 
@@ -341,6 +339,7 @@ export function RosterGrid() {
     <div className="space-y-3">
       <Card>
         <CardContent className="flex flex-col gap-3 p-3">
+          {/* Row 1: search + Team filter (left) · Week / Month (right). */}
           <div className="flex flex-wrap items-center gap-3">
             <div className="relative min-w-[220px] max-w-xs flex-1">
               <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -361,19 +360,7 @@ export function RosterGrid() {
                 className="w-48"
               />
             </div>
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
-                <Wand2 className="size-4 mr-1" /> Fill From Pattern
-              </Button>
-              <DownloadButton onClick={() => setExportOpen(true)} label="Export" />
-              <Button variant="outline" size="sm" disabled={actionsBusy} onClick={resetToWeekly}>
-                <RotateCcw className="size-4 mr-1" /> Reset To Weekly Days
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <div className="flex w-fit items-center overflow-hidden rounded-md border">
+            <div className="ml-auto flex items-center overflow-hidden rounded-md border">
               <button
                 type="button"
                 onClick={() => setView('week')}
@@ -389,10 +376,23 @@ export function RosterGrid() {
                 Month
               </button>
             </div>
+          </div>
+
+          {/* Row 2: range navigator (left) · actions (right). */}
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1">
               <IconButton icon={ChevronLeft} label="Previous" onClick={() => setAnchor((a) => nextAnchor(view, a, -1))} />
               <span className="min-w-[170px] text-center text-sm font-medium">{from && to ? formatRangeLabel(from, to) : '—'}</span>
               <IconButton icon={ChevronRight} label="Next" onClick={() => setAnchor((a) => nextAnchor(view, a, 1))} />
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
+                <Wand2 className="size-4 mr-1" /> Fill From Pattern
+              </Button>
+              <Button variant="outline" size="sm" disabled={actionsBusy} onClick={resetToWeekly}>
+                <RotateCcw className="size-4 mr-1" /> Reset To Weekly Days
+              </Button>
+              <RosterExportMenu teamOf={teamOf} />
             </div>
           </div>
         </CardContent>
@@ -584,7 +584,6 @@ export function RosterGrid() {
         minDate={win?.editFrom ?? from}
         maxDate={win?.editTo ?? to}
       />
-      <RosterExportDialog open={exportOpen} onClose={() => setExportOpen(false)} teamOf={teamOf} />
       <RosterCalendarDialog member={calendarFor} teamOf={teamOf} anchor={anchor} onClose={() => setCalendarFor(null)} />
     </div>
   );
