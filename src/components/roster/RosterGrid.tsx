@@ -14,34 +14,41 @@
  *
  * Dirty edits live in a `Map<"userId|date", RosterCellInput>` overlay on
  * top of the server's `members[].days[date]` — every render effect
- * (chip look, footer On Duty count, per-row warning) is derived from that
- * merged view, never from the server payload alone, so the UI reflects
- * unsaved edits immediately.
+ * (chip look, footer On Duty count) is derived from that merged view,
+ * never from the server payload alone, so the UI reflects unsaved edits
+ * immediately.
+ *
+ * v2 (roster-v2-contract.md): a client-side search box (Emp Code + name)
+ * filters the visible member rows; the On Duty footer and "select all"
+ * count only that filtered set. Copy Previous Month is gone (endpoint
+ * removed), and Export moved into its own dialog (RosterExportDialog) that
+ * picks a from/to range instead of a single month.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, Wand2, Copy, RotateCcw, Download, AlertTriangle, Bell, CalendarDays,
+  ChevronLeft, ChevronRight, Wand2, RotateCcw, Bell, CalendarDays, Search,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { IconButton } from '@/components/ui/icon-button';
+import { DownloadButton } from '@/components/ui/download-button';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
-import { downloadXlsx } from '@/lib/download-xlsx';
 import { ShiftSelect, DEFAULT_SHIFT } from './ShiftSelect';
 import { cn } from '@/lib/utils';
 import {
-  addMonthsYmd, daysBetweenInclusive, formatRangeLabel, formatYmdLabel,
-  fullWeeksIn, istTodayYmd, monthKey, nextAnchor, rangeFor, startOfMonth, weekdayShort,
+  formatRangeLabel, formatYmdLabel, istTodayYmd, nextAnchor, rangeFor, weekdayShort,
   type RosterView,
 } from './roster-dates';
 import type { DayType, RosterCellInput, RosterMember, RosterResponse } from './types';
 import { FillPatternDialog } from './FillPatternDialog';
 import { RosterCalendarDialog } from './RosterCalendarDialog';
+import { RosterExportDialog } from './RosterExportDialog';
 
 /* Footer "On Duty" turns red when fewer than this many people beyond the
  * bare team size are on — named so the threshold isn't a magic number
@@ -89,9 +96,17 @@ function DayChip({ type, style, dimmed }: { type: DayType; style: 'solid' | 'das
   );
 }
 
+/** Case-insensitive substring match on Emp Code + name — the toolbar's search box. */
+function matchesSearch(member: RosterMember, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (member.empCode ?? '').toLowerCase().includes(needle) || member.name.toLowerCase().includes(needle);
+}
+
 export function RosterGrid() {
   const confirm = useConfirm();
 
+  const [search, setSearch] = useState('');
   const [teamOf, setTeamOf] = useState('');
   const [view, setView] = useState<RosterView>('week');
   const [anchor, setAnchor] = useState(() => istTodayYmd());
@@ -101,8 +116,9 @@ export function RosterGrid() {
   const [dirty, setDirty] = useState<Map<string, RosterCellInput>>(new Map());
   const [rowShift, setRowShift] = useState<Record<number, string>>({});
   const [fillOpen, setFillOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [busyAction, setBusyAction] = useState<'copy' | 'reset' | null>(null);
+  const [busyAction, setBusyAction] = useState<'reset' | null>(null);
 
   const qs = new URLSearchParams({ from, to });
   if (teamOf) qs.set('teamOf', teamOf);
@@ -116,39 +132,40 @@ export function RosterGrid() {
   const win = data?.window;
 
   const holidaysByDate = useMemo(() => new Map(holidays.map((h) => [h.date, h.name])), [holidays]);
+  // The full (unfiltered) editable roster — feeds Fill From Pattern and the
+  // "no one selected" fallback scope for Reset. Search never shrinks these.
   const editableMembers = useMemo(() => members.filter((m) => m.editable), [members]);
-  const managerOptions: SearchOption[] = useMemo(
-    () => managers.map((m) => ({ value: m.userId, label: m.name })),
+  const teamOptions: SearchOption[] = useMemo(
+    () => [{ value: '', label: 'All Employees' }, ...managers.map((m) => ({ value: m.userId, label: m.name }))],
     [managers],
   );
+
+  // The search-filtered view — what's actually rendered as rows, and the set
+  // the On Duty footer / "select all" count (contract: visible members only).
+  const filteredMembers = useMemo(() => members.filter((m) => matchesSearch(m, search)), [members, search]);
+  const visibleEditableMembers = useMemo(() => filteredMembers.filter((m) => m.editable), [filteredMembers]);
 
   const headcountLive = useMemo(() => {
     const map = new Map<string, { onDuty: number; total: number }>();
     for (const date of dates) {
       let onDuty = 0;
-      for (const m of members) if (effectiveCell(m, date, dirty).type === 'PR') onDuty++;
-      map.set(date, { onDuty, total: members.length });
+      for (const m of filteredMembers) if (effectiveCell(m, date, dirty).type === 'PR') onDuty++;
+      map.set(date, { onDuty, total: filteredMembers.length });
     }
     return map;
-  }, [dates, members, dirty]);
+  }, [dates, filteredMembers, dirty]);
 
-  const fullWeeks = useMemo(() => fullWeeksIn(dates), [dates]);
-  /* Member → the FIRST full Mon–Sun week in view with no Week Off (so the
-     row can say WHICH week, and its button can open Fill From Pattern for it). */
-  const rowWarnings = useMemo(() => {
-    const map = new Map<number, { from: string; to: string }>();
-    for (const m of members) {
-      for (const week of fullWeeks) {
-        const hasWO = week.some((date) => effectiveCell(m, date, dirty).type === 'WO');
-        if (!hasWO) { map.set(m.userId, { from: week[0], to: week[6] }); break; }
-      }
-    }
-    return map;
-  }, [members, fullWeeks, dirty]);
-  const [fillFor, setFillFor] = useState<number[]>([]);
-  function openFill(userIds: number[]) { setFillFor(userIds); setFillOpen(true); }
   const [calendarFor, setCalendarFor] = useState<{ userId: number; name: string } | null>(null);
   const [notifyingId, setNotifyingId] = useState<number | null>(null);
+
+  // Browser-level exit guard — a hard nav (tab close, refresh) can't be
+  // intercepted by useConfirm, so arm the native prompt while dirty.
+  useEffect(() => {
+    if (dirty.size === 0) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   /* Sends the employee their roster for the range in view to their CRM inbox
      (the backend clips a past start to today). Unsaved changes are NOT sent —
@@ -172,15 +189,6 @@ export function RosterGrid() {
       setNotifyingId(null);
     }
   }
-
-  // Browser-level exit guard — a hard nav (tab close, refresh) can't be
-  // intercepted by useConfirm, so arm the native prompt while dirty.
-  useEffect(() => {
-    if (dirty.size === 0) return;
-    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
-  }, [dirty]);
 
   function clearDirtyFor(userIds: number[]) {
     setDirty((prev) => {
@@ -230,11 +238,19 @@ export function RosterGrid() {
       return next;
     });
   }
-  const allEditableSelected = editableMembers.length > 0 && editableMembers.every((m) => selected.has(m.userId));
+  // "Select all" only ever touches what's currently VISIBLE (search-filtered)
+  // — an operator searching "priya" and hitting select-all should not
+  // silently pick up 60 people scrolled out of view.
+  const allEditableSelected = visibleEditableMembers.length > 0 && visibleEditableMembers.every((m) => selected.has(m.userId));
   function toggleSelectAll() {
     setSelected((prev) => {
-      if (allEditableSelected) return new Set();
-      return new Set(editableMembers.map((m) => m.userId));
+      const next = new Set(prev);
+      if (allEditableSelected) {
+        for (const m of visibleEditableMembers) next.delete(m.userId);
+      } else {
+        for (const m of visibleEditableMembers) next.add(m.userId);
+      }
+      return next;
     });
   }
 
@@ -286,33 +302,6 @@ export function RosterGrid() {
     if (ok) setDirty(new Map());
   }
 
-  async function copyPreviousMonth() {
-    const scope = scopeUserIds();
-    if (!scope.length) { showToast({ variant: 'error', message: 'No Editable Members In View' }); return; }
-    const toMonth = monthKey(anchor);
-    const fromMonth = monthKey(addMonthsYmd(startOfMonth(anchor), -1));
-    const ok = await confirm({
-      title: 'Copy Previous Month?',
-      description: `Repeats each of the ${scope.length} selected member's weekday pattern from ${fromMonth} across ${toMonth}, within the editable window. Hand-edited days in ${toMonth} are kept; members with nothing planned in ${fromMonth} are skipped.`,
-      confirmLabel: 'Copy',
-    });
-    if (!ok) return;
-    setBusyAction('copy');
-    const toastId = showToast({ variant: 'loading', message: 'Copying Previous Month…' });
-    try {
-      await api.post('/admin/roster/copy-month', { userIds: scope, fromMonth, toMonth });
-      dismissToast(toastId);
-      showToast({ variant: 'success', message: 'Previous Month Copied' });
-      clearDirtyFor(scope);
-      refreshAll();
-    } catch (e) {
-      dismissToast(toastId);
-      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Copy Failed' });
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   async function resetToWeekly() {
     const scope = scopeUserIds();
     if (!scope.length) { showToast({ variant: 'error', message: 'No Editable Members In View' }); return; }
@@ -345,74 +334,67 @@ export function RosterGrid() {
     }
   }
 
-  async function exportExcel() {
-    const month = monthKey(anchor);
-    const exportQs = new URLSearchParams({ month });
-    if (teamOf) exportQs.set('teamOf', teamOf);
-    try {
-      await downloadXlsx({ url: `/admin/roster/export?${exportQs.toString()}`, filename: `team-roster-${month}.xlsx` });
-    } catch (e) {
-      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Export Failed' });
-    }
-  }
-
   const actionsBusy = saving || busyAction !== null;
   const colSpan = dates.length + 2;
 
   return (
     <div className="space-y-3">
       <Card>
-        <CardContent className="flex flex-wrap items-center gap-3 p-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Team:</span>
-            <SearchSelect
-              value={teamOf}
-              onChange={onTeamChange}
-              options={managerOptions}
-              placeholder="My Team"
-              className="w-48"
-            />
-          </div>
-          <div className="flex items-center rounded-md border overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setView('week')}
-              className={cn('px-3 py-1.5 text-xs font-medium', view === 'week' ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted')}
-            >
-              Week
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('month')}
-              className={cn('px-3 py-1.5 text-xs font-medium', view === 'month' ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted')}
-            >
-              Month
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            <IconButton icon={ChevronLeft} label="Previous" onClick={() => setAnchor((a) => nextAnchor(view, a, -1))} />
-            <span className="min-w-[170px] text-center text-sm font-medium">{from && to ? formatRangeLabel(from, to) : '—'}</span>
-            <IconButton icon={ChevronRight} label="Next" onClick={() => setAnchor((a) => nextAnchor(view, a, 1))} />
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => openFill([])}>
-              <Wand2 className="size-4 mr-1" /> Fill From Pattern
-            </Button>
-            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={copyPreviousMonth}>
-              <Copy className="size-4 mr-1" /> Copy Previous Month
-            </Button>
-            <Button variant="outline" size="sm" disabled={actionsBusy} onClick={resetToWeekly}>
-              <RotateCcw className="size-4 mr-1" /> Reset To Weekly Days
-            </Button>
-            <Button variant="outline" size="sm" onClick={exportExcel}>
-              <Download className="size-4 mr-1" /> Export Excel
-            </Button>
-          </div>
-          {win && (
-            <div className="w-full text-xs text-muted-foreground">
-              Editable: {formatYmdLabel(win.editFrom)} → {formatYmdLabel(win.editTo)}
+        <CardContent className="flex flex-col gap-3 p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[220px] max-w-xs flex-1">
+              <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search By Emp Code Or Name"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8"
+              />
             </div>
-          )}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Team:</span>
+              <SearchSelect
+                value={teamOf}
+                onChange={onTeamChange}
+                options={teamOptions}
+                placeholder="All Employees"
+                className="w-48"
+              />
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" disabled={actionsBusy} onClick={() => setFillOpen(true)}>
+                <Wand2 className="size-4 mr-1" /> Fill From Pattern
+              </Button>
+              <DownloadButton onClick={() => setExportOpen(true)} label="Export" />
+              <Button variant="outline" size="sm" disabled={actionsBusy} onClick={resetToWeekly}>
+                <RotateCcw className="size-4 mr-1" /> Reset To Weekly Days
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <div className="flex w-fit items-center overflow-hidden rounded-md border">
+              <button
+                type="button"
+                onClick={() => setView('week')}
+                className={cn('px-3 py-1.5 text-xs font-medium', view === 'week' ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted')}
+              >
+                Week
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('month')}
+                className={cn('px-3 py-1.5 text-xs font-medium', view === 'month' ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted')}
+              >
+                Month
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              <IconButton icon={ChevronLeft} label="Previous" onClick={() => setAnchor((a) => nextAnchor(view, a, -1))} />
+              <span className="min-w-[170px] text-center text-sm font-medium">{from && to ? formatRangeLabel(from, to) : '—'}</span>
+              <IconButton icon={ChevronRight} label="Next" onClick={() => setAnchor((a) => nextAnchor(view, a, 1))} />
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -465,17 +447,17 @@ export function RosterGrid() {
                       </th>
                     );
                   })}
-                  <th className="!text-center" style={{ minWidth: 104 }}>Actions</th>
+                  <th className="!text-center" style={{ minWidth: 80 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && (
                   <tr><td colSpan={colSpan} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
                 )}
-                {!loading && members.length === 0 && (
+                {!loading && filteredMembers.length === 0 && (
                   <tr><td colSpan={colSpan} className="!text-center text-muted-foreground py-6">No Members In View</td></tr>
                 )}
-                {!loading && members.map((member) => (
+                {!loading && filteredMembers.map((member) => (
                   <tr key={member.userId}>
                     <td className="stick-col stick-left !text-left align-top">
                       <div className="flex items-start gap-2">
@@ -488,9 +470,9 @@ export function RosterGrid() {
                           aria-label={`Select ${member.name}`}
                         />
                         <div>
-                          {/* <EmpCode> · <Full Name> · <Designation> — CRM users have no
-                              designation field, so the role stands in (as the QuickSight
-                              admin report already does). Absent parts are skipped. */}
+                          {/* <EmpCode> · <Full Name> · <Role> — empCode is null for
+                              most users; absent parts are skipped, never "()" or a
+                              dangling " · ". */}
                           <div className="text-sm leading-snug">
                             {member.empCode && <span className="text-muted-foreground">{member.empCode} · </span>}
                             <span className="font-medium">{member.name}</span>
@@ -531,10 +513,8 @@ export function RosterGrid() {
                       );
                     })}
                     <td className="!text-center">
-                      {/* Actions: Notify (roster → the employee's CRM inbox),
-                          Calendar (month view), and — only when a full Mon–Sun
-                          week in view has no Week Off — a warning that opens
-                          Fill From Pattern for this employee. */}
+                      {/* Actions: Notify (roster → the employee's CRM inbox) and
+                          Calendar (month view). */}
                       <div className="inline-flex items-center justify-center gap-2">
                         <IconButton
                           icon={Bell}
@@ -549,26 +529,12 @@ export function RosterGrid() {
                           label={`Calendar View · ${member.name}`}
                           onClick={() => setCalendarFor({ userId: member.userId, name: member.name })}
                         />
-                        {(() => {
-                          const w = rowWarnings.get(member.userId);
-                          if (!w) return null;
-                          const what = `No Week Off ${formatYmdLabel(w.from)} – ${formatYmdLabel(w.to)}`;
-                          return (
-                            <IconButton
-                              icon={AlertTriangle}
-                              label={member.editable ? `${what} · Plan One (Fill From Pattern)` : what}
-                              className="!text-warning-strong"
-                              disabled={!member.editable}
-                              onClick={() => openFill([member.userId])}
-                            />
-                          );
-                        })()}
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
-              {!loading && members.length > 0 && (
+              {!loading && filteredMembers.length > 0 && (
                 <tfoot>
                   <tr className="bg-muted/40 font-medium">
                     <td className="stick-col stick-left !text-left">On Duty</td>
@@ -614,10 +580,11 @@ export function RosterGrid() {
         defaultFrom={win?.editFrom ?? from}
         defaultTo={win?.editTo ?? to}
         onApplied={(userIds) => { clearDirtyFor(userIds); refreshAll(); }}
-        initialUserIds={fillFor}
+        initialUserIds={[]}
         minDate={win?.editFrom ?? from}
         maxDate={win?.editTo ?? to}
       />
+      <RosterExportDialog open={exportOpen} onClose={() => setExportOpen(false)} teamOf={teamOf} />
       <RosterCalendarDialog member={calendarFor} teamOf={teamOf} anchor={anchor} onClose={() => setCalendarFor(null)} />
     </div>
   );

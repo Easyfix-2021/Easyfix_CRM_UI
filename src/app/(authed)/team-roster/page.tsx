@@ -48,25 +48,15 @@ export default function TeamRosterPage() {
       </div>
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'manage' | 'logs')}>
         <TabsList>
-          <TabsTrigger value="manage">Manage Roster</TabsTrigger>
+          <TabsTrigger value="manage">Manage</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
         <TabsContent value="manage"><RosterGrid /></TabsContent>
-        {/* One Logs tab: WHAT was done (one row per action — Save Grid, Fill
-            From Pattern, Notify…) above WHICH values changed (one row per day
-            or Working Days field). Each section pages independently. */}
-        <TabsContent value="logs" className="space-y-6">
-          <section>
-            <h2 className="text-sm font-semibold">Actions</h2>
-            <p className="text-xs text-muted-foreground">One row per action, including denied attempts.</p>
-            <RosterLogs kind="actions" />
-          </section>
-          <section>
-            <h2 className="text-sm font-semibold">Updates</h2>
-            <p className="text-xs text-muted-foreground">One row per changed day or Working Days field.</p>
-            <RosterLogs kind="updates" />
-          </section>
-        </TabsContent>
+        {/* v2: Actions only — one row per action (Save Grid, Fill From
+            Pattern, Notify…), including denied/rejected/failed attempts.
+            Per-employee changes are fetched on demand from a row's
+            "N Employee(s)" link (ActionChangesDialog), never on tab open. */}
+        <TabsContent value="logs"><RosterLogs /></TabsContent>
       </Tabs>
     </div>
   );

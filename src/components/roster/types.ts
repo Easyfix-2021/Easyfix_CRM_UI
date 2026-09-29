@@ -24,7 +24,8 @@ export type RosterManager = { userId: number; name: string };
 export type RosterMember = {
   userId: number;
   name: string;
-  empCode: string;
+  /** Null for most users (69 of 71 on QA) — never render "()" or a dangling " · ". */
+  empCode: string | null;
   roleName: string;
   editable: boolean;
   defaultShift: string | null;
@@ -62,40 +63,43 @@ export type FillPatternBody = {
 };
 export type FillPatternResult = { users: number; cells: number; wo: number; pr: number; keptManual: number };
 
-export type CopyMonthBody = { userIds: number[]; fromMonth: string; toMonth: string };
-export type CopyMonthResult = { users: number; cells: number };
-
 export type ResetBody = { userIds: number[]; from: string; to: string };
 export type ResetResult = { removed: number };
 
-export type RosterUpdateLogSource = 'GRID' | 'PATTERN' | 'COPY' | 'RESET' | 'EDIT_USER';
+/*
+ * v2 contract (scratchpad/roster-v2-contract.md): `changedBy` / `source` /
+ * `createdAt` are gone — the parent action row already says who/when. Fetch
+ * ONLY when an action's details are opened (never on Logs-tab open), scoped
+ * by `actionId`.
+ */
 export type RosterUpdateLogItem = {
   id: number;
-  createdAt: string;
   userId: number;
   userName: string;
-  empCode: string;
+  empCode: string | null;
   rosterDate: string | null;
   /** 'day_type' | 'shift_start' | 'pref.monday'..'pref.sunday' | 'pref.working_days' | 'pref.shift' */
   field: string;
   oldValue: string | null;
   newValue: string | null;
-  changedBy: number;
-  changedByName: string;
-  source: RosterUpdateLogSource;
 };
 export type RosterUpdateLogResponse = { items: RosterUpdateLogItem[]; total: number };
 
-export type RosterActionLogAction = 'SAVE_GRID' | 'FILL_PATTERN' | 'COPY_MONTH' | 'RESET' | 'EXPORT';
+export type RosterActionLogAction =
+  | 'SAVE_GRID' | 'FILL_PATTERN' | 'COPY_MONTH' | 'RESET' | 'NOTIFY' | 'EXPORT' | 'WORKING_DAYS';
+/*
+ * `affectedCells` / `scopeSummary` are gone — use `summary`. `COPY_MONTH` is
+ * kept in the union: the endpoint that produced it is removed, but old rows
+ * with that action still come back from the log and the FE verb map has to
+ * cover them ("Updated", same as SAVE_GRID/FILL_PATTERN).
+ */
 export type RosterActionLogItem = {
   id: number;
   createdAt: string;
-  action: RosterActionLogAction;
-  actorUserId: number;
   actorName: string;
-  scopeSummary: string;
+  action: RosterActionLogAction;
+  summary: string;
   affectedUsers: number;
-  affectedCells: number;
   statusCode: number;
 };
 export type RosterActionLogResponse = { items: RosterActionLogItem[]; total: number };
