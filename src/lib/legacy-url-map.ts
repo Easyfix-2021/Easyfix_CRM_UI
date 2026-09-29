@@ -92,6 +92,12 @@ export const URL_MAP: Record<string, string> = {
   // consume `focus=change-owner` to scroll/highlight the action.
   'changeJobOwner':        '/jobs?focus=change-owner',
   'callLater':             '/jobs?tab=call-later',
+  // Ops Desk — its own leaf under Jobs since 2026-09-29 (was a card on
+  // /admin-actions). Row seeded by EasyFix_Backend
+  // migrations/2026-09-29-ops-desk-jobs-menu.sql; the page gates on
+  // isJobAppRequestResolve, and the migration grants the menu to exactly the
+  // roles holding that key.
+  'opsDesk':               '/ops-desk',
   // Legacy `androidAppJob` (App Job) calls SP sp_ef_app_job_list which
   // returns the same 5-bucket per-user dashboard our `/my-orders` page
   // already shows (PendingForScheduling, NotStarted, NotCompleted,
