@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
 import { DownloadButton } from '@/components/ui/download-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+import { aadhaarAiBadge } from '@/lib/aadhaar-ai-check';
 import { IconButton } from '@/components/ui/icon-button';
 import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
 import { showToast } from '@/components/ui/toast';
@@ -67,6 +68,8 @@ type RegRow = LifecycleRowFields & {
   profile_activation_date_time: string | null;
   efr_service_category: string | null;
   efr_service_type: string | null;
+  /** AI Aadhaar verdict behind the latest app identity save; absent on an older backend. */
+  identity_ai_verdict?: string | null;
 };
 
 type Resp = { items: RegRow[]; total: number; limit: number; offset: number };
@@ -651,6 +654,7 @@ export default function RegisteredEasyfixersPage() {
                     const efName = formatEasyfixerName(e.name ?? '');
                     const lifecycleStatus = lifecycleStatusFrom(e);
                     const reapplication = reapplicationSummary(e);
+                    const aiBadge = aadhaarAiBadge(e.identity_ai_verdict);
                     return (
                       <tr key={e.efr_id}>
                         {/* Technician Id (+ early-activation unlock marker) —
@@ -699,6 +703,9 @@ export default function RegisteredEasyfixersPage() {
                             )}
                             {reapplication.isReapplication && (
                               <StatusChip tone="violet" size="sm">RE-APPLICATION</StatusChip>
+                            )}
+                            {aiBadge && (
+                              <StatusChip tone={aiBadge.tone} size="sm">{aiBadge.label}</StatusChip>
                             )}
                             {showPct && (
                               <span className="text-xs text-muted-foreground tabular-nums">
