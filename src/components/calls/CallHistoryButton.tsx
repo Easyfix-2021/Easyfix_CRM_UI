@@ -339,16 +339,29 @@ export function CallHistoryTable({
 
 export function CallHistoryButton({
   jobId,
+  mobile,
   className,
 }: {
-  jobId: number;
+  /** Job scope: every call on this job, whoever the counterparty was. */
+  jobId?: number;
+  /**
+   * Number scope, for a person rather than a job (the technician profile):
+   * every call on this number, across all their jobs. Ignored when `jobId` is
+   * given — a job's history is the narrower, more useful answer there.
+   */
+  mobile?: string;
   className?: string;
 }) {
   const [open, setOpen] = React.useState(false);
 
   // Fetch only once the popup is opened (key null → disabled until then).
-  // Job-scoped: every call on this job, whoever the counterparty was.
-  const key = open && jobId ? `/admin/calls?jobId=${jobId}&limit=100` : null;
+  const key = !open
+    ? null
+    : jobId
+      ? `/admin/calls?jobId=${jobId}&limit=100`
+      : mobile
+        ? `/admin/calls?mobile=${encodeURIComponent(mobile)}&limit=100`
+        : null;
   const { data, loading, error } = useFetch<CallHistoryResp>(key, { enabled: !!key });
   const items = data?.items ?? [];
 
@@ -357,7 +370,7 @@ export function CallHistoryButton({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-        title="View call history for this job"
+        title={jobId ? 'View call history for this job' : 'View call history for this number'}
         aria-label="View call history for this job"
         className={cn(
           'inline-flex items-center align-middle text-primary hover:text-brand-600',

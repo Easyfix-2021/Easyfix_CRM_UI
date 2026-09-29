@@ -20,6 +20,7 @@ import { actionFlags } from '@/lib/permissions';
 import { BackLink } from '@/components/ui/back-link';
 import { Button } from '@/components/ui/button';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
 import { EasyfixerStatusDialog } from '@/components/easyfixer/EasyfixerStatusDialog';
 import { EasyfixerBankDialog } from '@/components/easyfixer/EasyfixerBankDialog';
@@ -121,6 +122,8 @@ export default function NewRegistration2ProfilePage() {
     setTab('work');
     setPincodeFocus((n) => n + 1);
   }, []);
+  // Skills live at the top of Work & Coverage, so the tab switch is enough.
+  const openSkillEditor = useCallback(() => { setTab('work'); }, []);
 
   // A stored profile_img whose file 404s must fall back to the initial, not
   // leave a broken-image icon in the header.
@@ -207,6 +210,10 @@ export default function NewRegistration2ProfilePage() {
               <span className="inline-flex items-center gap-1">
                 {maskMobile(row?.efr_no ?? v.header.mobile ?? '')}
                 <CallableMobile efrId={efrId} mobile={v.header.mobile} iconOnly className="text-primary" />
+                {/* Calls made to this technician, recordings included — the
+                    same button the job pages use, scoped by his number
+                    instead of a job. */}
+                <CallHistoryButton mobile={v.header.mobile ?? row?.efr_no ?? undefined} className="text-primary" />
               </span>
               <span>·</span>
               <span>{[row?.city_name, row?.state_name].filter(Boolean).join(', ') || v.header.city_name || '—'}</span>
@@ -267,7 +274,13 @@ export default function NewRegistration2ProfilePage() {
           />
         )}
         {tab === 'onboarding' && (
-          <OnboardingTab efrId={efrId} v={v} onReload={reloadAll} onEditPincodes={openPincodeEditor} />
+          <OnboardingTab
+            efrId={efrId}
+            v={v}
+            onReload={reloadAll}
+            onEditPincodes={openPincodeEditor}
+            onEditSkills={openSkillEditor}
+          />
         )}
         {tab === 'profile' && (
           <ProfileDocumentsTab

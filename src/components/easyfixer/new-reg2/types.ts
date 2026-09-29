@@ -94,10 +94,32 @@ export type VerificationPayload = {
   additional: {
     deep_skills_count: number;
     serviceable_pincodes_count: number;
+    /** Combined skills+pincodes score. Use the split values to score one alone. */
     progress: number;
+    skills_progress: number;
+    pincodes_progress: number;
     is_complete: boolean;
   };
+  /** Videos flagged global in the LMS. Read-only — never gates a decision. */
+  training: {
+    videos: Array<{
+      video_id: number;
+      title: string | null;
+      watched_percentage: number;
+      is_complete: boolean;
+    }>;
+    mandatory_total: number;
+    mandatory_done: number;
+    is_complete: boolean;
+  };
+  /** The vertical this technician was onboarded FOR. A label, not a work fence. */
+  vertical: {
+    vertical_id: number | null;
+    vertical_name: string | null;
+  };
 };
+
+export type VerticalOption = { vertical_id: number; vertical_name: string };
 
 export type ProfileListRow = LifecycleRowFields & {
   efr_id: number;
