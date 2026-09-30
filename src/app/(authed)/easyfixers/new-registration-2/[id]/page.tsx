@@ -145,7 +145,13 @@ export default function NewRegistration2ProfilePage() {
   );
   const active = v?.activation.is_activated ?? (row?.efr_status_label === 'Active' || row?.efr_status_label === 'Idle');
   const currentTab: TabKey = tab ?? (active ? 'overview' : 'onboarding');
-  const strength = row?.efr_profile_perc ?? v?.registrationVerification.overall_progress ?? 0;
+  /*
+   * ONE profile strength. The ring used to read the registration-completeness
+   * number while the Overview card read the five-section one, so the same
+   * technician was 100% at the top and 90% below. Both are the section score
+   * now — if they are both labelled "Profile strength" they have to agree.
+   */
+  const strength = v?.profile_sections.percent ?? 0;
   const leadsTeam = row?.ef_account === 'Master';
 
   const TABS: Array<[TabKey, string]> = [

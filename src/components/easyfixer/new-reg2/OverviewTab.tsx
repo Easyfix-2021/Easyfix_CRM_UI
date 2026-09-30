@@ -9,18 +9,11 @@
  * jobs-by-category / vertical and TQI have no endpoint, so they render an
  * explicit "endpoint pending" placeholder rather than mock data.
  */
-import { useState } from 'react';
-import { formatDate, formatEasyfixerName } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { parseIstDateTime } from '@/lib/format';
-import { useMe } from '@/lib/auth-context';
-import { actionFlags } from '@/lib/permissions';
-import { Button } from '@/components/ui/button';
-import { TechnicianCategoryModal } from '@/app/(authed)/quicksight/technician-performance/TechnicianCategoryModal';
 import { SectionCard, Tile, Meter, LockedBody, inr } from './ui';
 import { JobsCompletedCard } from './JobsCompletedCard';
 import type { VerificationPayload, ProfileListRow, AggregateRow } from './types';
-
-const QUICKSIGHT_KEYS = ['ef-QuickSight', 'isQuickSightTechnicianPerformanceView'] as const;
 
 function tenureFrom(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -47,10 +40,6 @@ export function OverviewTab({
   agg: AggregateRow | null;
   v: VerificationPayload | null;
 }) {
-  const { me } = useMe();
-  const qsFlags = actionFlags(me, QUICKSIGHT_KEYS);
-  const canViewCategories = QUICKSIGHT_KEYS.every((k) => qsFlags[k]);
-  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const efrId = v?.header.efr_id ?? row?.efr_id ?? null;
 
   const pinCount = v?.additional.serviceable_pincodes_count
@@ -78,21 +67,15 @@ export function OverviewTab({
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2 [&>*]:h-full">
         {active && efrId != null ? (
-          <div className="space-y-3">
-            <JobsCompletedCard efrId={efrId} />
-            {canViewCategories && (
-              <Button size="sm" variant="outline" onClick={() => setCategoriesOpen(true)}>
-                Category performance (last 3 months)
-              </Button>
-            )}
-          </div>
+          <JobsCompletedCard efrId={efrId} />
         ) : (
           <SectionCard title="Jobs completed" icon={<span>🧩</span>}>
             <LockedBody />
           </SectionCard>
         )}
+
         <SectionCard
           title="Profile strength"
           icon={<span>📊</span>}
@@ -121,15 +104,6 @@ export function OverviewTab({
         </SectionCard>
       </div>
 
-      {canViewCategories && efrId != null && (
-        <TechnicianCategoryModal
-          txId={efrId}
-          txName={formatEasyfixerName(v?.header.full_name ?? row?.efr_name ?? '')}
-          flag="monthly"
-          open={categoriesOpen}
-          onOpenChange={setCategoriesOpen}
-        />
-      )}
     </div>
   );
 }
