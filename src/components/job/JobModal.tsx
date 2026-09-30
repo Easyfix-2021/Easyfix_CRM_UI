@@ -81,7 +81,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags, hasAction } from '@/lib/permissions';
-import { transitionAllowed } from '@/lib/job-stages';
+import { transitionAllowed, STAGES as JOB_STAGES, STAGE_KEYS } from '@/lib/job-stages';
 import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 import { parseIstDateTime } from '@/lib/format';
@@ -3939,6 +3939,37 @@ const LEGACY_REMARKS_FOR: Record<number, string> = {
 };
 
 /*
+ * job_stage (a tbl_job.job_status code) → the BUCKET name, for the Comments
+ * tab's Stage column.
+ *
+ * WHY THE BUCKET AND NOT statusLabel(). Ops asks this question in bucket words
+ * — "it was rescheduled while it was in Pending to Close". statusLabel() calls
+ * statuses 2 and 20 "In Progress", which is right for a status chip and wrong
+ * here: the operator would read "In Progress" and not connect it to the tab
+ * they were looking at. lib/job-stages' STAGES is the map the tabs themselves
+ * are built from, so this column and the tab bar cannot drift.
+ *
+ * DERIVED, never hand-written — a fourth status map is exactly what
+ * utils/job-status-label.js warns against. Later keys win, which is what we
+ * want for status 15: it appears in 'pending-material' [16, 15] and again in
+ * 'estimate-pending' [15], and the single-status bucket is the more precise
+ * label for it.
+ *
+ * statusLabel is the fallback for statuses no bucket claims (7 Enquiry, for
+ * instance), so an unbucketed stage still reads as something.
+ */
+const STAGE_LABEL_BY_STATUS: Record<number, string> = Object.fromEntries(
+  STAGE_KEYS.flatMap((k) => JOB_STAGES[k].visibleStatuses.map((st) => [st, JOB_STAGES[k].label])),
+);
+
+function jobStageLabel(code: number | null | undefined): string {
+  // Null is "not recorded" (every row before 2026-09-30), NOT status 0 —
+  // rendering those as "Pending for Scheduling" would be inventing history.
+  if (code === null || code === undefined) return '';
+  return STAGE_LABEL_BY_STATUS[code] ?? statusLabel(code);
+}
+
+/*
  * Legacy Date/Time: `dd MMM yyyy HH:mm` ("11 Sep 2026 13:29" — JobDaoImpl.java
  * :2846). Parsed and rendered in IST exactly as formatDate does, so the DB's
  * zone-less IST wall clock comes back unshifted and a pending row's ISO instant
@@ -4191,9 +4222,16 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
           {/*
             Remarks history in the LEGACY CRM's columns and order (2026-09-11 per
             ops; EasyFix_CRM jobCommentList.vm:4-9):
-              Remarks For | Accountable | Reason | Remarks | Remark By | Date/Time
-            from remarks_for | accountable | enum_desc | comments | remark_by |
-            created_on. remark_by is the backend's resolved author (tbl_user name,
+              Remarks For | Stage | Accountable | Reason | Remarks | Remark By | Date/Time
+            from remarks_for | job_stage | accountable | enum_desc | comments |
+            remark_by | created_on.
+
+            Stage is the one addition to the legacy column set (2026-09-30 per
+            ops): legacy had no such column because legacy never needed to ask
+            where a reschedule happened. It renders tbl_job_comment.job_stage,
+            which only reschedule() stamps so far.
+
+            remark_by is the backend's resolved author (tbl_user name,
             else the escalator's stored name, else the technician) — user_name
             alone rendered "Unknown" for every escalation, which never sets
             commented_by. A row with no author at all shows an em dash.
@@ -4212,6 +4250,11 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                     (measured in a static render; wrapping gives 326px). */}
                 <tr>
                   <th className="!text-left w-1 whitespace-nowrap">Remarks For</th>
+                  {/* Stage — the job's status when the remark was filed, so a
+                      reschedule says WHERE in the lifecycle it happened. Sits
+                      beside Remarks For because the two answer the paired
+                      questions: what kind of remark, and at what stage. */}
+                  <th className="!text-left w-1 whitespace-nowrap">Stage</th>
                   <th className="!text-left w-1 whitespace-nowrap">Accountable</th>
                   <th className="!text-left">Reason</th>
                   <th className="!text-left">Remarks</th>
@@ -4227,6 +4270,13 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                   >
                     <td className="!text-left align-top whitespace-nowrap">
                       {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? ''}
+                    </td>
+                    {/* Em dash, not blank, for a row with no recorded stage —
+                        every row written before 2026-09-30 is one, and a blank
+                        cell reads like a rendering bug rather than "we did not
+                        record this back then". */}
+                    <td className="!text-left align-top whitespace-nowrap text-muted-foreground">
+                      {jobStageLabel(c.job_stage) || <span className="italic">—</span>}
                     </td>
                     <td className="!text-left align-top whitespace-nowrap">
                       {c.accountable ?? ''}
