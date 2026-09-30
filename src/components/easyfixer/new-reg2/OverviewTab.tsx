@@ -16,7 +16,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { TechnicianCategoryModal } from '@/app/(authed)/quicksight/technician-performance/TechnicianCategoryModal';
-import { SectionCard, Tile, MeterRow, LockedBody, inr } from './ui';
+import { SectionCard, Tile, Meter, LockedBody, inr } from './ui';
 import { JobsCompletedCard } from './JobsCompletedCard';
 import type { VerificationPayload, ProfileListRow, AggregateRow } from './types';
 
@@ -58,24 +58,6 @@ export function OverviewTab({
   const earnings = agg?.total_earnings ?? row?.total_earnings ?? 0;
   const jobs = agg?.job_count ?? row?.job_count ?? 0;
 
-  /*
-   * The breakdown reads from the SAME completion rule as the ring and the
-   * Accept gate. It used to list the legacy per-section percentages
-   * (efr_professional_details_perc and friends) — columns the new technician
-   * app never writes, so every bar sat at 0 beside a strength of 100%.
-   */
-  const missing = new Set(v?.completion.missing ?? []);
-  const strengthRows: Array<[string, number]> = v
-    ? ([
-        ['Skills', 'Skills'],
-        ['Aadhaar', 'Aadhaar'],
-        ['Profile picture', 'Profile picture'],
-        ['Date of birth', 'Date of birth'],
-        ['Personal details', 'Personal details'],
-        ['Serviceable pincodes', 'Serviceable pincodes'],
-      ] as Array<[string, string]>).map(([label, key]) => [label, missing.has(key) ? 0 : 100])
-    : [];
-
   return (
     <div className="space-y-4">
       {active ? (
@@ -111,10 +93,31 @@ export function OverviewTab({
             <LockedBody />
           </SectionCard>
         )}
-        <SectionCard title="Profile strength" icon={<span>📊</span>} right={<span>{v?.completion.percent ?? row?.computed_profile_perc ?? 0}% complete</span>}>
-          {strengthRows.length
-            ? strengthRows.map(([label, pct]) => <MeterRow key={label} label={label} pct={pct} />)
-            : <p className="text-sm text-muted-foreground">No breakdown available.</p>}
+        <SectionCard
+          title="Profile strength"
+          icon={<span>📊</span>}
+          right={<span>{v?.profile_sections.percent ?? 0}% complete</span>}
+        >
+          {/* Five sections, each scored filled(50) / confirmed(100). The old
+              breakdown listed the mandatory registration fields, which are all
+              100% by the time anyone opens an active technician — it could
+              only ever say "yes". */}
+          {v ? (
+            <div className="space-y-2.5">
+              {v.profile_sections.sections.map((sec) => (
+                <div key={sec.key}>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-[13px] font-medium text-ink-900">{sec.label}</span>
+                    <span className="font-mono text-[13px] tabular-nums text-muted-foreground">{sec.percent}%</span>
+                  </div>
+                  <Meter pct={sec.percent} />
+                  <p className="mt-0.5 text-xs text-muted-foreground">{sec.detail}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No breakdown available.</p>
+          )}
         </SectionCard>
       </div>
 

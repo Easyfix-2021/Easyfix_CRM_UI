@@ -112,6 +112,16 @@ export type VerificationPayload = {
     activated_on: string | null;
     days_to_activate: number | null;
   };
+  /*
+   * Profile strength, five sections scored filled(50)/confirmed(100).
+   * DIFFERENT from `completion` below: this asks how complete an active
+   * technician's record is (bank, training included); `completion` asks
+   * whether a registering technician may be accepted.
+   */
+  profile_sections: {
+    percent: number;
+    sections: Array<{ key: string; label: string; percent: number; detail: string }>;
+  };
   /** The mandatory-field gate, computed once by the backend. */
   completion: {
     percent: number;
