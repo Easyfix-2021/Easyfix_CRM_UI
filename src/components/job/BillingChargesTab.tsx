@@ -70,12 +70,16 @@ export function BillingChargesTab({
   clientId,
   efrId,
   canManage,
+  chargesLocked = false,
 }: {
   jobId: number;
   clientId: number | null;
   efrId: number | null;
   canManage: boolean;
+  /** Checked out (3 / 5): the payout was posted from these rows, so the server refuses charge writes. */
+  chargesLocked?: boolean;
 }) {
+  const canEditCharges = canManage && !chargesLocked;
   const chargesKey = `/admin/jobs/${jobId}/charges`;
   const advancesKey = `/admin/advances?jobId=${jobId}`;
   const { data, loading, error, refetch } = useFetch<JobChargesResponse>(chargesKey);
@@ -254,7 +258,10 @@ export function BillingChargesTab({
       <div className="rounded-lg border bg-card overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-2">
           <div className="text-sm font-semibold text-ink-700">Charges</div>
-          {canManage && (
+          {canManage && chargesLocked && (
+            <div className="text-xs text-muted-foreground">Locked — the job is checked out and its payout is posted.</div>
+          )}
+          {canEditCharges && (
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => setChargeDialog({ mode: 'material', editing: null })}>
                 <Plus className="size-3.5 mr-1" /> Add Material
@@ -280,13 +287,13 @@ export function BillingChargesTab({
                 <th className="!text-right">Tx ₹</th>
                 <th className="!text-right">Client ₹</th>
                 <th className="!text-center">Client Approval?</th>
-                {canManage && <th className="!text-right w-24">Action</th>}
+                {canEditCharges && <th className="!text-right w-24">Action</th>}
               </tr>
             </thead>
             <tbody>
               {lineItems.length === 0 ? (
                 <tr>
-                  <td colSpan={canManage ? 6 : 5} className="!text-center py-4 text-xs text-muted-foreground">
+                  <td colSpan={canEditCharges ? 6 : 5} className="!text-center py-4 text-xs text-muted-foreground">
                     No material, travel, incentive or penalty charges recorded.
                   </td>
                 </tr>
@@ -312,11 +319,11 @@ export function BillingChargesTab({
                         <Switch
                           checked={truthy(m.is_client_approval_needed)}
                           onCheckedChange={(next) => void toggleChargeApproval(m, next)}
-                          disabled={!canManage || busyCharge.has(m.id)}
+                          disabled={!canEditCharges || busyCharge.has(m.id)}
                         />
                       </div>
                     </td>
-                    {canManage && (
+                    {canEditCharges && (
                       <td className="!text-right">
                         <div className="flex justify-end gap-2">
                           <button

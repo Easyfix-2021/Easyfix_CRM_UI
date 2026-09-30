@@ -1678,6 +1678,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             clientId={(job as Record<string, unknown>).fk_client_id != null ? Number((job as Record<string, unknown>).fk_client_id) : null}
             efrId={job.fk_easyfixter_id != null ? Number(job.fk_easyfixter_id) : null}
             canManage={canManageJobCharges}
+            chargesLocked={isJobClosed(Number(job.job_status))}
           />
         </Panel>
       )}
