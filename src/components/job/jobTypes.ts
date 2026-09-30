@@ -21,6 +21,15 @@ export type JobComment = {
    * backend does not send it. */
   remark_by?: string | null;
   /*
+   * The legacy "Remarks For" bucket, decoded by the backend from comment_on
+   * (shapeRow's REMARKS_FOR). Optional for the same reason as remark_by — an
+   * older backend omits it, and both readers fall back to LEGACY_REMARKS_FOR.
+   *
+   * JobModal's RemarkRow ALSO declares this, alongside `accountable`, because
+   * that type additionally covers optimistic rows the tab builds locally.
+   */
+  remarks_for?: string | null;
+  /*
    * tbl_job_comment.job_stage — the JOB's status at the moment the remark was
    * filed, which is what answers "at which stage was this rescheduled".
    *

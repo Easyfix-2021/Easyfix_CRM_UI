@@ -82,7 +82,10 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags, hasAction } from '@/lib/permissions';
-import { transitionAllowed, STAGES as JOB_STAGES, STAGE_KEYS } from '@/lib/job-stages';
+import { transitionAllowed } from '@/lib/job-stages';
+// Shared with JobRemarksView — both render the same comment thread and must
+// label it identically. See lib/job-comment-labels.
+import { LEGACY_REMARKS_FOR, jobStageLabel } from '@/lib/job-comment-labels';
 import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 import { parseIstDateTime } from '@/lib/format';
@@ -3992,46 +3995,6 @@ type RemarkRow = JobComment & {
   remark_by?: string | null;
   _pending?: true;
 };
-
-// Legacy "Remarks For" by comment_on (jobCommentList.vm:15-28), a mirror of the
-// backend's REMARKS_FOR. Only the fallback: for an older backend, and for a
-// pending row, so it reads the same label before and after the refetch.
-const LEGACY_REMARKS_FOR: Record<number, string> = {
-  1: 'Scheduling', 2: 'CheckIn', 3: 'CheckOut', 4: 'Feedback', 6: 'Canceling',
-  8: 'TX Reschedule', 9: 'TX cancelled', 15: 'Approval', 16: 'Unconfirmed', 17: 'Inquiry',
-  18: 'TX Rejected', 19: 'Escalated', 20: 'Re-Opened Job', 21: 'ReScheduled',
-};
-
-/*
- * job_stage (a tbl_job.job_status code) → the BUCKET name, for the Comments
- * tab's Stage column.
- *
- * WHY THE BUCKET AND NOT statusLabel(). Ops asks this question in bucket words
- * — "it was rescheduled while it was in Pending to Close". statusLabel() calls
- * statuses 2 and 20 "In Progress", which is right for a status chip and wrong
- * here: the operator would read "In Progress" and not connect it to the tab
- * they were looking at. lib/job-stages' STAGES is the map the tabs themselves
- * are built from, so this column and the tab bar cannot drift.
- *
- * DERIVED, never hand-written — a fourth status map is exactly what
- * utils/job-status-label.js warns against. Later keys win, which is what we
- * want for status 15: it appears in 'pending-material' [16, 15] and again in
- * 'estimate-pending' [15], and the single-status bucket is the more precise
- * label for it.
- *
- * statusLabel is the fallback for statuses no bucket claims (7 Enquiry, for
- * instance), so an unbucketed stage still reads as something.
- */
-const STAGE_LABEL_BY_STATUS: Record<number, string> = Object.fromEntries(
-  STAGE_KEYS.flatMap((k) => JOB_STAGES[k].visibleStatuses.map((st) => [st, JOB_STAGES[k].label])),
-);
-
-function jobStageLabel(code: number | null | undefined): string {
-  // Null is "not recorded" (every row before 2026-09-30), NOT status 0 —
-  // rendering those as "Pending for Scheduling" would be inventing history.
-  if (code === null || code === undefined) return '';
-  return STAGE_LABEL_BY_STATUS[code] ?? statusLabel(code);
-}
 
 /*
  * Legacy Date/Time: `dd MMM yyyy HH:mm` ("11 Sep 2026 13:29" — JobDaoImpl.java
