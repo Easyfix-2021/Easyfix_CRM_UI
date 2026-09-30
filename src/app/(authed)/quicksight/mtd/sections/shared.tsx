@@ -187,10 +187,35 @@ function renderCell<T, K extends string>(row: T, c: Column<T, K>): ReactNode {
 export function TableFrame({
   scroll,
   dim,
+  label,
   children,
 }: {
   scroll?: boolean;
   dim?: boolean;
+  /**
+   * Makes the scroll box a NAMED, FOCUSABLE region.
+   *
+   * A table wider than its frame can only be read by scrolling that box
+   * sideways, and a plain `overflow-x-auto` div is not in the tab order at
+   * all — a viewer working without a mouse or trackpad cannot reach the
+   * columns past the right edge. `tabIndex={0}` gives the box a tab stop so
+   * the arrow keys scroll it, and a region is only worth landing on if it has
+   * an accessible name, which is what this prop carries.
+   *
+   * Opt-in, and deliberately so: most tables on this tab fit inside their
+   * frame and would be taking a tab stop for nothing. THE RULE IS "every table
+   * on the client-report card", not "day-wise blocks only" — the card is one
+   * document meant to be read straight through, and a reader who can tab into
+   * its wide day-wise tables but not into the matrix two inches below them has
+   * a worse time than one who tabs through all of them. So the day-wise blocks
+   * (one column per day, wider than the frame in any ordinary month), Jobs By
+   * Status And Aging, and Open Orders By Tier all pass it, the last two despite
+   * usually fitting. Those keep the
+   * stop on the rare window narrow enough to fit, because the alternative is
+   * measuring the table on every resize, and a tab stop that is sometimes
+   * there is worse to use than one that always is.
+   */
+  label?: string;
   children: ReactNode;
 }) {
   return (
@@ -200,6 +225,7 @@ export function TableFrame({
         scroll && 'max-h-[420px] overflow-y-auto',
         dim && 'opacity-60',
       )}
+      {...(label ? { role: 'region', 'aria-label': label, tabIndex: 0 } : null)}
     >
       <table className={cn('data-table w-full', scroll && 'head-sticky')}>{children}</table>
     </div>

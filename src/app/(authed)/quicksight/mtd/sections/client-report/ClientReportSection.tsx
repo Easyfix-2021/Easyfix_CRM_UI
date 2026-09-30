@@ -24,22 +24,37 @@
  * report. No client, or several, and the card says so and explains what to do,
  * rather than rendering a document about an unnamed party.
  *
- * ⚠ THREE FIGURES ARE NOT WIRED AND THE DOCUMENT SAYS SO IN PLACE.
+ * ⚠ EVERY FIGURE ON THIS DOCUMENT IS WIRED. Nothing renders as a placeholder
+ * any more — Tier was the last one, and /mtd/report now carries the export's
+ * Tier column, so section 6 is a real matrix. If a figure with no backend is
+ * ever added back, it is shown as an explicit "not wired yet" state naming the
+ * missing field and NEVER as 0: a zero there would be a claim nobody has
+ * measured, and it is the kind of number that survives a screenshot into a
+ * client's inbox.
  *
- *   Escalated   no backend field (the MIS reads Is Escalated from the export)
- *   SDA %       no backend field (the MIS reads SDA Status)
- *   Tier        no backend field, so the whole tier matrix is a placeholder
+ *   ⚠ SECTION 6 IS OPEN JOBS ONLY, AND ITS COPY HAS TO KEEP SAYING SO. Every
+ *   other block on this document is counted over jobs in hand; the tier matrix
+ *   is not. Its total is `tierAging.grand`, which the backend asserts equals
+ *   `kpis.open` under every filter — that is what lets its subtitle claim
+ *   "same open jobs as the tiles at the top". Any wording that lets it be read
+ *   as all jobs by tier would overstate every row by the closures.
  *
- *   They render as "Not wired yet" on a dashed tile, NEVER as 0. A zero in the
- *   Escalated tile would be a claim that nothing was escalated this month,
- *   which nobody has measured, and it is the kind of number that survives a
- *   screenshot into a client's inbox. See ./derive UNWIRED.
+ *   ESCALATED AND SDA % WERE PLACEHOLDERS TOO AND ARE MEASUREMENTS NOW:
+ *   /mtd/report reads Is Escalated and SDA Status from the same export columns
+ *   the MIS does. Two things about them must not drift — Escalated is divided
+ *   by JOBS IN HAND and never by completed jobs (the template counts it across
+ *   completed, cancelled and open alike, and its tile reads "of jobs in hand",
+ *   so labelling it against completed would overstate it several times over),
+ *   and SDA % is divided by completed, exactly as TAT % is.
  *
- *   A fourth difference is subtler and is handled differently: v2 counts
- *   COMPLETED on the App CheckIn Date and /mtd/report counts it on the closure
- *   date. That count is REAL, so it keeps its number and carries a visible
- *   basis note instead of being blanked — deleting a true figure would be its
- *   own kind of dishonesty.
+ *   THE FOURTH DIFFERENCE IS NOW SHOWN RATHER THAN CAVEATED. v2 counts
+ *   COMPLETED on the App CheckIn Date and this report counts it on the closure
+ *   date. Both counts are real and both are here. The TILE keeps the closure
+ *   basis, because Completion %, TAT % and SDA % are all measured over that
+ *   same set of closures and a tile disagreeing with its own row would be a
+ *   worse fault than the mismatch it fixed; the check-in figure sits directly
+ *   beneath it under its own label, as the number to compare against the
+ *   owner's Word file, and says so when the window makes it only a floor.
  *
  * ⚠ THE AGING BANDS HERE ARE THE MATRIX'S SIX — 0–3 / 4–5 / 6–9 / 10–15 /
  * 16–30 / over 30 — and they are read from `statusAging.buckets`, never
@@ -56,25 +71,27 @@ import { Download, Info, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/utils';
 import type { MtdReportResponse } from '../../types';
-import { SectionCard, SubHeading, num, pct1 } from '../shared';
+import { SectionCard, SubHeading, TableFrame, num, pct1, pctFraction } from '../shared';
+import { ReconcileNote } from '../report-parts';
 import {
-  UNWIRED,
-  COMPLETED_BASIS_NOTE,
-  COMPLETED_BASIS_SHORT,
+  BASIS_LABEL,
+  ESCALATED_DENOMINATOR,
   buildHighlights,
   clientAgingRows,
+  completedBases,
   dayBlock,
+  escalatedParts,
   metaParts,
   resolveClientScope,
 } from './derive';
 import {
-  BasisNote,
   ClientKpiTile,
+  CompletedBasisPanel,
   DayWiseBlock,
   DocHeading,
-  UnwiredPanel,
-  UnwiredValue,
+  EscalatedSplit,
   C_COMPLETED,
+  C_COMPLETED_CHECKIN,
   C_COMPLETED_LINE,
   C_CREATED,
   C_CREATED_LINE,
@@ -155,6 +172,18 @@ function ClientDocument({
   const created = useMemo(() => dayBlock(report.daily, 'created'), [report.daily]);
   const completed = useMemo(() => dayBlock(report.daily, 'completed'), [report.daily]);
   const agingRows = useMemo(() => clientAgingRows(report.statusAging), [report.statusAging]);
+  /*
+   * The tier matrix, rendered exactly as it arrives. No useMemo and no derive
+   * helper beside the others: there is nothing to compute — the backend has
+   * already bucketed, totalled and SORTED it into the template's order — and
+   * wrapping the response in a memo would only suggest there is.
+   */
+  const tier = report.tierAging;
+  const escalated = useMemo(() => escalatedParts(report.escalatedBySet), [report.escalatedBySet]);
+  const bases = useMemo(
+    () => completedBases(k.completed, report.completedOnCheckin),
+    [k.completed, report.completedOnCheckin],
+  );
 
   /*
    * The disabled control. `title` carries the reason on hover and `aria-label`
@@ -193,35 +222,72 @@ function ClientDocument({
         <p className="text-xs text-muted-foreground">
           {[...meta, `Data as of ${formatDate(report.meta.readAt)}`].join('  ·  ')}
         </p>
+        {/*
+          * The reconciliation warning IN THE CARD, the way sections 5, 8 and 9
+          * carry their own. The tab prints a banner at the very top when a check
+          * fails, and that banner is exactly the part that does not travel: this
+          * card is built to be screenshotted and sent to a client, so a figure
+          * the server has already flagged as not adding up would otherwise
+          * arrive in an inbox with nothing marking it.
+          *
+          * All four of the card's checks together, at the top rather than beside
+          * the section each belongs to — a reader cannot be expected to know
+          * which figure 'sda' refers to, and by the time they have scrolled to
+          * section 6 they have already read the tiles.
+          */}
+        <ReconcileNote
+          checks={report.checks}
+          keys={['escalated', 'sda', 'completedOnCheckin', 'tierAging']}
+        />
       </header>
 
       {/* ── 1. the seven KPIs ───────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7">
-        <ClientKpiTile label="Orders Created" value={num(k.ordersCreated)} />
-        <ClientKpiTile label="Completed" value={num(k.completed)} />
-        <ClientKpiTile label="Cancelled" value={num(k.cancelled)} />
-        <ClientKpiTile label="Escalated" unwired value={<UnwiredValue why={UNWIRED.escalated} />} />
-        <ClientKpiTile label="Completion %" value={pct1(k.completionPct)} />
-        <ClientKpiTile label="TAT %" value={pct1(k.tatPct)} />
-        <ClientKpiTile label="SDA %" unwired value={<UnwiredValue why={UNWIRED.sdaPct} />} />
+        <ClientKpiTile label="Orders Created" value={num(k.ordersCreated)} note="tickets raised in these dates" />
+        <ClientKpiTile label="Completed" value={num(k.completed)} note={`by ${BASIS_LABEL.closure.toLowerCase()}`} />
+        <ClientKpiTile label="Cancelled" value={num(k.cancelled)} note="by cancel date" />
+        {/*
+          * Escalated is a COUNT here, as it is in the Word file's KPI strip,
+          * with the percentage underneath. The sub-line says "of jobs in hand"
+          * and nothing else may be written there: the denominator is completed
+          * + cancelled + open, so "of completed jobs" would overstate this by
+          * roughly three to one. The wording comes from ./derive so it cannot
+          * be retyped wrongly at this call site.
+          */}
+        <ClientKpiTile
+          label="Escalated"
+          value={num(k.escalated)}
+          note={`${pct1(k.escalatedPct)} ${ESCALATED_DENOMINATOR}`}
+        />
+        <ClientKpiTile
+          label="Completion %"
+          value={pct1(k.completionPct)}
+          note={`${pctFraction(k.completionPct)} completed or still open`}
+        />
+        <ClientKpiTile label="TAT %" value={pct1(k.tatPct)} note={`${pctFraction(k.tatPct)} completed in TAT`} />
+        <ClientKpiTile label="SDA %" value={pct1(k.sdaPct)} note={`${pctFraction(k.sdaPct)} completed in SDA`} />
       </div>
 
       {/*
-        * Said once, under the tiles: which two of the seven are placeholders,
-        * and the one difference of basis. A reviewer comparing this against
-        * the owner's Word file needs all three facts before the first figure
-        * they check disagrees.
+        * Said once, under the tiles: the three denominators, because three of
+        * the seven are percentages of three different things and a reviewer
+        * comparing this against the owner's Word file needs to know which.
+        * The escalation split follows, which is what makes the Escalated
+        * denominator self-evident rather than something to take on trust.
         */}
       <div className="space-y-2">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">Escalated and SDA % are not wired.</span> The MIS reads
-          both from its export (Is Escalated, SDA Status) and this tab&rsquo;s report endpoint carries neither, so
-          they are shown as placeholders rather than as zeroes. Everything else on this row is live.
-          {' '}Completion % is (completed + open) over the {num(k.inHand)} jobs in hand, and TAT % is over the
-          {' '}{num(k.completed)} completed — the same two definitions the tiles at the top of the tab use.
+          <span className="font-medium text-foreground">All seven figures are live.</span> Completion % is
+          (completed + open) over the {num(k.inHand)} jobs in hand; TAT % and SDA % are both over the
+          {' '}{num(k.completed)} completed, which is the rule the MIS uses for each of them. Escalated is
+          counted across every job in hand — completed, cancelled and open alike — so its percentage is over
+          those {num(k.inHand)} and not over the completed jobs.
         </p>
-        <BasisNote>{COMPLETED_BASIS_NOTE}</BasisNote>
+        <EscalatedSplit parts={escalated} total={k.escalated} />
       </div>
+
+      {/* ── 1a. Completed, on both date bases ───────────────────────────── */}
+      <CompletedBasisPanel bases={bases} />
 
       {/* ── 2. key highlights ───────────────────────────────────────────── */}
       <section className="space-y-2">
@@ -259,17 +325,36 @@ function ClientDocument({
         weekly={weekly}
       />
 
-      {/* ── 4. jobs completed ───────────────────────────────────────────── */}
+      {/*
+        * ── 4. jobs completed, on both bases ──────────────────────────────
+        *
+        * TWO BARS PER DAY, the same jobs on two dates: the day each closure
+        * was audited, and the day the technician checked in. v2 plots only the
+        * second, so the sky bars are the ones that should line up with the
+        * owner's chart; the emerald bars are what this tab has always drawn.
+        * They are side by side, never stacked — every job is in both series,
+        * so a stack would draw twice the month.
+        */}
       <DayWiseBlock
         title="Jobs Completed"
-        note={`${weekly ? 'Week-wise' : 'Day-wise'} · jobs closed, by closure date`}
+        note={`${weekly ? 'Week-wise' : 'Day-wise'} · the same closures on both dates`}
         block={completed}
-        metricLabel="Completed"
+        metricLabel={BASIS_LABEL.closure}
         barColor={C_COMPLETED}
         lineColor={C_COMPLETED_LINE}
         weekly={weekly}
+        compare={{
+          label: BASIS_LABEL.checkin,
+          color: C_COMPLETED_CHECKIN,
+          total: completed.altTotal ?? 0,
+          caveat: bases.floor
+            ? 'The App CheckIn bars are a floor over this window, not a count: it ends in the past, and a job '
+              + 'that checked in inside these dates but was audited after them was never read by this report. '
+              + 'On the month-to-date view the two series cover exactly the same jobs.'
+            : 'A job that checked in on one day and was audited on the next sits in a different bar on each '
+              + 'basis, which is the whole of the difference between the two totals.',
+        }}
       />
-      <BasisNote>{COMPLETED_BASIS_SHORT}</BasisNote>
 
       {/* ── 5. jobs by status and aging ─────────────────────────────────── */}
       <section className="space-y-3">
@@ -282,33 +367,32 @@ function ClientDocument({
         >
           Jobs By Status And Aging
         </DocHeading>
-        <div className="overflow-x-auto rounded-md border">
-          <table className="data-table w-full">
-            <thead>
-              <tr>
-                <th className="stick-col-head stick-left !text-left">Status</th>
-                {/* The bands are the response's, never a constant in this folder. */}
-                {report.statusAging.buckets.map((b) => (
-                  <th key={b.key} className="!text-right" title={`${b.label} open`}>{b.short}</th>
-                ))}
-                <th className="!text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agingRows.map((row) => (
-                <tr key={row.status}>
-                  <td className="stick-col stick-left whitespace-nowrap font-medium">{row.label}</td>
-                  {row.counts.map((v, i) => (
-                    <td key={report.statusAging.buckets[i]?.key ?? i} className="!text-right tabular-nums">
-                      {num(v)}
-                    </td>
-                  ))}
-                  <td className="!text-right tabular-nums font-semibold">{num(row.total)}</td>
-                </tr>
+        <TableFrame label="Jobs by status and aging — scrollable">
+          <caption className="sr-only">Jobs by status and aging</caption>
+          <thead>
+            <tr>
+              <th className="stick-col-head stick-left !text-left">Status</th>
+              {/* The bands are the response's, never a constant in this folder. */}
+              {report.statusAging.buckets.map((b) => (
+                <th key={b.key} className="!text-right" title={`${b.label} open`}>{b.short}</th>
               ))}
-            </tbody>
-          </table>
-        </div>
+              <th className="!text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {agingRows.map((row) => (
+              <tr key={row.status}>
+                <td className="stick-col stick-left whitespace-nowrap font-medium">{row.label}</td>
+                {row.counts.map((v, i) => (
+                  <td key={report.statusAging.buckets[i]?.key ?? i} className="!text-right tabular-nums">
+                    {num(v)}
+                  </td>
+                ))}
+                <td className="!text-right tabular-nums font-semibold">{num(row.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </TableFrame>
         <p className="text-xs leading-relaxed text-muted-foreground">
           Days open is the export&rsquo;s Aging column; for open jobs it is the days so far, so those bands keep
           filling as the window ages.
@@ -317,12 +401,139 @@ function ClientDocument({
 
       {/* ── 6. open orders by tier and days open ────────────────────────── */}
       <section className="space-y-3">
-        <DocHeading>Open Orders By Tier And Days Open</DocHeading>
-        <UnwiredPanel title="Open orders by tier" why={UNWIRED.tierAging}>
-          It will be the same six bands as the table above, one row per tier with a Total column and a Total
-          row, over the {num(k.open)} jobs still open in this window. Those open jobs are already counted — only
-          the tier they belong to is missing.
-        </UnwiredPanel>
+        <DocHeading
+          /*
+           * The template's subtitle (template.html:1791), with its SECOND
+           * CLAUSE RE-POINTED — deliberately, and this is the one place this
+           * document does not quote the MIS word for word.
+           *
+           * The template says "…· same open jobs as the tiles at the top",
+           * which is true on the MIS dashboard because an OPEN COUNT IS ONE OF
+           * ITS TILES. It is not one of ours: the seven tiles on this card are
+           * Orders Created, Completed, Cancelled, Escalated, Completion %,
+           * TAT % and SDA %, and not one of them is an open figure. Shipping
+           * the sentence unchanged would point a reader at a number that is not
+           * on the page, on a card whose whole job is to be screenshotted into
+           * a client's inbox.
+           *
+           * So it points instead at the figure that IS here and IS the same
+           * jobs — the Open row of Jobs By Status And Aging directly above,
+           * which prints `kpis.open`. The claim the template was making (this
+           * matrix splits exactly the open jobs the document already showed) is
+           * preserved; only the landmark changes. The backend asserts the
+           * identity behind it — `tierAging.grand === kpis.open` under every
+           * filter, as `checks.tierAging`.
+           *
+           * "OPEN jobs" in the first clause is load-bearing and stays verbatim:
+           * this matrix is the only block on the document NOT counted over jobs
+           * in hand, and reading it as all jobs by tier would overstate every
+           * row by the closures — roughly three to one in an ordinary month.
+           */
+          note={
+            `${num(tier.grand)} open jobs by tier and days open so far · the same open jobs as the Open row above`
+          }
+        >
+          Open Orders By Tier And Days Open
+        </DocHeading>
+        <TableFrame label="Open orders by tier and days open — scrollable">
+          <caption className="sr-only">Open orders by tier and days open</caption>
+          <thead>
+            <tr>
+              <th className="stick-col-head stick-left !text-left">Tier</th>
+              {/* The response's bands again — the same six, from the same place. */}
+              {tier.buckets.map((b) => (
+                <th key={b.key} className="!text-right" title={`${b.label} open`}>{b.short}</th>
+              ))}
+              <th className="!text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tier.rows.length === 0 ? (
+              <tr>
+                <td className="text-muted-foreground" colSpan={tier.buckets.length + 2}>
+                  No open jobs in this view.
+                </td>
+              </tr>
+            ) : (
+              /*
+               * IN THE ORDER THE BACKEND SENT THEM. The rows arrive sorted the
+               * template's way — real tiers by natural-numeric collation, so
+               * 'Tier - 2' precedes 'Tier - 10', then the blank-tier row last.
+               * Sorting here would be a second opinion, and a lexical one would
+               * disagree with the owner's .docx on any client with ten tiers.
+               *
+               * The blank row is marked with the backend's `blank` FLAG and not
+               * by matching its label: '(Tier not given)' is wording the owner
+               * can change, and a string match would quietly stop pinning it.
+               */
+              tier.rows.map((row) => (
+                <tr key={row.tier} className={row.blank ? 'text-muted-foreground' : undefined}>
+                  <td className="stick-col stick-left whitespace-nowrap font-medium">{row.tier}</td>
+                  {row.counts.map((v, i) => (
+                    <td key={tier.buckets[i]?.key ?? i} className="!text-right tabular-nums">
+                      {num(v)}
+                    </td>
+                  ))}
+                  <td className="!text-right tabular-nums font-semibold">{num(row.total)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+          {/*
+            * UNCONDITIONAL, an empty table included, because the template is
+            * unconditional: sortableTable appends `foot` OUTSIDE its empty-rows
+            * branch (template.html:1760-1768) and renderTierAging always passes
+            * one, so the MIS document prints "No open jobs in this view." AND a
+            * Total row of zeroes. Gating it here would put a row in the owner's
+            * Word file that is missing from the screen, which is the first
+            * difference anyone comparing the two would land on.
+            */}
+          <tfoot>
+            <tr className="font-semibold">
+              <td className="stick-col stick-left whitespace-nowrap">Total</td>
+              {tier.columnTotals.map((v, i) => (
+                <td key={tier.buckets[i]?.key ?? i} className="!text-right tabular-nums">
+                  {num(v)}
+                </td>
+              ))}
+              <td className="!text-right tabular-nums">{num(tier.grand)}</td>
+            </tr>
+          </tfoot>
+        </TableFrame>
+        {/*
+          * Two things this paragraph deliberately does NOT do.
+          *
+          * It does not quote the blank row's own label: that is the backend's
+          * wording, it is already printed in the row itself, and a second copy
+          * in prose is a second thing to go stale the day the owner changes it.
+          *
+          * It does not say "the tiles", for the reason set out on the subtitle
+          * above — there is no open figure among this card's seven tiles, so
+          * the landmark is the Open row of the table above, which is on the
+          * page and is the same count.
+          *
+          * And the number it prints is `tier.grand`, NOT `kpis.open`, even
+          * though the whole sentence asserts they are equal. Printing the other
+          * one would put two different figures on one screen the day the
+          * identity breaks — subtitle and Total saying one thing, this line
+          * saying another — instead of one visibly wrong claim with the
+          * reconciliation warning already at the top of the card.
+          */}
+        {/*
+          * ONLY WHEN THERE ARE ROWS. Every clause below describes furniture —
+          * a blank-tier row, a Total — that an empty table does not have, and
+          * on a client with nothing open it would be explaining a table that
+          * says "No open jobs in this view." The empty state is already the
+          * whole truth in that case.
+          */}
+        {tier.rows.length > 0 && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Tier is the tier of the job&rsquo;s city, and the bands are the same six as the table above. A job
+            whose city carries no tier gets its own row at the foot rather than being dropped, so the Total is
+            all {num(tier.grand)} open jobs — the same figure the Open row above shows. Completed and
+            cancelled jobs are not in this table at all.
+          </p>
+        )}
       </section>
     </SectionCard>
   );

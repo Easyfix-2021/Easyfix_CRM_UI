@@ -18,75 +18,185 @@
  * Completed, Cancelled, Completion %, TAT % and Cancelled %. The client
  * document drops Cancelled % and adds ESCALATED and SDA % — so it is
  * Orders Created, Completed, Cancelled, Escalated, Completion %, TAT %,
- * SDA %. Two of those seven have no backend at all; see UNWIRED below.
+ * SDA %. ALL SEVEN ARE LIVE: /mtd/report now reads Is Escalated and SDA Status
+ * from the same export columns the MIS does.
  *
- * ⚠ THREE FIGURES THIS LAYOUT CANNOT HONESTLY FILL IN YET, and the rule that
- * governs them:
+ * ⚠ ESCALATED IS DIVIDED BY JOBS IN HAND, NOT BY COMPLETED JOBS. In both of
+ * the template's KPI passes the count sits OUTSIDE the `s === "C"` branch —
  *
- *   ESCALATED        v2 counts jobs with `Is Escalated = 1` in the export.
- *                    /mtd/report carries no such field.
- *   SDA %            v2 counts completed jobs with `SDA Status = 1`, over
- *                    completed — the same shape as TAT %. No such field.
- *   COMPLETED (DATE) v2 moved Completed onto the App CheckIn Date;
- *                    /mtd/report still counts it on the closure date. The
- *                    COUNT is real, the BASIS is the older one.
- *   TIER             "Open orders by tier and days open" needs the export's
- *                    Tier column, which /mtd/report does not read.
+ *     if (C.esc[i] === 1) esc++;            // completed, cancelled AND open
+ *     if (s === "C"){ c++; if (C.tat[i] === 1) t++; if (C.sda[i] === 1) sd++; }
+ *     es.append(el("b", null, pct1(esc, total)), " of jobs in hand");
  *
- *   A missing figure is rendered as an explicit "Not wired yet" state and is
- *   NEVER rendered as 0, as an en dash, or as a number borrowed from a
- *   neighbouring metric. A zero here would be a claim that no job was
- *   escalated, which nobody has measured. The one figure that IS real but
- *   counted on the wrong date (Completed) keeps its number and carries a
- *   visible basis note instead — deleting a true count would be its own kind
- *   of lie.
+ * — so its denominator is completed + cancelled + open, and TAT % and SDA %
+ * are the two that divide by completed. An escalation is a complaint about a
+ * job and the jobs people escalate hardest are the ones still OPEN, so reading
+ * this over closures would both hide those rows and overstate the rate several
+ * times over. The wording is pinned in ESCALATED_DENOMINATOR below rather than
+ * typed out at a call site, so it cannot drift into "of completed jobs".
+ *
+ * ⚠ COMPLETED HAS TWO DATE BASES AND THE DOCUMENT SHOWS BOTH.
+ *
+ *   CLOSURE DATE     `kpis.completed`, the Audit & Checkout day. What the tab
+ *                    has always shipped, and the only basis the rest of the
+ *                    KPI row is consistent with: `tatPct.den`, `sdaPct.den`
+ *                    and `completionPct` all count THIS set of closures.
+ *   APP CHECKIN DATE `completedOnCheckin.count`, the day the technician
+ *                    arrived. The basis the owner's MIS v2 moved to (prep.py,
+ *                    27 Sep), and therefore the number to compare against
+ *                    their Word file.
+ *
+ *   The tile keeps the CLOSURE basis, so the seven KPIs cannot contradict one
+ *   another, and the check-in figure is shown beside it under its own label
+ *   rather than buried — see completedBases(). It is never presented as
+ *   v2's figure when `completedOnCheckin.complete` is false: a window ending in
+ *   the past can only yield a floor, because a job that checked in inside it
+ *   but was audited after it was never read by this report at all.
+ *
+ * ⚠ EVERY FIGURE ON THIS DOCUMENT IS NOW A MEASUREMENT. Nothing here is a
+ * placeholder any more and there is no `UNWIRED` map: Escalated, SDA % and —
+ * last of the three — the tier matrix are all read from /mtd/report. The rule
+ * that map existed to enforce still governs whatever is added next: a figure
+ * nobody has measured is rendered as an explicit "not wired yet" state naming
+ * the missing field, and NEVER as 0, as an en dash, or as a number borrowed
+ * from a neighbouring metric. A zero there would be a claim nobody has
+ * measured, and it is the kind of number that survives a screenshot into a
+ * client's inbox.
  *
  * ⚠ THE AGING BANDS ARE THE MATRIX'S SIX, READ FROM THE RESPONSE. 0–3 / 4–5 /
  * 6–9 / 10–15 / 16–30 / over 30. They are NOT the four bands of the tab's
  * By Days Open card (0–2 / 3–5 / 6–9 / over 9), and no constant in this file
- * writes either list down — `statusAging.buckets` is the only source, exactly
- * as StatusAgingSection does it.
+ * writes either list down — `statusAging.buckets` and `tierAging.buckets` are
+ * the only sources, exactly as StatusAgingSection does it.
+ *
+ * ⚠ THE TIER MATRIX NEEDS NO DERIVATION AND HAS NONE HERE. Its rows arrive
+ * already split, already totalled and ALREADY SORTED into the template's order
+ * (real tiers by natural-numeric collation, blank tier last), so the renderer
+ * walks them in order. A sort or a re-total in this file would be a second
+ * opinion about numbers the .docx and the screen must agree on.
  */
 
 import type {
   MtdCityRow,
+  MtdCompletedOnCheckin,
   MtdDaily,
+  MtdEscalatedBySet,
   MtdFilterOption,
   MtdPct,
   MtdReportResponse,
   MtdStatusAging,
 } from '../../types';
 
-/* ── the figures with no backend ──────────────────────────────────────────── */
+/* ── the two basis rules the copy must never get wrong ────────────────────── */
 
 /**
- * Why each unwired figure is unwired, in the words shown to the reader.
+ * The words that follow the Escalated percentage, written down ONCE.
  *
- * Held as one map rather than scattered through the markup so that wiring one
- * of them is a deletion here plus a real value at the call site, and so the
- * gap list in a handover is this object.
+ * `kpis.escalatedPct` divides by jobs in hand, so this is the only phrase that
+ * describes it truthfully. Saying "of completed jobs" beside the same number
+ * would overstate the rate by roughly the ratio of jobs in hand to closures —
+ * three to one is ordinary on this report — and it is the kind of sentence
+ * that ends up quoted back in a client meeting.
  */
-export const UNWIRED = {
-  escalated:
-    'Escalated has no backend field yet — the MIS reads Is Escalated from the export and /mtd/report does not carry it.',
-  sdaPct:
-    'SDA % has no backend field yet — the MIS reads SDA Status from the export and /mtd/report does not carry it.',
-  tierAging:
-    'Tier has no backend field yet — the MIS reads the export’s Tier column and /mtd/report does not carry it, so these open jobs cannot be split by tier here.',
+export const ESCALATED_DENOMINATOR = 'of jobs in hand';
+
+/** The two names the document uses for the two dates a closure can be counted on. */
+export const BASIS_LABEL = {
+  closure: 'Closure Date',
+  checkin: 'App CheckIn Date',
 } as const;
 
-/**
- * The basis mismatch on Completed. Not an unwired figure — the count is real —
- * but the date it is counted on is not the one v2 asks for, and a reader
- * comparing this against the owner's Word file must be told that before they
- * file the difference as a bug.
- */
-export const COMPLETED_BASIS_NOTE =
-  'Counted on the closure date. The MIS v2 counts completed jobs on their App CheckIn Date, which /mtd/report does not read, so this figure and its chart can differ from the owner’s Word file by the jobs that checked in and closed on different days.';
+/* ── escalated: where the escalations are ─────────────────────────────────── */
 
-/** The same caveat, said again beside the Jobs Completed chart without repeating the whole paragraph. */
-export const COMPLETED_BASIS_SHORT =
-  'These bars are jobs closed on each day. The MIS v2 plots them on their App CheckIn Date instead, so a job that checked in on one day and closed on the next sits in a different bar there.';
+/** One set's share of `kpis.escalated`, ready to render as a row. */
+export type EscalatedPart = { key: keyof MtdEscalatedBySet; label: string; count: number };
+
+/**
+ * The Escalated count split across the three sets it is counted over.
+ *
+ * Shown because the split is the argument for the denominator: on a normal
+ * month most of the escalations sit on OPEN jobs, and a reader who can see
+ * that will not ask why the tile is not divided by completed. The three always
+ * sum to `kpis.escalated` — the server checks that identity itself and reports
+ * it as `checks.escalated`.
+ *
+ * The order is the KPI row's own — completed, cancelled, open — not sorted by
+ * size, so the three counts do not swap places between two windows.
+ */
+export function escalatedParts(bySet: MtdEscalatedBySet): EscalatedPart[] {
+  return [
+    { key: 'completed', label: 'Completed', count: bySet.completed },
+    { key: 'cancelled', label: 'Cancelled', count: bySet.cancelled },
+    { key: 'open', label: 'Open', count: bySet.open },
+  ];
+}
+
+/* ── completed: the two date bases, side by side ──────────────────────────── */
+
+/**
+ * One closure the check-in basis could not place inside the window, and why.
+ *
+ * These are not lost jobs: every one of them is counted in `kpis.completed`,
+ * on its closure day. They are the arithmetic that explains the gap between
+ * the two figures, which is the first thing anybody asks when the document
+ * disagrees with the owner’s file by a handful.
+ */
+export type HeldClosure = { key: string; label: string; count: number };
+
+/** Both ways of counting the same closures, with everything needed to explain the gap. */
+export type CompletedBases = {
+  /** `kpis.completed` — the tile's figure, counted on the Audit & Checkout day. */
+  closure: number;
+  /** `completedOnCheckin.count` — v2's figure, counted on the App CheckIn day. */
+  checkin: number;
+  /** checkin − closure. Negative when jobs checked in before the window opened. */
+  delta: number;
+  /**
+   * TRUE WHEN `checkin` IS ONLY A FLOOR. The window ends in the past, so a job
+   * that checked in inside it and was audited after it never reached this
+   * report — it is not in the completed set to be re-dated. The figure must be
+   * presented as "at least", never as v2's.
+   */
+  floor: boolean;
+  /** The closures the check-in basis put outside the window, by reason. Non-zero rows only. */
+  held: HeldClosure[];
+  /** Closures whose check-in cell was blank, so both bases used the closure day. */
+  fellBack: number;
+};
+
+/**
+ * The Completed figure on both bases, from the response and nothing else.
+ *
+ * WHY BOTH ARE KEPT. v2 derives a single basis column and filters its whole
+ * file through it, so moving Completed onto the check-in date there also moves
+ * which jobs are in the month for TAT %, SDA %, the city split and the aging
+ * bands. /mtd/report deliberately did not follow it that far: `kpis.completed`
+ * stays on the closure date, and the check-in count ships beside it. Showing
+ * only the check-in number here would leave the tile disagreeing with
+ * `tatPct.den` and `sdaPct.den` in the same row, which is a worse lie than the
+ * one it would fix.
+ *
+ * `held` is filtered to the non-zero reasons: a list of three zeroes explains
+ * nothing and reads as though something is wrong.
+ */
+export function completedBases(
+  completed: number,
+  onCheckin: MtdCompletedOnCheckin,
+): CompletedBases {
+  const held: HeldClosure[] = [
+    { key: 'beforeWindow', label: 'Checked in before this window', count: onCheckin.beforeWindow },
+    { key: 'afterWindow', label: 'Checked in after this window', count: onCheckin.afterWindow },
+    { key: 'unknownDate', label: 'No usable date on either basis', count: onCheckin.unknownDate },
+  ];
+  return {
+    closure: completed,
+    checkin: onCheckin.count,
+    delta: onCheckin.count - completed,
+    floor: !onCheckin.complete,
+    held: held.filter((h) => h.count > 0),
+    fellBack: onCheckin.noCheckinDate,
+  };
+}
 
 /* ── small shared helpers ─────────────────────────────────────────────────── */
 
@@ -332,27 +442,52 @@ export type DayCell = {
   from: string;
   to: string;
   value: number;
+  /**
+   * The same bucket on the SECOND basis, or null when the block has only one.
+   *
+   * Only the completed block has one: those closures placed on their App
+   * CheckIn day instead of their closure day. `value` and `alt` count the same
+   * jobs on different days, so they do NOT have to agree bucket by bucket, and
+   * their totals do not have to agree either.
+   */
+  alt: number | null;
   trend: number | null;
   partial: boolean;
 };
 
-export type DayBlock = { cells: DayCell[]; total: number };
+export type DayBlock = {
+  cells: DayCell[];
+  total: number;
+  /** The second basis's total over the same cells, or null when there is none. */
+  altTotal: number | null;
+};
 
 /**
  * The cells of one day-wise block.
  *
- * v2 drops a part bucket that has NEITHER figure — a day that has begun but
- * carries nothing yet is a trailing empty column on a table and an empty band
- * on an axis, and it is not a day anyone is reporting on. A part bucket that
- * does carry work stays, marked, because those jobs are real.
+ * v2 drops a part bucket that carries NO figure — a day that has begun but
+ * holds nothing yet is a trailing empty column on a table and an empty band on
+ * an axis, and it is not a day anyone is reporting on. A part bucket that does
+ * carry work stays, marked, because those jobs are real.
+ *
+ * THE DROP TEST READS ALL THREE COUNTS, including the check-in one, and the
+ * same test is applied whichever metric is asked for. Both of those follow v2,
+ * whose `dailyRow` computes one bucket list and prints Created and Completed
+ * over it — and they are also what keeps this block's own arithmetic honest: a
+ * part day with a check-in completion but no closure would otherwise be
+ * dropped, and the block's `altTotal` would then quietly fall short of
+ * `completedOnCheckin.count`.
  *
  * The forecast is NOT here. It is the tab's own dashed extrapolation for the
  * chart above; the client document reports what happened, and a predicted day
  * has no place in a table of days that did.
  */
 export function dayBlock(daily: MtdDaily, metric: 'created' | 'completed'): DayBlock {
+  const empty = (b: MtdDaily['buckets'][number]) =>
+    b.created === 0 && b.completed === 0 && b.completedCheckin === 0;
+
   const cells = daily.buckets
-    .filter((b) => !(b.partial && b.created === 0 && b.completed === 0))
+    .filter((b) => !(b.partial && empty(b)))
     .map<DayCell>((b) => {
       const value = metric === 'created' ? b.created : b.completed;
       return {
@@ -360,11 +495,17 @@ export function dayBlock(daily: MtdDaily, metric: 'created' | 'completed'): DayB
         from: b.from,
         to: b.to,
         value,
+        alt: metric === 'completed' ? b.completedCheckin : null,
         trend: b.partial ? null : value,
         partial: b.partial,
       };
     });
-  return { cells, total: cells.reduce((sum, c) => sum + c.value, 0) };
+
+  const total = cells.reduce((sum, c) => sum + c.value, 0);
+  const altTotal = metric === 'completed'
+    ? cells.reduce((sum, c) => sum + (c.alt ?? 0), 0)
+    : null;
+  return { cells, total, altTotal };
 }
 
 /* ── jobs by status and aging, the client document's cut ──────────────────── */
