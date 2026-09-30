@@ -1465,11 +1465,30 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           </div>
           {/* Audit & History — one-third on lg, full-width below. */}
           <DlCard title="Audit & History" rows={[
-            ['Created By', job.created_by_name],
-            ['Created On', formatDate(job.created_date_time as string)],
+            ['Created By / On', byOn(job.created_by_name, job.created_date_time)],
             ['Approval Sent', formatDate((job as Record<string, unknown>).approval_sent_on_date_time as string)],
-            ['Approved On', formatDate((job as Record<string, unknown>).approved_on_date_time as string)],
-            ['Approved By', (job as Record<string, unknown>).approved_by_client_contact as string],
+            /*
+             * Authorized By / On (2026-09-30 per ops). Two changes here, not one:
+             *
+             * 1. BY IS NOW A NAME. This cell used to render
+             *    approved_by_client_contact raw — a tbl_client_contacts id — so
+             *    an authorized job showed "1639". The backend now resolves it to
+             *    approved_by_name off that table.
+             * 2. ON PREFERS THE NEW COLUMN. tbl_job.approved_by_client_date_time
+             *    was added 2026-09-30 and nothing writes it yet (0 of 481,052
+             *    rows). Falling back to approved_on_date_time — the timestamp the
+             *    client-approval path has always written beside the contact —
+             *    means this reads correctly today AND picks the new column up by
+             *    itself the moment something starts writing it.
+             *
+             * NOT approved_by_client: that is a status flag holding 0/1/2, not a
+             * person (see the backend note on approved_by_name).
+             */
+            ['Authorized By / On', byOn(
+              (job as Record<string, unknown>).approved_by_name,
+              (job as Record<string, unknown>).approved_by_client_date_time
+                ?? (job as Record<string, unknown>).approved_on_date_time,
+            )],
             ['Rejected On', formatDate((job as Record<string, unknown>).approval_reject_date_time as string)],
             ['Last Updated', formatDate((job as Record<string, unknown>).last_update_time as string)],
           ]}/>
@@ -7878,6 +7897,19 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <div><span className="text-xs text-muted-foreground mr-2">Job Description:</span>{String(initial.job_desc ?? '—')}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Product Quantity:</span>{Array.isArray(initial.services) ? initial.services.length : 0}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Job Type:</span><strong>{String(initial.job_type ?? '—')}</strong></div>
+            {/*
+              * Authorized By / On (2026-09-30 per ops) — the same pair the
+              * Audit & History card shows, surfaced here because Confirm &
+              * Schedule is where an agent decides whether the job may proceed,
+              * and "has the client authorized this, and when" is part of that
+              * decision. Same byOn helper and the same fallback, so the two
+              * screens cannot disagree about one job.
+              */}
+            <div><span className="text-xs text-muted-foreground mr-2">Authorized By:</span>{String((initial as Record<string, unknown>).approved_by_name ?? '—')}</div>
+            <div><span className="text-xs text-muted-foreground mr-2">Authorized On:</span>{
+              byOn(null, (initial as Record<string, unknown>).approved_by_client_date_time
+                ?? (initial as Record<string, unknown>).approved_on_date_time) ?? '—'
+            }</div>
           </div>
         </div>
 
@@ -12698,6 +12730,22 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
       </div>
     </div>
   );
+}
+
+/*
+ * "Who / when" as ONE cell — ops asked for the paired facts on one line
+ * (2026-09-30) rather than two rows that always read together anyway.
+ *
+ * Returns null when neither half is known, so DlCard's own em-dash placeholder
+ * does the work. When only one half is known it renders that half alone: a
+ * lone "12 Aug 2026, 12:41 pm" is honest, whereas "— · 12 Aug 2026" reads like
+ * a bug and pads the cell with nothing.
+ */
+function byOn(by: unknown, on: unknown): string | null {
+  const name = typeof by === 'string' ? by.trim() : by == null ? '' : String(by).trim();
+  const when = on == null || on === '' ? '' : formatDate(on as string);
+  if (name && when) return `${name} · ${when}`;
+  return name || when || null;
 }
 
 function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
