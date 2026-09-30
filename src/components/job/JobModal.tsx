@@ -88,6 +88,9 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags, hasAction } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
+// Shared with JobRemarksView — both render the same comment thread and must
+// label it identically. See lib/job-comment-labels.
+import { LEGACY_REMARKS_FOR, jobStageLabel } from '@/lib/job-comment-labels';
 import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 import { parseIstDateTime } from '@/lib/format';
@@ -4048,15 +4051,6 @@ type RemarkRow = JobComment & {
   _pending?: true;
 };
 
-// Legacy "Remarks For" by comment_on (jobCommentList.vm:15-28), a mirror of the
-// backend's REMARKS_FOR. Only the fallback: for an older backend, and for a
-// pending row, so it reads the same label before and after the refetch.
-const LEGACY_REMARKS_FOR: Record<number, string> = {
-  1: 'Scheduling', 2: 'CheckIn', 3: 'CheckOut', 4: 'Feedback', 6: 'Canceling',
-  8: 'TX Reschedule', 9: 'TX cancelled', 15: 'Approval', 16: 'Unconfirmed', 17: 'Inquiry',
-  18: 'TX Rejected', 19: 'Escalated', 20: 'Re-Opened Job', 21: 'ReScheduled',
-};
-
 /*
  * Legacy Date/Time: `dd MMM yyyy HH:mm` ("11 Sep 2026 13:29" — JobDaoImpl.java
  * :2846). Parsed and rendered in IST exactly as formatDate does, so the DB's
@@ -4340,9 +4334,16 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
           {/*
             Remarks history in the LEGACY CRM's columns and order (2026-09-11 per
             ops; EasyFix_CRM jobCommentList.vm:4-9):
-              Remarks For | Accountable | Reason | Remarks | Remark By | Date/Time
-            from remarks_for | accountable | enum_desc | comments | remark_by |
-            created_on. remark_by is the backend's resolved author (tbl_user name,
+              Remarks For | Stage | Accountable | Reason | Remarks | Remark By | Date/Time
+            from remarks_for | job_stage | accountable | enum_desc | comments |
+            remark_by | created_on.
+
+            Stage is the one addition to the legacy column set (2026-09-30 per
+            ops): legacy had no such column because legacy never needed to ask
+            where a reschedule happened. It renders tbl_job_comment.job_stage,
+            which only reschedule() stamps so far.
+
+            remark_by is the backend's resolved author (tbl_user name,
             else the escalator's stored name, else the technician) — user_name
             alone rendered "Unknown" for every escalation, which never sets
             commented_by. A row with no author at all shows an em dash.
@@ -4361,6 +4362,11 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                     (measured in a static render; wrapping gives 326px). */}
                 <tr>
                   <th className="!text-left w-1 whitespace-nowrap">Remarks For</th>
+                  {/* Stage — the job's status when the remark was filed, so a
+                      reschedule says WHERE in the lifecycle it happened. Sits
+                      beside Remarks For because the two answer the paired
+                      questions: what kind of remark, and at what stage. */}
+                  <th className="!text-left w-1 whitespace-nowrap">Stage</th>
                   <th className="!text-left w-1 whitespace-nowrap">Accountable</th>
                   <th className="!text-left">Reason</th>
                   <th className="!text-left">Remarks</th>
@@ -4376,6 +4382,13 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                   >
                     <td className="!text-left align-top whitespace-nowrap">
                       {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? ''}
+                    </td>
+                    {/* Em dash, not blank, for a row with no recorded stage —
+                        every row written before 2026-09-30 is one, and a blank
+                        cell reads like a rendering bug rather than "we did not
+                        record this back then". */}
+                    <td className="!text-left align-top whitespace-nowrap text-muted-foreground">
+                      {jobStageLabel(c.job_stage) || <span className="italic">—</span>}
                     </td>
                     <td className="!text-left align-top whitespace-nowrap">
                       {c.accountable ?? ''}
