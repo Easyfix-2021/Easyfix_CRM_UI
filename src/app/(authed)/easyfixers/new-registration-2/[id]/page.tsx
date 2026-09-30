@@ -111,9 +111,16 @@ export default function NewRegistration2ProfilePage() {
   const [txOpen, setTxOpen] = useState(false);
   const [clientMapOpen, setClientMapOpen] = useState(false);
 
-  // Opens on Onboarding: people arrive here from the Registration In Progress
-  // list to review what the technician has filled in, not to read Overview.
-  const [tab, setTab] = useState<TabKey>('onboarding');
+  /*
+   * WHERE THE PAGE OPENS depends on who the technician is. Someone still
+   * registering is opened to be reviewed, so Onboarding; an active technician
+   * is opened to be looked up, so Overview.
+   *
+   * Held as null until the reviewer picks a tab, rather than seeded by an
+   * effect: `active` is only known once the payload lands, and an effect would
+   * either open the wrong tab for a moment or fight a click that beat it.
+   */
+  const [tab, setTab] = useState<TabKey | null>(null);
 
   // Bumped when the Onboarding tab's coverage table is clicked: switches to
   // Work & Coverage and tells it to scroll the pincode editor into view.
@@ -137,6 +144,7 @@ export default function NewRegistration2ProfilePage() {
     [v, row, efrId],
   );
   const active = v?.activation.is_activated ?? (row?.efr_status_label === 'Active' || row?.efr_status_label === 'Idle');
+  const currentTab: TabKey = tab ?? (active ? 'overview' : 'onboarding');
   const strength = row?.efr_profile_perc ?? v?.registrationVerification.overall_progress ?? 0;
   const leadsTeam = row?.ef_account === 'Master';
 
@@ -264,7 +272,7 @@ export default function NewRegistration2ProfilePage() {
             onClick={() => setTab(key)}
             className={cn(
               '-mb-px border-b-2 px-3.5 py-2.5 text-[13px] font-semibold transition-colors',
-              tab === key ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground',
+              currentTab === key ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
           >
             {label}
@@ -274,8 +282,8 @@ export default function NewRegistration2ProfilePage() {
 
       {/* Tab bodies */}
       <div>
-        {tab === 'overview' && <OverviewTab active={!!active} row={row} agg={agg} v={v} />}
-        {tab === 'status' && (
+        {currentTab === 'overview' && <OverviewTab active={!!active} row={row} agg={agg} v={v} />}
+        {currentTab === 'status' && (
           <StatusHistoryTab
             key={`status-${historyBump}`}
             efrId={efrId}
@@ -285,7 +293,7 @@ export default function NewRegistration2ProfilePage() {
             onChangeStatus={() => setStatusOpen(true)}
           />
         )}
-        {tab === 'onboarding' && (
+        {currentTab === 'onboarding' && (
           <OnboardingTab
             efrId={efrId}
             v={v}
@@ -294,7 +302,7 @@ export default function NewRegistration2ProfilePage() {
             onEditSkills={openSkillEditor}
           />
         )}
-        {tab === 'profile' && (
+        {currentTab === 'profile' && (
           <ProfileDocumentsTab
             v={v}
             row={row}
@@ -302,7 +310,7 @@ export default function NewRegistration2ProfilePage() {
             onUpdateMobile={() => setMobileOpen(true)}
           />
         )}
-        {tab === 'work' && (
+        {currentTab === 'work' && (
           <WorkCoverageTab
             key={`work-${mappingsBump}`}
             efrId={efrId}
@@ -313,12 +321,12 @@ export default function NewRegistration2ProfilePage() {
             focusSkills={skillFocus}
           />
         )}
-        {tab === 'bank' && (
+        {currentTab === 'bank' && (
           <BankTab efrId={efrId} v={v} canEditBank={!!can.isEasyfixerBankUpdate} onEditBank={() => setBankOpen(true)} onReload={reloadAll} />
         )}
-        {tab === 'transactions' && <TransactionsTab efrId={efrId} onOpenFullTable={() => setTxOpen(true)} />}
-        {tab === 'activity' && <ActivityTab efrId={efrId} v={v} active={!!active} onReload={reloadAll} />}
-        {tab === 'team' && <TeamTab />}
+        {currentTab === 'transactions' && <TransactionsTab efrId={efrId} onOpenFullTable={() => setTxOpen(true)} />}
+        {currentTab === 'activity' && <ActivityTab efrId={efrId} v={v} active={!!active} onReload={reloadAll} />}
+        {currentTab === 'team' && <TeamTab />}
       </div>
 
       {/* Dialogs */}

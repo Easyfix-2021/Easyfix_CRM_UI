@@ -141,6 +141,8 @@ export type VerticalOption = { vertical_id: number; vertical_name: string };
 
 export type ProfileListRow = LifecycleRowFields & {
   efr_id: number;
+  /** Computed by the backend from the canonical completion rule. */
+  computed_profile_perc?: number | null;
   efr_name: string;
   efr_no: string;
   efr_email: string | null;

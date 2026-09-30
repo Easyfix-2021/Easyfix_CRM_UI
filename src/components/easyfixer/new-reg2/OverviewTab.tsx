@@ -57,14 +57,22 @@ export function OverviewTab({
   const earnings = agg?.total_earnings ?? row?.total_earnings ?? 0;
   const jobs = agg?.job_count ?? row?.job_count ?? 0;
 
+  /*
+   * The breakdown reads from the SAME completion rule as the ring and the
+   * Accept gate. It used to list the legacy per-section percentages
+   * (efr_professional_details_perc and friends) — columns the new technician
+   * app never writes, so every bar sat at 0 beside a strength of 100%.
+   */
+  const missing = new Set(v?.completion.missing ?? []);
   const strengthRows: Array<[string, number]> = v
-    ? [
-        ['Professional details', v.registrationVerification.professional.progress],
-        ['Personal & family', v.registrationVerification.personal.progress],
-        ['Banking details', v.registrationVerification.banking.progress],
-        ['Identity documents', v.registrationVerification.identity.progress],
-        ['Skills & coverage', v.additional.progress],
-      ]
+    ? ([
+        ['Skills', 'Skills'],
+        ['Aadhaar', 'Aadhaar'],
+        ['Profile picture', 'Profile picture'],
+        ['Date of birth', 'Date of birth'],
+        ['Personal details', 'Personal details'],
+        ['Serviceable pincodes', 'Serviceable pincodes'],
+      ] as Array<[string, string]>).map(([label, key]) => [label, missing.has(key) ? 0 : 100])
     : [];
 
   return (
@@ -100,7 +108,7 @@ export function OverviewTab({
             </div>
           ) : <LockedBody />}
         </SectionCard>
-        <SectionCard title="Profile strength" icon={<span>📊</span>} right={<span>{row?.efr_profile_perc ?? v?.registrationVerification.overall_progress ?? 0}% complete</span>}>
+        <SectionCard title="Profile strength" icon={<span>📊</span>} right={<span>{v?.completion.percent ?? row?.computed_profile_perc ?? 0}% complete</span>}>
           {strengthRows.length
             ? strengthRows.map(([label, pct]) => <MeterRow key={label} label={label} pct={pct} />)
             : <p className="text-sm text-muted-foreground">No breakdown available.</p>}
