@@ -65,6 +65,13 @@ type AppointmentType = 'original' | 'requested';
 type ProductivityRow = {
   userId: number;
   userName: string;
+  /*
+   * Employee has left, but did work inside the selected range so their numbers
+   * still belong in the totals. Sent by the BE per row rather than inferred
+   * here: an ACTIVE employee can legitimately show all zeros, and "did nothing"
+   * must not render the same as "no longer here".
+   */
+  isFormer?: boolean;
   booked: number;
   scheduled: number;
   audit: number;
@@ -73,11 +80,18 @@ type ProductivityRow = {
   cancelCount: number;
 };
 
+/* Column keys the BE will sort on — mirrors its SORTABLE_COLUMNS allow-list. */
+type SortKey = 'employee' | 'booked' | 'scheduled' | 'audit' | 'closed' | 'revenue' | 'cancelled';
+type SortDir = 'asc' | 'desc';
+
 type ProductivityResponse = {
   totalRecords: number;
   pageNumber: number;
   pageSize: number;
   totalPages: number;
+  /* Echoed back so the header arrow reflects what the server ACTUALLY did. */
+  sortBy?: SortKey;
+  sortDir?: SortDir;
   data: ProductivityRow[];
 };
 
@@ -122,6 +136,55 @@ function isoDaysAgo(n: number): string {
 /* Number formatter for the Revenue column ("1,234"). */
 function fmtNum(n: number): string {
   return (n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+/*
+ * A sortable column header.
+ *
+ * The arrow is THREE states, not two, and the third is the point: an inactive
+ * column shows a dimmed up/down pair meaning "you can sort by this", while the
+ * active column shows a single solid arrow for the direction actually applied.
+ * Rendering only the active arrow leaves every other column looking inert;
+ * rendering all of them solid makes six columns claim to be sorted at once.
+ *
+ * aria-sort carries the same fact to screen readers, which cannot see the glyph.
+ */
+function SortableTh({
+  label, sortKey, align, activeKey, dir, onSort,
+}: {
+  label: string;
+  sortKey: SortKey;
+  align: 'left' | 'right' | 'center';
+  activeKey: SortKey;
+  dir: SortDir;
+  onSort: (k: SortKey) => void;
+}) {
+  const active = activeKey === sortKey;
+  /*
+   * Written out in full, never interpolated. Tailwind scans source text for
+   * complete class names, so a template literal like `!text-${align}` compiles
+   * to nothing and the column silently loses its alignment.
+   */
+  const thAlign = align === 'left' ? '!text-left' : align === 'right' ? '!text-right' : '!text-center';
+  const justify = align === 'left' ? 'justify-start' : align === 'right' ? 'justify-end' : 'justify-center';
+  return (
+    <th
+      className={`${thAlign} cursor-pointer select-none`}
+      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex w-full items-center gap-1 ${justify} font-semibold`}
+        title={`Sort by ${label}`}
+      >
+        <span>{label}</span>
+        <span aria-hidden className={active ? 'opacity-100' : 'opacity-40'}>
+          {active ? (dir === 'asc' ? '\u2191' : '\u2193') : '\u21c5'}
+        </span>
+      </button>
+    </th>
+  );
 }
 
 /* Cancelled-count badge tone (legacy: 0 neutral / <=1 success / <=2 warning / else danger). */
@@ -170,6 +233,30 @@ export default function EmployeeProductivityPage() {
 
   const [page, setPage] = useState(0); // 0-indexed (TablePagination contract)
   const [pageSize, setPageSize] = useState<TablePageSize>(10);
+  /*
+   * Default: REVENUE, highest first (ops, 2026-09-30) — the table answers "who
+   * earned what", and alphabetical only ever answered "whose name starts with A".
+   */
+  const [sortBy, setSortBy] = useState<SortKey>('revenue');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  /*
+   * Clicking a header sorts by it; clicking the ACTIVE header flips direction.
+   * A new column starts descending for every metric ("most" is the interesting
+   * end) and ascending for the name, which readers expect A-Z.
+   *
+   * Page resets to 0: keeping the offset across a re-sort lands the reader on
+   * page 4 of a ranking they have not seen the top of.
+   */
+  const onSort = (key: SortKey) => {
+    if (key === sortBy) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(key);
+      setSortDir(key === 'employee' ? 'asc' : 'desc');
+    }
+    setPage(0);
+  };
   const [downloading, setDownloading] = useState(false);
   const [copying, setCopying] = useState(false);
 
@@ -233,8 +320,13 @@ export default function EmployeeProductivityPage() {
     });
     qs.set('page', String(page + 1)); // BE is 1-indexed
     qs.set('size', String(pageSizeToLimit(pageSize, 500)));
+    // Sorting is SERVER-side, across the whole filtered set. Sorting the ten
+    // rows already on screen would only re-order one arbitrary page and call
+    // the result a ranking.
+    qs.set('sortBy', sortBy);
+    qs.set('sortDir', sortDir);
     return qs.toString();
-  }, [startDate, endDate, verticalId, reportingManagerId, zonalManagerId, userId, appointmentType, page, pageSize]);
+  }, [startDate, endDate, verticalId, reportingManagerId, zonalManagerId, userId, appointmentType, page, pageSize, sortBy, sortDir]);
 
   const tableKey = canView ? `${BASE}/employee-productivity?${tableQuery}` : null;
   const { data: tableData, loading: tableLoading, error: tableError } = useFetch<ProductivityResponse>(tableKey);
@@ -336,6 +428,8 @@ export default function EmployeeProductivityPage() {
       });
       qs.set('page', String(page + 1));
       qs.set('size', String(pageSizeToLimit(pageSize, 500)));
+      qs.set('sortBy', sortBy);
+      qs.set('sortDir', sortDir);
       qs.set('format', 'xlsx');
       await downloadXlsx({
         url: `${BASE}/employee-productivity?${qs.toString()}`,
@@ -353,7 +447,10 @@ export default function EmployeeProductivityPage() {
   async function handleCopy() {
     setCopying(true);
     try {
-      const header = ['Employee', 'Booked', 'Scheduled', 'Audit', 'Closed', 'Revenue', 'Cancelled'];
+      // 'Status' carries the Ex flag out with the data: a pasted table whose
+      // totals include departed staff, with nothing saying which rows they are,
+      // is a table someone will spend an afternoon failing to reconcile.
+      const header = ['Employee', 'Status', 'Booked', 'Scheduled', 'Audit', 'Closed', 'Revenue', 'Cancelled'];
       const all: ProductivityRow[] = [];
       let pageNo = 1;
       // Cap the walk at a generous number of pages to avoid runaway loops.
@@ -363,6 +460,8 @@ export default function EmployeeProductivityPage() {
         });
         qs.set('page', String(pageNo));
         qs.set('size', '500');
+        qs.set('sortBy', sortBy);
+        qs.set('sortDir', sortDir);
         const res = await api.get<ProductivityResponse>(`${BASE}/employee-productivity?${qs.toString()}`);
         all.push(...res.data);
         if (pageNo >= res.totalPages || res.data.length === 0) break;
@@ -370,7 +469,7 @@ export default function EmployeeProductivityPage() {
       }
       const lines = [header.join('\t')];
       for (const r of all) {
-        lines.push([r.userName, r.booked, r.scheduled, r.audit, r.closedCount, r.revenue, r.cancelCount].join('\t'));
+        lines.push([r.userName, r.isFormer ? 'Ex-employee' : 'Active', r.booked, r.scheduled, r.audit, r.closedCount, r.revenue, r.cancelCount].join('\t'));
       }
       const text = lines.join('\n');
       if (navigator.clipboard?.writeText) {
@@ -585,19 +684,29 @@ export default function EmployeeProductivityPage() {
           <table className="data-table w-full">
             <thead>
               <tr>
-                <th className="!text-left">Employee</th>
-                <th className="!text-right">Booked</th>
-                <th className="!text-right">Scheduled</th>
-                <th className="!text-right">Audit</th>
-                <th className="!text-right">Closed</th>
-                <th className="!text-right">Revenue</th>
-                <th className="!text-center">Cancelled</th>
+                <SortableTh label="Employee"  sortKey="employee"  align="left"   activeKey={sortBy} dir={sortDir} onSort={onSort} />
+                <SortableTh label="Booked"    sortKey="booked"    align="right"  activeKey={sortBy} dir={sortDir} onSort={onSort} />
+                <SortableTh label="Scheduled" sortKey="scheduled" align="right"  activeKey={sortBy} dir={sortDir} onSort={onSort} />
+                <SortableTh label="Audit"     sortKey="audit"     align="right"  activeKey={sortBy} dir={sortDir} onSort={onSort} />
+                <SortableTh label="Closed"    sortKey="closed"    align="right"  activeKey={sortBy} dir={sortDir} onSort={onSort} />
+                <SortableTh label="Revenue"   sortKey="revenue"   align="right"  activeKey={sortBy} dir={sortDir} onSort={onSort} />
+                <SortableTh label="Cancelled" sortKey="cancelled" align="center" activeKey={sortBy} dir={sortDir} onSort={onSort} />
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.userId}>
-                  <td className="!text-left">{r.userName || '—'}</td>
+                  <td className="!text-left">
+                    <span className={r.isFormer ? 'text-muted-foreground' : undefined}>{r.userName || '—'}</span>
+                    {r.isFormer ? (
+                      <span
+                        className="ml-2 inline-flex items-center rounded-full bg-warning-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-strong"
+                        title="No longer an active employee — shown because they worked during the selected range"
+                      >
+                        Ex
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="!text-right tabular-nums">{r.booked}</td>
                   <td className="!text-right tabular-nums">{r.scheduled}</td>
                   <td className="!text-right tabular-nums">{r.audit}</td>
