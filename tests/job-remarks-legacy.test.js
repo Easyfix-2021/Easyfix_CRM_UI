@@ -1,9 +1,18 @@
 'use strict';
 /*
- * The job's remarks table is the LEGACY CRM's (2026-09-11 per ops).
+ * The job's remarks table is the LEGACY CRM's (2026-09-11 per ops), PLUS one
+ * column legacy never had.
  *
  * EasyFix_CRM jobCommentList.vm:4-9 rendered six columns, in this order:
  *   Remarks For | Accountable | Reason | Remarks | Remark By | Date/Time
+ *
+ * STAGE IS THE ONE DELIBERATE ADDITION (2026-09-30 per ops), inserted second.
+ * Legacy had no such column because legacy never had to answer "at which stage
+ * was this job rescheduled" — ops asks it now, and tbl_job_comment.job_stage
+ * has carried the answer all along without anything rendering it. The rest of
+ * this file still pins legacy verbatim: adding a column is a decision, letting
+ * the other six drift is a regression, and only the second is what this test
+ * was written to catch.
  * The new CRM showed four (Date/Time | Remarks | Remarks By | Reason) and put
  * `c.user_name ?? 'Unknown'` in the author cell — "Unknown" on every
  * escalation, because escalations never set commented_by (the author's name
@@ -57,19 +66,23 @@ function load(names, exportsExpr) {
   return mod.exports;
 }
 
-const WANTED = ['Remarks For', 'Accountable', 'Reason', 'Remarks', 'Remark By', 'Date/Time'];
+// Legacy's six, with Stage inserted at index 1 — see the header note.
+const WANTED = ['Remarks For', 'Stage', 'Accountable', 'Reason', 'Remarks', 'Remark By', 'Date/Time'];
 
-test('the header is the legacy six columns, in the legacy order', () => {
+test('the header is the legacy columns in the legacy order, plus Stage', () => {
   const labels = [...THEAD.matchAll(/<th\b[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
   assert.deepEqual(labels, WANTED, 'jobCommentList.vm:4-9 — labels and order, verbatim');
 });
 
 test('each cell reads the backend field of the column above it', () => {
-  // Split the row into its six <td>s (a cell never nests another <td>).
+  // Split the row into its <td>s (a cell never nests another <td>).
   const cells = TBODY.split(/<td\b/).slice(1).map((c) => c.slice(0, c.indexOf('</td>')));
   assert.equal(cells.length, WANTED.length, `one cell per column, found ${cells.length}`);
   const fields = [
     /\{c\.remarks_for \?\? LEGACY_REMARKS_FOR\[c\.comment_on\] \?\? ''\}/,
+    // Stage reads job_stage (the JOB's status), never `stage` — which is the
+    // COMMENT's own bucket and would render the wrong domain entirely.
+    /jobStageLabel\(c\.job_stage\)/,
     /\{c\.accountable \?\? ''\}/,
     /c\.enum_desc/,
     /\{c\.comments\}/,
