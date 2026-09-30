@@ -16,7 +16,8 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { TechnicianCategoryModal } from '@/app/(authed)/quicksight/technician-performance/TechnicianCategoryModal';
-import { SectionCard, Tile, MeterRow, LockedBody, EndpointPending, inr } from './ui';
+import { SectionCard, Tile, MeterRow, LockedBody, inr } from './ui';
+import { JobsCompletedCard } from './JobsCompletedCard';
 import type { VerificationPayload, ProfileListRow, AggregateRow } from './types';
 
 const QUICKSIGHT_KEYS = ['ef-QuickSight', 'isQuickSightTechnicianPerformanceView'] as const;
@@ -96,30 +97,26 @@ export function OverviewTab({
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <SectionCard title="Jobs completed" icon={<span>🧩</span>} right={<span>by category / vertical</span>}>
-          {active ? (
-            <div className="space-y-3">
-              <EndpointPending what="A lifetime jobs-by-category / vertical breakdown has no endpoint yet (needs e.g. GET /admin/easyfixers/:id/job-category-summary). Only the total job count is available." />
-              {canViewCategories && efrId != null ? (
-                <Button size="sm" variant="outline" onClick={() => setCategoriesOpen(true)}>Category performance (last 3 months)</Button>
-              ) : (
-                <p className="text-xs text-muted-foreground">Recent category performance needs QuickSight → Technician Performance access.</p>
-              )}
-            </div>
-          ) : <LockedBody />}
-        </SectionCard>
+        {active && efrId != null ? (
+          <div className="space-y-3">
+            <JobsCompletedCard efrId={efrId} />
+            {canViewCategories && (
+              <Button size="sm" variant="outline" onClick={() => setCategoriesOpen(true)}>
+                Category performance (last 3 months)
+              </Button>
+            )}
+          </div>
+        ) : (
+          <SectionCard title="Jobs completed" icon={<span>🧩</span>}>
+            <LockedBody />
+          </SectionCard>
+        )}
         <SectionCard title="Profile strength" icon={<span>📊</span>} right={<span>{v?.completion.percent ?? row?.computed_profile_perc ?? 0}% complete</span>}>
           {strengthRows.length
             ? strengthRows.map(([label, pct]) => <MeterRow key={label} label={label} pct={pct} />)
             : <p className="text-sm text-muted-foreground">No breakdown available.</p>}
         </SectionCard>
       </div>
-
-      {active && (
-        <SectionCard title="TQI — Technician Quality Index" icon={<span>⭐</span>} right={<span>weekly + lifetime</span>}>
-          <EndpointPending what="The backend has no TQI score: nothing returns weekly or lifetime TQI values or per-criterion weights. The technician's A+ to E grade does exist and is shown under Activity → Performance." />
-        </SectionCard>
-      )}
 
       {canViewCategories && efrId != null && (
         <TechnicianCategoryModal
