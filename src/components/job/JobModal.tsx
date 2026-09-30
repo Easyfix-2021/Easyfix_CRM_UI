@@ -4449,17 +4449,15 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
 /*
  * Single image tile.
  *
- * URL contains `?token=<jwt>` — the image file endpoint accepts the
- * JWT either via Authorization header (default) or query string for
- * exactly this use case (`<img src>` requests carry no Authorization
- * header, and we want "open in new tab" to work too). See
- * EasyFix_Backend/middleware/auth.js for the CSRF/leakage trade-off
- * write-up. The token here is the same one stored in localStorage by
- * the api wrapper.
+ * `url` is the tokenised /images/:id/file, used ONLY for the rare
+ * `mode: 'stream'` row; everything else renders from the token-free URL
+ * that /images/:id/url returns (see the block inside the component).
  *
- * `onError` flips to the "Image not found" empty state when the BE
- * responds 404 (image lost from S3 AND local disk, or imageId stale).
+ * `onError`, or `url: null` from /url, flips to the "Image not found"
+ * empty state (image lost from S3 AND local disk, or imageId stale).
  */
+type ResolvedMedia = { url: string | null; mode?: string };
+
 function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView, isPdf, kind }: {
   id: string;
   url: string;
@@ -4487,7 +4485,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
   /* When provided, clicking the thumbnail opens an in-app ENLARGE lightbox
    * (SkillImageLightbox) instead of opening the raw file in a new browser tab.
    * Ctrl/middle-click still opens the new tab (the <a> href is preserved). */
-  onView?: (v: { url: string; name: string }) => void;
+  onView?: (v: NonNullable<SkillImageLightboxValue>) => void;
   /* When provided, renders a top-right X overlay that calls this on
    * click (with stopPropagation so the tile's "open in new tab"
    * behaviour is preserved for clicks elsewhere on the tile). */
@@ -4525,6 +4523,67 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
   }, [url]);
 
   /*
+   * No tile puts the session JWT in a URL (2026-09-30). Each asks
+   * GET /images/:id/url WITH the Authorization header and uses the plain
+   * S3-presigned / legacy-host URL it returns — for the thumbnail, the href,
+   * and (re-fetched fresh on click, since a presigned URL lives 5 min) the
+   * lightbox or PDF tab. <img>/<video> fetch that URL themselves: no CORS,
+   * no Blob. `mode: 'stream'` (bytes only on the BE's local disk — the rare
+   * S3-write fallback) has no such URL; that one case still uses the
+   * tokenised /file, as the BE route documents.
+   */
+  const urlKey = `/admin/jobs/images/${id}/url`;
+  const srcOf = (r: ResolvedMedia | null) => (r ? (r.url ?? (r.mode === 'stream' ? authedUrl : null)) : null);
+  // Videos have no thumbnail, so they resolve only on click.
+  const { data: resolved, error: resolveError } = useFetch<ResolvedMedia>(kind === 'video' ? null : urlKey);
+  const thumbSrc = srcOf(resolved);
+  const missing = (resolved != null && thumbSrc == null) || (!resolved && !!resolveError);
+
+  const [opening, setOpening] = useState(false);
+  const openFresh = async () => {
+    if (opening) return;
+    // A tab opened AFTER an await has lost the click's user activation and is
+    // popup-blocked, so open it now and point it once the URL arrives.
+    const tab = isPdf || !onView ? window.open('', '_blank') : null;
+    if (tab) tab.opener = null;
+    setOpening(true);
+    try {
+      const src = srcOf(await api.get<ResolvedMedia>(urlKey));
+      if (!src) { tab?.close(); showToast({ variant: 'error', message: 'File not found' }); return; }
+      if (tab) tab.location.href = src;
+      else onView?.({
+        url: src, name: label, kind: kind === 'video' ? 'video' : 'image',
+        refresh: async () => srcOf(await api.get<ResolvedMedia>(urlKey)),
+      });
+    } catch (e) {
+      tab?.close();
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load file' });
+    } finally {
+      setOpening(false);
+    }
+  };
+  /*
+   * href only when a real, token-free URL is in hand (images/PDFs) so
+   * Ctrl/Cmd-click still opens a native tab. ponytail: an S3 href goes stale
+   * after the 5-min presign; a plain click always re-resolves, only a late
+   * modifier-click hits the expiry.
+   */
+  const href = kind !== 'video' ? resolved?.url ?? undefined : undefined;
+  const handleOpen = (e: React.MouseEvent) => {
+    if (href && (e.metaKey || e.ctrlKey || e.shiftKey)) return;
+    e.preventDefault();
+    void openFresh();
+  };
+  const anchorProps = href
+    ? { href, target: '_blank', rel: 'noopener noreferrer' }
+    : {
+        role: 'button', tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openFresh(); }
+        },
+      };
+
+  /*
    * Compact tile dimensions match the Confirm-mode staged-file preview
    * (72×72 with a tiny caption row beneath). Default tile is the
    * larger ~128px variant used on the read-only Images tab where
@@ -4538,31 +4597,31 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         title={pendingDelete ? `${tooltip} — marked for deletion (click ↺ to undo)` : tooltip}
       >
         <a
-          href={authedUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => { if (onView && !isPdf && kind !== 'video') { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
-          className="block w-full h-full"
+          {...anchorProps}
+          onClick={handleOpen}
+          className="block w-full h-full cursor-pointer"
         >
           {kind === 'video' ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
               <Video className="h-5 w-5" />
-              <span className="text-xs">Video</span>
+              <span className="text-xs">{opening ? 'Loading…' : 'Video'}</span>
             </div>
           ) : isPdf ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
               <FileText className="h-5 w-5" />
               <span className="text-xs">PDF</span>
             </div>
-          ) : broken ? (
+          ) : broken || missing ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-xs text-muted-foreground p-1 text-center">
               <span className="text-base leading-none">⚠️</span>
               <span className="mt-0.5">Lost</span>
             </div>
+          ) : !thumbSrc ? (
+            <div className="w-full h-full bg-muted animate-pulse" aria-label={`Loading ${label}`} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={authedUrl}
+              src={thumbSrc}
               alt={label}
               /*
                * Pending-delete visual treatment (2026-05-28). Drops
@@ -4627,33 +4686,33 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
     <div className={`relative ${deleting ? 'opacity-50 pointer-events-none' : ''}`}>
       <a
         key={id}
-        href={authedUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => { if (onView && !isPdf && kind !== 'video') { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
-        className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
+        {...anchorProps}
+        onClick={handleOpen}
+        className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow cursor-pointer"
         title={tooltip}
       >
         {kind === 'video' ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
             <Video className="h-7 w-7" />
-            <span className="text-xs">Play video</span>
+            <span className="text-xs">{opening ? 'Loading…' : 'Play video'}</span>
           </div>
         ) : isPdf ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
             <FileText className="h-7 w-7" />
             <span className="text-xs">Open PDF</span>
           </div>
-        ) : broken ? (
+        ) : broken || missing ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground">
             <span className="text-base">⚠️</span>
             <span>Image not found</span>
             <span className="text-xs">Re-upload to restore</span>
           </div>
+        ) : !thumbSrc ? (
+          <div className="h-32 w-full bg-muted animate-pulse" aria-label={`Loading ${label}`} />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={authedUrl}
+            src={thumbSrc}
             alt={label}
             className="w-full h-32 object-cover bg-muted"
             loading="lazy"
@@ -4955,7 +5014,7 @@ function videoSourceBadge(source?: string | null): { label: string; cls: string 
  * up to several customer-shared videos and the Confirm-modal scroll area is
  * tall — kicking off N range-byte metadata fetches on open is wasted bandwidth
  * for the operator's machine. A play-glyph + source badge always overlay;
- * clicking opens the full video in a new tab via the redirect endpoint.
+ * clicking plays it in the lightbox (URL from /videos/:id/url, never a token).
  *
  * Read-only: no delete affordance here in v1.
  */
@@ -4963,22 +5022,25 @@ function JobVideosStrip({ videos, compact = false }: {
   videos: Array<{ media_id: number; s3_key?: string; content_type?: string | null; source?: string | null }>;
   compact?: boolean;
 }) {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
+  const [lightbox, setLightbox] = useState<SkillImageLightboxValue>(null);
   if (!videos || videos.length === 0) return null;
   const tileSize = compact ? 'w-[72px] h-[72px]' : 'w-32 h-32';
   return (
-    <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
-      {videos.map((v) => (
-        <LazyVideoPosterTile
-          key={v.media_id}
-          mediaId={v.media_id}
-          url={`${apiBase}/admin/jobs/videos/${v.media_id}/file`}
-          source={v.source}
-          contentType={v.content_type}
-          tileSize={tileSize}
-        />
-      ))}
-    </div>
+    <>
+      <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
+        {videos.map((v) => (
+          <LazyVideoPosterTile
+            key={v.media_id}
+            mediaId={v.media_id}
+            source={v.source}
+            contentType={v.content_type}
+            tileSize={tileSize}
+            onPlay={setLightbox}
+          />
+        ))}
+      </div>
+      <SkillImageLightbox value={lightbox} onClose={() => setLightbox(null)} />
+    </>
   );
 }
 
@@ -4990,16 +5052,42 @@ function JobVideosStrip({ videos, compact = false }: {
  * frame stays mounted (no unmount on scroll-out) — re-mounting on every scroll
  * would defeat the bandwidth savings.
  */
-function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
+function LazyVideoPosterTile({ mediaId, source, contentType, tileSize, onPlay }: {
   mediaId: number;
-  url: string;
   source?: string | null;
   contentType?: string | null;
   tileSize: string;
+  onPlay: (v: NonNullable<SkillImageLightboxValue>) => void;
 }) {
-  const ref = React.useRef<HTMLAnchorElement | null>(null);
+  const ref = React.useRef<HTMLButtonElement | null>(null);
   const [visible, setVisible] = React.useState(false);
   const badge = videoSourceBadge(source);
+  /*
+   * The poster and the player both come from /videos/:id/url, fetched WITH the
+   * Authorization header (2026-09-30). This tile used to point <video src> and
+   * its <a href> at /videos/:id/file with no token at all; a <video> sends no
+   * header, so every tile 401'd. Resolved only once visible — same bandwidth
+   * rule as the poster — and re-resolved on click, since presigns live 5 min.
+   */
+  const urlKey = `/admin/jobs/videos/${mediaId}/url`;
+  const { data: resolved } = useFetch<{ url: string | null }>(urlKey, { enabled: visible });
+  const [opening, setOpening] = React.useState(false);
+  const play = async () => {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const r = await api.get<{ url: string | null }>(urlKey);
+      if (!r.url) { showToast({ variant: 'error', message: 'Video file not found' }); return; }
+      onPlay({
+        url: r.url, name: `Customer video #${mediaId}`, kind: 'video',
+        refresh: async () => (await api.get<{ url: string | null }>(urlKey)).url,
+      });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load video' });
+    } finally {
+      setOpening(false);
+    }
+  };
 
   React.useEffect(() => {
     if (visible) return; // already loaded, no need to watch any more
@@ -5025,21 +5113,21 @@ function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
   }, [visible]);
 
   return (
-    <a
+    <button
+      type="button"
       ref={ref}
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
+      onClick={() => { void play(); }}
+      disabled={opening}
       className={`relative ${tileSize} rounded border bg-ink-900 overflow-hidden flex items-center justify-center group`}
       title={`Customer video #${mediaId}${badge ? ` · via ${badge.label}` : ''}${contentType ? ` · ${contentType}` : ''}`}
     >
       {/* Poster frame — only rendered once the tile is visible. `#t=0.1` makes
           the browser seek to the first 100ms and render that frame from the
           range-byte response; no autoplay, no full download. */}
-      {visible && (
+      {visible && resolved?.url && (
         // eslint-disable-next-line jsx-a11y/media-has-caption
         <video
-          src={`${url}#t=0.1`}
+          src={`${resolved.url}#t=0.1`}
           preload="metadata"
           muted
           playsInline
@@ -5059,7 +5147,7 @@ function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
       <span className="absolute z-10 bottom-0 right-0 left-0 text-xs text-center bg-black/55 text-white py-0.5">
         Video #{mediaId}
       </span>
-    </a>
+    </button>
   );
 }
 
