@@ -700,7 +700,7 @@ export default function EmployeeProductivityPage() {
                     <span className={r.isFormer ? 'text-muted-foreground' : undefined}>{r.userName || '—'}</span>
                     {r.isFormer ? (
                       <span
-                        className="ml-2 inline-flex items-center rounded-full bg-warning-tint px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-strong"
+                        className="ml-2 inline-flex items-center rounded-full bg-warning-tint px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong"
                         title="No longer an active employee — shown because they worked during the selected range"
                       >
                         Ex
