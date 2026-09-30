@@ -849,7 +849,7 @@ export default function ManageCoursesPage() {
  *
  * ─── Why the save is ordered, and what happens when half of it fails ─────
  *
- * Content is saved through PUT /courses/:id/videos, which needs an id — and on
+ * Content is saved through PUT /courses/:id/content, which needs an id — and on
  * the Add path there is no id until the POST returns. So the save is
  * necessarily two calls, and the interesting case is the POST succeeding and
  * the PUT failing: the course now EXISTS. Reporting that as "create failed"
@@ -904,8 +904,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   const createdIdRef = React.useRef<number | null>(null);
 
   /* Existing content — only an edit has any. All three kinds arrive in one
-   * ordered list; /videos still exists for compatibility but returns only part
-   * of the course, so this screen must not use it. */
+   * ordered list. */
   const contentKey = editing ? `/admin/lms/courses/${editing.id}/content` : null;
   const contentFetch = useFetch<CourseContentItem[]>(contentKey);
 
@@ -1066,6 +1065,15 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       return;
     }
     /*
+     * A course with no content can never be completed, so it is never saved
+     * empty — the backend's PUT /content refuses [] too. Skipped only while an
+     * existing course's content is still loading (draft is empty for a moment).
+     */
+    if (draft.length === 0 && !(editing && contentFetch.loading)) {
+      setError('Add at least one video, document or assessment before saving this course.');
+      return;
+    }
+    /*
      * Blank is legitimate, so only a typed value is checked. Worth checking at
      * all because a number input happily hands back "1e5" and "12.5", and the
      * endpoint's integer Joi rejects both with a message that names neither.
@@ -1156,14 +1164,8 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
     if (contentDirty) {
       try {
         // The PUT REPLACES the whole content list — ALL kinds, not just one —
-        // so array order here is the sequence the technician sees. An empty
-        // array is a valid payload (it clears the course), which is why
-        // there's no "must have >= 1" guard.
-        //
-        // /videos is deliberately NOT used even for a video-only course: it
-        // replaces only the video items and leaves documents and assessments
-        // in place, so a course whose last document the operator just removed
-        // would keep it.
+        // so array order here is the sequence the technician sees. Never
+        // empty: handleSubmit refuses a content-less course before this.
         await api.put(`/admin/lms/courses/${courseId}/content`, {
           items: draft.map((d) => ({ kind: d.kind, ref_id: d.ref_id })),
         });
@@ -1456,7 +1458,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
                     it will show up as assigned and stay stuck at 0% forever.
                     {isSystem
                       ? 'This is the default course every technician must finish. Add at least 1 video — it cannot be saved without one.'
-                      : 'Add at least one video, document or assessment before assigning this course.'}
+                      : 'Add at least one video, document or assessment before saving this course.'}
                   </div>
                 </div>
               )}
