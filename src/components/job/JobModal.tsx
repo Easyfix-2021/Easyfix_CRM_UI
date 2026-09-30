@@ -993,9 +993,12 @@ function ActionBar({ job, jobId, onChanged }: {
         </Button>
       )}
       {/* Schedule Visit 2 (D7) — the desk schedules a REVISIT job's second
-          visit, status 10 -> 1, same technician. Same gate + shared dialog
-          as the /ops-desk row action for waitingFor 'schedule_visit2'. */}
-      {can[APP_REQUEST_ACTION] && s === ST.REVISIT && (
+          visit, status 10 -> 1, same technician. Shared dialog with the
+          /ops-desk row action for waitingFor 'schedule_visit2'. Only on a job
+          that IS a revisit (isRevisitPending — the markers that rule reads):
+          a plain status-10 close is Under Audit and gets Audit & Checkout
+          instead, so a status-10 job shows exactly one of the two. */}
+      {can[APP_REQUEST_ACTION] && isRevisitPending(job) && (
         <Button size="sm" onClick={() => setVisitTwoOpen(true)}>Schedule Visit 2</Button>
       )}
       {/*
