@@ -167,13 +167,17 @@ export const api = {
     request<{ id: number }>(`/admin/jobs/${jobId}/travel`, { method: 'POST', body }),
   addJobIncentive: (jobId: number, body: IncentiveChargeInput) =>
     request<{ id: number }>(`/admin/jobs/${jobId}/incentive`, { method: 'POST', body }),
+  // Material line (legacy audit screen's addAndUpdateMaterial). The server
+  // derives tx / client charge as unit x unit price.
+  addJobMaterial: (jobId: number, body: MaterialChargeInput) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/material`, { method: 'POST', body }),
 
   // Edit a charge line item. Body shape matches the charge's own type
   // (penalty / travel / incentive) — same fields as the POST that created it.
   updateJobCharge: (
     jobId: number,
     chargeId: number,
-    body: PenaltyChargeInput | TravelChargeInput | IncentiveChargeInput,
+    body: PenaltyChargeInput | TravelChargeInput | IncentiveChargeInput | MaterialChargeInput,
   ) =>
     request<{ id: number }>(`/admin/jobs/${jobId}/charges/${chargeId}`, { method: 'PATCH', body }),
 
@@ -356,6 +360,11 @@ export type JobCharge = {
   type: string;
   tx_charge: number | null;
   client_charge: number | null;
+  /** Material rows only (legacy saveMaterialWithType columns). */
+  name?: string | null;
+  description?: string | null;
+  unit?: number | null;
+  uom?: string | null;
   reason: string | null;
   from_city_name: string | null;
   to_city_name: string | null;
@@ -443,6 +452,14 @@ export type PenaltyChargeInput = {
   clientCharge: number;
   reason: string;
   isClientApprovalNeeded: boolean;
+};
+export type MaterialChargeInput = {
+  name: string;
+  description?: string;
+  unit: number;
+  uom?: string;
+  txUnit: number;
+  clientUnit: number;
 };
 export type IncentiveChargeInput = {
   reason: string;

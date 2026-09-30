@@ -48,7 +48,7 @@ import {
   TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
-import { transitionAllowed } from '@/lib/job-stages';
+import { STAGES, transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
 import { ClientApprovalOnBehalfModal } from '@/components/job/ClientApprovalOnBehalfModal';
@@ -411,6 +411,10 @@ export default function JobsPage() {
    * beside it. Same gate /my-orders uses (my-orders/page.tsx:223).
    */
   const canAudit = me?.canManageJobCharges === true;
+  // Which statuses carry the Audit action — the Under Audit stage, read off the
+  // stage map exactly as /my-orders does (its AUDIT_STATUSES note has the history:
+  // this page still said 3 || 5 after the 2026-09-10 split made 10 Under Audit).
+  const auditStatuses = STAGES['audit-complete'].visibleStatuses;
   // Declared up here (ahead of the state block) so the `q`/`sort` state
   // lazy-initializers below can hydrate from the URL, and the write-effect
   // can persist them back. useSearchParams() is stable at first render in
@@ -1054,8 +1058,8 @@ export default function JobsPage() {
    * 0 → Schedule & Assign, 1 → the assign console, anything else → read-only
    * View. Same hook, same map (lib/job-action-url) as My Orders, so the two
    * pages cannot drift. Only the WRITE consoles are policed — view / checkin /
-   * audit / edit / create are untouched, which matters most here: Audit &
-   * Complete opens `audit` on status 3/5 and must keep working.
+   * audit / edit / create are untouched, which matters most here: Audit
+   * opens `audit` on Under Audit (10) and must keep working.
    *
    * The memos below read `openAction`, never the raw URL, so the refused
    * console never mounts — no flash of a screen the operator should not see,
@@ -1172,7 +1176,7 @@ export default function JobsPage() {
   // Pending-for-Scheduling rows → the combined Schedule & Assign modal.
   function openSchedule(id: number) { openJobAction('schedule', id); }
   /*
-   * Audit & Complete (status 3 / 5) — the SAME JobModal workspace the Eye
+   * Audit (Under Audit, status 10) — the SAME JobModal workspace the Eye
    * opens, titled "Audit · Job #N" and deep-linked to Billing & Charges via the
    * existing `{ tab }` sub-state (written as ?viewTab=). That is where every
    * audit action lives: service approval, charge approvals, advances, documents.
@@ -2350,7 +2354,7 @@ export default function JobsPage() {
                       *   status 0     → View + Schedule & Assign (date/slot + tech, atomic)
                       *   status 1     → View + Reassign + Resend PIN (no Check-In: done from the app)
                       *   status 2, 20 → View + Resend PIN (no Check-Out: closed from the app)
-                      *   status 3, 5  → View + Audit (Billing & Charges)
+                      *   status 10    → View + Audit (Billing & Charges → Audit & Checkout)
                       *   others       → View only
                       */}
                     <div className="inline-flex items-center gap-0.5 justify-end">
@@ -2463,7 +2467,7 @@ export default function JobsPage() {
                           the technician checks in and out from the app. See the
                           note in JobModal's ActionBar. */}
                       {/*
-                        * Audit (Audit & Complete — statuses 3 / 5). Opens the
+                        * Audit (Under Audit — status 10, from the stage map). Opens the
                         * same workspace the Eye does, landed on Billing &
                         * Charges. Gated on the STATUS, not the tab, so it
                         * behaves the same on the 'all' list — and on canAudit,
@@ -2474,7 +2478,7 @@ export default function JobsPage() {
                         * completion it leads to is performed inside the modal,
                         * which carries its own gates.
                         */}
-                      {(j.job_status === 3 || j.job_status === 5) && canAudit && (
+                      {auditStatuses.includes(j.job_status) && canAudit && (
                         <IconButton
                           icon={ClipboardCheck}
                           intent="primary"
