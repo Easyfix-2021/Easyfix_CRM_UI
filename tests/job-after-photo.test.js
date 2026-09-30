@@ -161,12 +161,18 @@ test('a close refused for want of a photo surfaces the server\'s sentence, not a
    * now share. Counting JobModal alone would have quietly dropped the cancel
    * path out of this check while still passing at a smaller number — so the
    * count spans both and the total is unchanged at 2.
+   *
+   * 2026-09-30: the first two CLOSES joined — Audit & Checkout (10 → 3, its own
+   * file, the move the after-photo gate refuses) and Feedback & Complete
+   * (3 → 5, JobModal). Both show the server's sentence (formatApiError /
+   * ApiError.message). A typed call, api.patch<T>(…), counts too.
    */
   const api = fs.readFileSync(path.join(__dirname, '..', 'src/lib/api.ts'), 'utf8');
   assert.match(api, /throw new ApiError\(res\.status, json\.error \|\| `HTTP \$\{res\.status\}`/);
   const SHARED_CANCEL = fs.readFileSync(path.join(__dirname, '..', 'src/components/job/CancelJob.tsx'), 'utf8');
-  const population = CODE + SHARED_CANCEL;
-  const patches = [...population.matchAll(/api\.patch\(`\/admin\/jobs\/\$\{[\w.]+\}\/status`/g)];
-  assert.equal(patches.length, 2, `client status PATCHes changed (found ${patches.length}) — re-check their error paths`);
+  const AUDIT_CHECKOUT = fs.readFileSync(path.join(__dirname, '..', 'src/components/job/AuditCheckoutDialog.tsx'), 'utf8');
+  const population = CODE + SHARED_CANCEL + strip(AUDIT_CHECKOUT);
+  const patches = [...population.matchAll(/api\.patch(?:<\w+>)?\(`\/admin\/jobs\/\$\{[\w.]+\}\/status`/g)];
+  assert.equal(patches.length, 4, `client status PATCHes changed (found ${patches.length}) — re-check their error paths`);
   assert.doesNotMatch(population, /AFTER_PHOTO_REQUIRED/, 'no second copy of the backend\'s sentence in the client');
 });

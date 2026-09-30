@@ -150,6 +150,37 @@ const ACTIONS = [
     sources: [1],
     targets: [6],
   },
+  /*
+   * The two moves that finish a job (2026-09-30) — legacy's Check Out and
+   * Feedback, which ops still ran from the legacy CRM because nothing here left
+   * Under Audit. Both fence the source with an exact status in the gate.
+   */
+  {
+    name: 'JobModal · Audit & Checkout',
+    file: 'components/job/AuditCheckoutDialog.tsx',
+    gates: [
+      ['components/job/JobModal.tsx',
+        'const canAuditCheckout = s === ST.REVISIT && !isRevisitPending(job) && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);'],
+      // A revisit (status 10 WITH a revisit marker) gets Schedule Visit 2, never
+      // a completion — see isRevisitPending.
+      ['components/job/JobModal.tsx',
+        'const isRevisitPending = (job: Record<string, unknown>) => Number(job.job_status) === ST.REVISIT && (job.revisit_reason_id != null || job.revisit_date != null || Number(job.visit_number ?? 1) > 1);'],
+      ['components/job/AuditCheckoutDialog.tsx', 'status: ST.COMPLETED, extras: { collected_by: code },'],
+    ],
+    sources: [10],
+    targets: [3],
+  },
+  {
+    name: 'JobModal · Feedback & Complete',
+    file: 'components/job/JobModal.tsx',
+    gates: [
+      ['components/job/JobModal.tsx',
+        'const canComplete = s === ST.COMPLETED && can.isJobEdit && transitionAllowed(me?.allowedStages, s, ST.COMPLETED_ALT);'],
+      ['components/job/JobModal.tsx', 'if (complete) { await api.patch(`/admin/jobs/${jobId}/status`, { status: ST.COMPLETED_ALT });'],
+    ],
+    sources: [3],
+    targets: [5],
+  },
 ];
 
 /*

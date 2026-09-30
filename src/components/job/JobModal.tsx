@@ -28,6 +28,7 @@ import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
 import { appRequestFromDetail, pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
 import { RescheduleRequestedText } from './RescheduleRequestedText';
 import { BillingChargesTab } from './BillingChargesTab';
+import { AuditCheckoutDialog, completionLedgerKey } from './AuditCheckoutDialog';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
 // both ActionBar and the customer-request "apply" flow use it.
@@ -134,6 +135,19 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
+/*
+ * STATUS 10 MEANS TWO THINGS (2026-09-30): a job the technician closed as
+ * needing ANOTHER visit (Revisit), and a finished job waiting for ops (Under
+ * Audit). Exactly one footer action fits each — completing a revisit posts a
+ * payout for unfinished work; booking a second visit on a finished job sends
+ * the technician back for nothing. A revisit carries a marker the plain close
+ * does not: the checkout's revisit reason / date, or a bumped visit_number.
+ * Same markers as the backend's job-pending-on.js rule 8b (the Ops Desk's
+ * "schedule_visit2"). QA 2026-09-30: 0 of 259 status-10 jobs carry a reason or
+ * date — the app's normal close — so they all read as Under Audit.
+ */
+const isRevisitPending = (job: Record<string, unknown>) => Number(job.job_status) === ST.REVISIT
+  && (job.revisit_reason_id != null || job.revisit_date != null || Number(job.visit_number ?? 1) > 1);
 const canCancel        = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
@@ -879,6 +893,8 @@ function ActionBar({ job, jobId, onChanged }: {
   //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [completeOpen, setCompleteOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
@@ -893,6 +909,16 @@ function ActionBar({ job, jobId, onChanged }: {
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
+  /*
+   * The two moves that finish a job (2026-09-30), ported from the legacy CRM,
+   * which ops were still using for them:
+   *   Audit & Checkout     10 → 3  saveCheckOutJob — gated like the Audit
+   *                                action that opens this workspace.
+   *   Feedback & Complete   3 → 5  saveFeedbackJob — gated like Feedback.
+   * tests/job-status-actions.test.js reads these gates verbatim.
+   */
+  const canAuditCheckout = s === ST.REVISIT && !isRevisitPending(job) && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);
+  const canComplete = s === ST.COMPLETED && can.isJobEdit && transitionAllowed(me?.allowedStages, s, ST.COMPLETED_ALT);
   // Legacy Auto-assign / Manual-pick buttons retired (2026-07-09) — assignment
   // now flows exclusively through the Schedule & Assign modal (?action=schedule).
   // Gated off (not deleted) so the dialogs below stay wired for a quick revert.
@@ -951,7 +977,13 @@ function ActionBar({ job, jobId, onChanged }: {
           feedback against an in-progress job lets ops capture sentiment
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
-      {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && !canComplete && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {canComplete && <Button size="sm" onClick={() => setCompleteOpen(true)}>Feedback &amp; Complete</Button>}
+      {canAuditCheckout && (
+        <Button size="sm" onClick={() => { invalidateFetch((k) => k === completionLedgerKey(jobId)); setAuditOpen(true); }}>
+          Audit &amp; Checkout
+        </Button>
+      )}
       {/*
         * NO CRM CHECK IN OR CHECK OUT (2026-09-11, per ops). The technician
         * checks in and out FROM THE APP. Check Out (2/20 → 10 Under Audit) had
@@ -1030,6 +1062,18 @@ function ActionBar({ job, jobId, onChanged }: {
         open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
         jobId={jobId}
         onSaved={() => { setFeedbackOpen(false); onChanged(); }}
+      />
+      <FeedbackDialog
+        complete
+        open={completeOpen} onClose={() => setCompleteOpen(false)}
+        jobId={jobId}
+        onSaved={() => { setCompleteOpen(false); onChanged(); }}
+      />
+      <AuditCheckoutDialog
+        open={auditOpen} onClose={() => setAuditOpen(false)}
+        jobId={jobId}
+        collectedBy={job.collected_by}
+        onDone={() => { setAuditOpen(false); onChanged(); }}
       />
     </div>
   );
@@ -1647,6 +1691,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             clientId={(job as Record<string, unknown>).fk_client_id != null ? Number((job as Record<string, unknown>).fk_client_id) : null}
             efrId={job.fk_easyfixter_id != null ? Number(job.fk_easyfixter_id) : null}
             canManage={canManageJobCharges}
+            chargesLocked={isJobClosed(Number(job.job_status))}
           />
         </Panel>
       )}
@@ -12514,8 +12559,15 @@ type FeedbackData = {
   happy_with_service?: number | null;
 };
 
-function FeedbackDialog({ open, onClose, jobId, onSaved }: {
-  open: boolean; onClose: () => void; jobId: number; onSaved: () => void;
+/*
+ * `complete` = Feedback & Complete (3 → 5), legacy's saveFeedbackJob: the
+ * Easyfixer rating is mandatory there, and the save is followed by the move to
+ * Completed, which stamps feedback_date_time / fk_feedback_by and records the
+ * rating against the technician (setStatus). Without it this is the plain
+ * feedback editor.
+ */
+function FeedbackDialog({ open, onClose, jobId, onSaved, complete = false }: {
+  open: boolean; onClose: () => void; jobId: number; onSaved: () => void; complete?: boolean;
 }) {
   const [efrRating, setEfrRating] = useState('');
   const [efxRating, setEfxRating] = useState('');
@@ -12550,6 +12602,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
     const ex = efxRating ? Number(efxRating) : undefined;
     if (er != null && (er < 1 || er > 5)) { setErr('Easyfixer rating must be 1–5'); return; }
     if (ex != null && (ex < 1 || ex > 5)) { setErr('EasyFix service rating must be 1–5'); return; }
+    if (complete && er == null) { setErr('Easyfixer rating is required to complete the job'); return; }
     if (er == null && ex == null && happy === '') {
       setErr('Enter at least one feedback field'); return;
     }
@@ -12560,6 +12613,10 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
         easyfixRating: ex,
         happyWithService: happy === '' ? undefined : Number(happy),
       });
+      if (complete) {
+        await api.patch(`/admin/jobs/${jobId}/status`, { status: ST.COMPLETED_ALT });
+        showToast({ variant: 'success', message: 'Job Completed' });
+      }
       onSaved();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Save failed');
@@ -12569,7 +12626,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Customer Feedback</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{complete ? 'Feedback & Complete' : 'Customer Feedback'}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           {loadingExisting && <div className="text-xs text-muted-foreground">Loading existing feedback…</div>}
           <div className="grid grid-cols-2 gap-3">
@@ -12607,7 +12664,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
           {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
-            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save Feedback'}</Button>
+            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : complete ? 'Save & Complete' : 'Save Feedback'}</Button>
           </div>
         </div>
       </DialogContent>
