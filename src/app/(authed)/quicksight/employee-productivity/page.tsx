@@ -113,6 +113,8 @@ type ManagerLite = { user_id: number; user_name: string };
 type SpocRevenueRow = {
   userId: number;
   userName: string;
+  /* SPOC has left; their revenue stays where it was earned. */
+  isFormer?: boolean;
   jobsCompleted: number;
   revenue: number;
 };
@@ -123,6 +125,11 @@ type SpocRevenueResponse = {
   totalRevenue: number;
   avgRevenue: number;
   spocs: SpocRevenueRow[];
+  /*
+   * Closed jobs carrying no job_primary_spoc stamp. Counted in the totals,
+   * excluded from spocCount — it is a data gap to work through, not a person.
+   */
+  extras?: { jobsCompleted: number; revenue: number };
 };
 
 /* ── date helpers (Yesterday default; no TZ math beyond local calendar) ── */
@@ -779,6 +786,14 @@ function SpocRevenueSection({
             >
               <div className="text-sm font-medium leading-tight truncate" title={s.userName}>
                 {s.userName || '—'}
+                {s.isFormer ? (
+                  <span
+                    className="ml-1.5 inline-flex items-center rounded-full bg-warning-tint px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong align-middle"
+                    title="No longer an active employee — revenue stays with the SPOC who earned it"
+                  >
+                    Ex
+                  </span>
+                ) : null}
               </div>
               <div className="text-base font-semibold tabular-nums text-success-strong">
                 ₹{fmtNum(s.revenue)}
@@ -788,6 +803,29 @@ function SpocRevenueSection({
               </div>
             </div>
           ))}
+
+          {/*
+            EXTRAS — closed jobs with no SPOC stamp. Rendered LAST and in a
+            warning tone so it reads as a worklist, not a colleague. Shown only
+            when it is non-empty: a permanent "0 jobs" tile trains people to
+            ignore the one month it is not zero.
+          */}
+          {data.extras && data.extras.jobsCompleted > 0 ? (
+            <div
+              className="rounded-md border border-warning-strong/40 bg-warning-tint/40 p-3 space-y-1"
+              title="Closed jobs with no Primary SPOC recorded. Counted in the total, but not credited to anyone — worth checking why the SPOC is missing."
+            >
+              <div className="text-sm font-medium leading-tight truncate text-warning-strong">
+                Extras · no SPOC
+              </div>
+              <div className="text-base font-semibold tabular-nums text-warning-strong">
+                ₹{fmtNum(data.extras.revenue)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {data.extras.jobsCompleted} {data.extras.jobsCompleted === 1 ? 'job' : 'jobs'} completed
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
