@@ -15,6 +15,7 @@ import { WebCallProvider } from '@/components/calls/WebCallContext';
 import { WebCallPanel } from '@/components/calls/WebCallPanel';
 import { NoticeFlash } from '@/components/notice/NoticeFlash';
 import { IssueReporter } from '@/components/issue/IssueReporter';
+import { UrgentAlerts } from '@/components/employee-hub/UrgentAlerts';
 
 /*
  * Client-side auth gate.
@@ -95,6 +96,11 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
               survives page changes; it renders nothing when there is nothing
               unread. See components/notice/NoticeFlash.tsx. */}
           <NoticeFlash />
+          {/* Employee Hub — Sick Leave instant popup for the approver. Polls
+              GET /admin/leave/alerts (visible tabs + on focus); renders
+              nothing when there is nothing pending. Root-mounted like the
+              other overlays so it survives navigation. */}
+          <UrgentAlerts />
           {/*
             * In-app issue reporter — a floating button on every authed page.
             * Must sit INSIDE AuthProvider and ConfirmDialogProvider: it reads

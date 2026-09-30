@@ -103,7 +103,9 @@ export function FillPatternDialog({
   else if (previewError) previewText = previewError;
   else if (preview) {
     const days = daysBetweenInclusive(from, to);
-    previewText = `Preview: ${days} Day${days === 1 ? '' : 's'} For ${preview.users} Employee${preview.users === 1 ? '' : 's'} · ${preview.wo} WO · ${preview.pr} PR · ${preview.keptManual} Individually Set Day${preview.keptManual === 1 ? '' : 's'} Kept`;
+    const keptLeave = preview.keptLeave ?? 0;
+    previewText = `Preview: ${days} Day${days === 1 ? '' : 's'} For ${preview.users} Employee${preview.users === 1 ? '' : 's'} · ${preview.wo} WO · ${preview.pr} PR · ${preview.keptManual} Individually Set Day${preview.keptManual === 1 ? '' : 's'} Kept`
+      + (keptLeave > 0 ? ` · ${keptLeave} Leave Day${keptLeave === 1 ? '' : 's'} Kept` : '');
   }
 
   async function apply() {
