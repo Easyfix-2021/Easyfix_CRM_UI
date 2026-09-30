@@ -1,6 +1,12 @@
 'use client';
 /*
- * Jobs completed, split by service category or by vertical.
+ * Jobs completed IN THE LAST 12 MONTHS, split by service category or vertical.
+ *
+ * The window is what makes the card readable: across the last year not one
+ * completed job is missing a category or a vertical, and none sits in a
+ * retired category — so every bar is a real, current thing. Lifetime, those
+ * three cases account for tens of thousands of rows the reader cannot act on.
+ * The lifetime total keeps its own tile at the top of this tab.
  *
  * WHAT IT COUNTS. Completed jobs that carry a transaction row — the same set
  * the earnings tile sums, so the two can be read against each other. The
@@ -28,7 +34,12 @@ type CategoryRow = {
   jobs: number;
 };
 type VerticalRow = { vertical_id: number | null; vertical_name: string | null; jobs: number };
-type Summary = { total_completed: number; by_category: CategoryRow[]; by_vertical: VerticalRow[] };
+type Summary = {
+  window_months: number;
+  total_completed: number;
+  by_category: CategoryRow[];
+  by_vertical: VerticalRow[];
+};
 
 type Mode = 'category' | 'vertical';
 
@@ -96,7 +107,7 @@ export function JobsCompletedCard({ efrId }: { efrId: number }) {
 
   return (
     <SectionCard
-      title="Jobs completed"
+      title={`Jobs completed · last ${data?.window_months ?? 12} months`}
       icon={<span>🧩</span>}
       right={
         <span className="inline-flex overflow-hidden rounded-lg border">
@@ -123,13 +134,13 @@ export function JobsCompletedCard({ efrId }: { efrId: number }) {
       ) : error ? (
         <p className="text-sm text-urgent">Could not load the job breakdown.</p>
       ) : total === 0 ? (
-        <p className="text-sm text-muted-foreground">No completed jobs yet.</p>
+        <p className="text-sm text-muted-foreground">No jobs completed in the last 12 months.</p>
       ) : (
         <>
           <Bars rows={rows} />
 
           <div className="mt-3 flex items-center justify-between border-t pt-2.5">
-            <span className="text-sm text-muted-foreground">Total completed</span>
+            <span className="text-sm text-muted-foreground">Total completed · last 12 months</span>
             <span className="font-mono text-base font-semibold tabular-nums text-ink-900">{total}</span>
           </div>
 
