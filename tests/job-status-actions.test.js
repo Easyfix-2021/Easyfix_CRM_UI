@@ -160,7 +160,11 @@ const ACTIONS = [
     file: 'components/job/AuditCheckoutDialog.tsx',
     gates: [
       ['components/job/JobModal.tsx',
-        'const canAuditCheckout = s === ST.REVISIT && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);'],
+        'const canAuditCheckout = s === ST.REVISIT && !isRevisitPending(job) && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);'],
+      // A revisit (status 10 WITH a revisit marker) gets Schedule Visit 2, never
+      // a completion — see isRevisitPending.
+      ['components/job/JobModal.tsx',
+        'const isRevisitPending = (job: Record<string, unknown>) => Number(job.job_status) === ST.REVISIT && (job.revisit_reason_id != null || job.revisit_date != null || Number(job.visit_number ?? 1) > 1);'],
       ['components/job/AuditCheckoutDialog.tsx', 'status: ST.COMPLETED, extras: { collected_by: code },'],
     ],
     sources: [10],

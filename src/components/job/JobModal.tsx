@@ -140,6 +140,19 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
+/*
+ * STATUS 10 MEANS TWO THINGS (2026-09-30): a job the technician closed as
+ * needing ANOTHER visit (Revisit), and a finished job waiting for ops (Under
+ * Audit). Exactly one footer action fits each — completing a revisit posts a
+ * payout for unfinished work; booking a second visit on a finished job sends
+ * the technician back for nothing. A revisit carries a marker the plain close
+ * does not: the checkout's revisit reason / date, or a bumped visit_number.
+ * Same markers as the backend's job-pending-on.js rule 8b (the Ops Desk's
+ * "schedule_visit2"). QA 2026-09-30: 0 of 259 status-10 jobs carry a reason or
+ * date — the app's normal close — so they all read as Under Audit.
+ */
+const isRevisitPending = (job: Record<string, unknown>) => Number(job.job_status) === ST.REVISIT
+  && (job.revisit_reason_id != null || job.revisit_date != null || Number(job.visit_number ?? 1) > 1);
 const canCancel        = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
@@ -912,7 +925,7 @@ function ActionBar({ job, jobId, onChanged }: {
    *   Feedback & Complete   3 → 5  saveFeedbackJob — gated like Feedback.
    * tests/job-status-actions.test.js reads these gates verbatim.
    */
-  const canAuditCheckout = s === ST.REVISIT && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);
+  const canAuditCheckout = s === ST.REVISIT && !isRevisitPending(job) && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);
   const canComplete = s === ST.COMPLETED && can.isJobEdit && transitionAllowed(me?.allowedStages, s, ST.COMPLETED_ALT);
   // Legacy Auto-assign / Manual-pick buttons retired (2026-07-09) — assignment
   // now flows exclusively through the Schedule & Assign modal (?action=schedule).
