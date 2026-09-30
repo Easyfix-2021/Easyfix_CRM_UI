@@ -23,10 +23,13 @@ import { istNowWallClock } from '@/lib/utils';
 
 type RosterDay = {
   date: string;
-  type: 'PR' | 'WO';
+  /** 'LV'/'SL' only for an APPROVED full-day leave (Employee Hub leave, 2026-09-30) — see `leave` for a half-day/pending one. */
+  type: 'PR' | 'WO' | 'LV' | 'SL';
   shift: string | null;
-  source: 'ROSTER' | 'WEEKLY';
+  source: 'ROSTER' | 'WEEKLY' | 'LEAVE';
   holiday: { name: string } | null;
+  locked?: true;
+  leave?: { id: number; kind: 'LV' | 'SL'; duration: 'FULL' | 'FIRST_HALF' | 'SECOND_HALF'; status: 'PENDING' | 'APPROVED' } | null;
 };
 type RosterTeam = {
   date: string;
@@ -88,10 +91,19 @@ export function MyRoster({ count = 7, showTeam = true }: { count?: number; showT
             <ul className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
               {days.slice(0, count).map((day) => {
                 const isToday = day.date === todayKey;
+                const isLeaveDay = day.type === 'LV' || day.type === 'SL';
                 const tone = day.holiday
                   ? 'bg-gold-strong dark:bg-gold-tint text-white'
+                  : isLeaveDay ? 'bg-urgent-tint text-urgent-strong'
                   : day.type === 'PR' ? 'bg-success-tint text-success-strong' : 'bg-warning-tint text-warning-strong';
-                const status = day.holiday ? day.holiday.name : day.type === 'PR' ? 'Present' : 'Week Off';
+                const status = day.holiday ? day.holiday.name
+                  : isLeaveDay ? (day.type === 'SL' ? 'Sick Leave' : 'On Leave')
+                  : day.type === 'PR' ? 'Present' : 'Week Off';
+                // Pending (any duration) or an approved half day — a locked
+                // full-day leave is already the tone/status above.
+                const leaveNote = day.leave && !day.locked
+                  ? (day.leave.status === 'PENDING' ? 'Requested' : `½ ${day.leave.kind}`)
+                  : null;
                 return (
                   <li
                     key={day.date}
@@ -104,6 +116,11 @@ export function MyRoster({ count = 7, showTeam = true }: { count?: number; showT
                     <span className={`truncate rounded-full text-xs font-medium px-2 py-0.5 text-center ${tone}`}>
                       {status}{!day.holiday && day.type === 'PR' && day.shift ? ` · ${day.shift}` : ''}
                     </span>
+                    {leaveNote && (
+                      <span className={`text-xs font-medium ${day.leave?.status === 'PENDING' ? 'text-warning-strong' : 'text-info-strong'}`}>
+                        {leaveNote}
+                      </span>
+                    )}
                   </li>
                 );
               })}

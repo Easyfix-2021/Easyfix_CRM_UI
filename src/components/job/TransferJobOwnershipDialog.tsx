@@ -151,12 +151,12 @@ export function TransferJobOwnershipDialog({
     if (!reason.trim() || reason.trim().length < 2) { setError('Reason is required (min 2 characters).'); return; }
 
     // Never blocks — just confirms. The To-owner list carries week_off_today
-    // from /shared/lookup/users (see use-lookup.ts).
+    // and on_leave_today from /shared/lookup/users (see use-lookup.ts).
     const toOwnerUser = lk.adminUsers.find((u) => String(u.user_id) === toOwner);
-    if (toOwnerUser?.week_off_today) {
+    if (toOwnerUser?.week_off_today || toOwnerUser?.on_leave_today) {
       const ok = await confirm({
         title: 'Assign Anyway?',
-        description: `${toOwnerUser.user_name} Is On Week Off Today. Assign Anyway?`,
+        description: `${toOwnerUser.user_name} Is ${toOwnerUser.on_leave_today ? 'On Leave' : 'On Week Off'} Today. Assign Anyway?`,
       });
       if (!ok) return;
     }
