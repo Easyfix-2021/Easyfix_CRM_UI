@@ -139,6 +139,19 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
+/*
+ * STATUS 10 MEANS TWO THINGS (2026-09-30): a job the technician closed as
+ * needing ANOTHER visit (Revisit), and a finished job waiting for ops (Under
+ * Audit). Exactly one footer action fits each — completing a revisit posts a
+ * payout for unfinished work; booking a second visit on a finished job sends
+ * the technician back for nothing. A revisit carries a marker the plain close
+ * does not: the checkout's revisit reason / date, or a bumped visit_number.
+ * Same markers as the backend's job-pending-on.js rule 8b (the Ops Desk's
+ * "schedule_visit2"). QA 2026-09-30: 0 of 259 status-10 jobs carry a reason or
+ * date — the app's normal close — so they all read as Under Audit.
+ */
+const isRevisitPending = (job: Record<string, unknown>) => Number(job.job_status) === ST.REVISIT
+  && (job.revisit_reason_id != null || job.revisit_date != null || Number(job.visit_number ?? 1) > 1);
 const canCancel        = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
@@ -961,9 +974,12 @@ function ActionBar({ job, jobId, onChanged }: {
           mistake-prone. */}
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
       {/* Schedule Visit 2 (D7) — the desk schedules a REVISIT job's second
-          visit, status 10 -> 1, same technician. Same gate + shared dialog
-          as the /ops-desk row action for waitingFor 'schedule_visit2'. */}
-      {can[APP_REQUEST_ACTION] && s === ST.REVISIT && (
+          visit, status 10 -> 1, same technician. Shared dialog with the
+          /ops-desk row action for waitingFor 'schedule_visit2'. Only on a job
+          that IS a revisit (isRevisitPending — the markers that rule reads):
+          a plain status-10 close is Under Audit and gets Audit & Checkout
+          instead, so a status-10 job shows exactly one of the two. */}
+      {can[APP_REQUEST_ACTION] && isRevisitPending(job) && (
         <Button size="sm" onClick={() => setVisitTwoOpen(true)}>Schedule Visit 2</Button>
       )}
       {/*
