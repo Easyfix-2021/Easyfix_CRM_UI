@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Input } from '@/components/ui/input';
+import { PriceInput } from '@/components/ui/price-input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Select } from '@/components/ui/select';
@@ -2708,10 +2709,7 @@ function QuotationApproveDialog({ row, onClose, onSubmit }: {
           <div className="text-xs text-muted-foreground">
             Set the final agreed charge (₹). The technician will be notified.
           </div>
-          <Input
-            type="number"
-            min="0"
-            step="0.01"
+          <PriceInput
             value={value}
             onChange={(e) => setValue(e.target.value)}
             autoFocus
@@ -11511,7 +11509,6 @@ function AutoServicesTable({
                       step={1}
                       value={row.quantity}
                       onChange={(e) => setRowQty(csId, e.target.value.replace(/\D/g, ''))}
-                      onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
                       onBlur={() => {
                         if (!row.quantity || Number(row.quantity) < 1) setRowQty(csId, '1');
                       }}

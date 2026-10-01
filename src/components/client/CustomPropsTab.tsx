@@ -33,6 +33,7 @@ import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { titleCaseLabel } from '@/lib/format';
 import type { ClientCustomProperty, ClientDetail, CustomPropertyFormPayload } from '@/lib/client-types';
+import { PriceInput } from '@/components/ui/price-input';
 
 /*
  * Shape of the cross-client distinct-keys endpoint
@@ -864,21 +865,15 @@ function MonthlyRevenueCard({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <div className="relative w-36">
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none">₹</span>
-          <Input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            step={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onWheel={(e) => (e.target as HTMLInputElement).blur()}
-            placeholder="0"
-            className="pl-6 w-full"
-            disabled={!canEdit || saving}
-          />
-        </div>
+        <PriceInput
+          inputMode="numeric"
+          step={1}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="0"
+          className="w-36"
+          disabled={!canEdit || saving}
+        />
         <Button
           size="sm"
           onClick={onSave}

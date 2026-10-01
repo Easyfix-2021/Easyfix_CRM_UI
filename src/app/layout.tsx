@@ -69,6 +69,18 @@ export const metadata: Metadata = {
   },
 };
 
+/*
+ * Wheel over a FOCUSED number input steps its value in every browser, so an
+ * operator who types a price and then scrolls the dialog silently changes it.
+ * Blurring on wheel lets the scroll go to the page instead. One capture-phase
+ * listener covers every number input in the app, present and future — do not
+ * re-add per-field onWheel handlers. Passive: it never blocks scrolling.
+ */
+const NUMBER_WHEEL_GUARD_SCRIPT =
+  "document.addEventListener('wheel',function(e){var t=e.target;" +
+  "if(t instanceof HTMLInputElement&&t.type==='number'&&t===document.activeElement)t.blur();}," +
+  '{capture:true,passive:true});';
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={plex.variable} suppressHydrationWarning>
@@ -86,6 +98,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           * legitimately differ on that one attribute.
           */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: NUMBER_WHEEL_GUARD_SCRIPT }} />
       </head>
       <body className="font-sans antialiased bg-background text-foreground">{children}</body>
     </html>
