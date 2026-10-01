@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Info } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { PriceInput } from '@/components/ui/price-input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -357,18 +358,11 @@ export function MaterialDialog({
                 <div className="space-y-3">
                   <div className="max-w-[220px]">
                     <Label className="block mb-1">Price (₹)</Label>
-                    <div className="relative">
-                      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={noBrandGroup?.price ?? ''}
-                        onChange={(e) => patchNoBrandPrice(e.target.value === '' ? null : Number(e.target.value))}
-                        placeholder="Optional"
-                        className="h-9 w-full rounded-md border border-input bg-background pl-5 pr-2 text-sm"
-                      />
-                    </div>
+                    <PriceInput
+                      value={noBrandGroup?.price ?? ''}
+                      onChange={(e) => patchNoBrandPrice(e.target.value === '' ? null : Number(e.target.value))}
+                      placeholder="Optional"
+                    />
                   </div>
                   <PriceTree
                     options={stateTreeOptions}

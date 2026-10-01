@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label';
 import { useLookup } from '@/lib/use-lookup';
 import { applyPriceChange, defaultTxShare } from '@/lib/tx-share';
 import type { ClientMaterialRateGroup, MasterMaterialStatePrice } from './client-material-rate-types';
+import { PriceInput } from '@/components/ui/price-input';
 
 export type ClientMaterialRateRowValue = {
   price: number | null;
@@ -83,18 +84,11 @@ function RupeeInput({ value, onChange, placeholder }: {
   placeholder?: string;
 }) {
   return (
-    <div className="relative">
-      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
-      <input
-        type="number"
-        min={0}
-        step="0.01"
-        value={value ?? ''}
-        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-        placeholder={placeholder ?? 'Required'}
-        className="h-9 w-full rounded-md border border-input bg-background pl-5 pr-2 text-sm"
-      />
-    </div>
+    <PriceInput
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      placeholder={placeholder ?? 'Required'}
+    />
   );
 }
 

@@ -11463,7 +11463,6 @@ function AutoServicesTable({
                       step={1}
                       value={row.quantity}
                       onChange={(e) => setRowQty(csId, e.target.value.replace(/\D/g, ''))}
-                      onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
                       onBlur={() => {
                         if (!row.quantity || Number(row.quantity) < 1) setRowQty(csId, '1');
                       }}

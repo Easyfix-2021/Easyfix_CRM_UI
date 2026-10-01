@@ -43,6 +43,7 @@ import { api, ApiError } from '@/lib/api';
 import { useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { COLLECTED_BY_OPTIONS, type ClientDetail } from '@/lib/client-types';
+import { PriceInput } from '@/components/ui/price-input';
 
 type Mode = 'create' | 'edit';
 
@@ -487,20 +488,13 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
               <Input value={form.couponCode} onChange={(e) => update('couponCode', e.target.value)} maxLength={50} />
             </Field>
             <Field label="Monthly Revenue (INR)">
-              <div className="relative">
-                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none">₹</span>
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  step={1}
-                  value={form.monthlyRevenue}
-                  onChange={(e) => update('monthlyRevenue', e.target.value)}
-                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
-                  placeholder="0"
-                  className="pl-6"
-                />
-              </div>
+              <PriceInput
+                inputMode="numeric"
+                step={1}
+                value={form.monthlyRevenue}
+                onChange={(e) => update('monthlyRevenue', e.target.value)}
+                placeholder="0"
+              />
             </Field>
           </Section>
 
