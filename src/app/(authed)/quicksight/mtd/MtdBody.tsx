@@ -114,6 +114,7 @@ import { WhyCancelledSection } from './sections/WhyCancelledSection';
 import { CityWiseSection } from './sections/CityWiseSection';
 import { StatusAgingSection } from './sections/StatusAgingSection';
 import { ClientReportSection } from './sections/client-report/ClientReportSection';
+import { ClientReportBoundary } from './sections/client-report/ClientReportBoundary';
 
 /* A BE 403 (requireQuickSight) arrives as one of these messages. */
 const DENIED_RE = /permission|quicksight access|access denied/i;
@@ -176,7 +177,11 @@ const CHECK_LABEL: Record<string, string> = {
   cancelBands: 'Cancel reasons and themes by days open',
   cities: 'The city table',
   statusAging: 'Jobs by status and aging',
+  tierAging: 'Open orders by tier',
   jobs: 'The job list',
+  escalated: 'Escalated jobs',
+  sda: 'SDA %',
+  completedOnCheckin: 'Completed on App CheckIn Date',
 };
 
 function checkLabel(key: string): string {
@@ -576,13 +581,25 @@ export function MtdBody() {
 
                  It appears only when exactly ONE client is ticked, which is how
                  the MIS page scopes its own Word report; with none or several
-                 the card says so in place. It is the LAYOUT ONLY — the .docx
-                 export and any emailing of it are still to be decided, so the
-                 download control is present and disabled, and Escalated, SDA %
-                 and the tier matrix render as explicit placeholders rather than
-                 as zeroes. It sits above the eleven sections because it is a
-                 document about this client, not another view of the tab.  ── */}
-          <ClientReportSection report={report} clientIds={filters.clientIds} period={period} />
+                 the card says so in place. Every FIGURE on it is now live:
+                 Escalated, SDA %, the App CheckIn basis and the tier matrix were
+                 explicit placeholders until 2026-09-30 and are measurements now,
+                 so a blank one is a fault to chase rather than a gap by design.
+                 What is still undecided is the .docx export and any emailing of
+                 it, which is why the download control alone stays disabled. It
+                 sits above the eleven sections because it is a document about
+                 this client, not another view of the tab.
+
+                 WRAPPED, for a reason this batch created: the card reads four
+                 response keys with no fallback, so a CRM running ahead of its
+                 backend throws while the element tree is being built. The
+                 nearest boundary above it is src/app/(authed)/error.tsx, which
+                 would replace the filter bar and all eleven sections — none of
+                 which need those keys — with a single error page. This keeps
+                 the blast radius at the one card that has the dependency.  ── */}
+          <ClientReportBoundary>
+            <ClientReportSection report={report} clientIds={filters.clientIds} period={period} />
+          </ClientReportBoundary>
 
           {/* ── section 1 ────────────────────────────────────────────────── */}
           <TicketsCreatedVsCompletedSection daily={report.daily} />
