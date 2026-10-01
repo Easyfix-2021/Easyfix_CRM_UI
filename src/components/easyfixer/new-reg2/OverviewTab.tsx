@@ -13,6 +13,7 @@ import { formatDate } from '@/lib/utils';
 import { parseIstDateTime } from '@/lib/format';
 import { SectionCard, Tile, Meter, LockedBody, inr } from './ui';
 import { JobsCompletedCard } from './JobsCompletedCard';
+import { TqiCard } from './TqiCard';
 import type { VerificationPayload, ProfileListRow, AggregateRow } from './types';
 
 function tenureFrom(iso: string | null | undefined): string {
@@ -27,6 +28,41 @@ function tenureFrom(iso: string | null | undefined): string {
   const m = months % 12;
   if (y === 0 && m === 0) return 'This month';
   return [y > 0 ? `${y} yr` : '', m > 0 ? `${m} mo` : ''].filter(Boolean).join(' ');
+}
+
+/*
+ * "Right now" — the four facts someone wants before picking up the phone:
+ * which vertical he was taken on for, when he last opened the app, in which
+ * language, and on which build.
+ *
+ * A null is shown as "Never seen" / "—" rather than hidden: that a technician
+ * has never opened the app is the most useful thing on this strip.
+ */
+function RightNowStrip({ v }: { v: VerificationPayload }) {
+  const ap = v.app_presence;
+  const items: Array<[string, React.ReactNode]> = [
+    ['Vertical', v.vertical.vertical_name ?? 'Not set'],
+    [
+      'Last seen on app',
+      ap.last_seen
+        ? <>{formatDate(ap.last_seen)}{ap.logged_in && <span className="ml-1 text-success">· logged in</span>}</>
+        : 'Never seen',
+    ],
+    ['App language', ap.language ? ap.language.toUpperCase() : '—'],
+    ['App version', ap.app_version ?? '—'],
+  ];
+  return (
+    <div className="rounded-xl border bg-card px-4 py-3">
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4">
+        {items.map(([label, value]) => (
+          <div key={label}>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+            <div className="mt-0.5 text-[13px] font-medium text-ink-900">{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function OverviewTab({
@@ -49,6 +85,8 @@ export function OverviewTab({
 
   return (
     <div className="space-y-4">
+      {v && <RightNowStrip v={v} />}
+
       {active ? (
         <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
           <Tile label="Total earnings" value={inr(earnings)} sub={row?.insert_date ? `since ${formatDate(row.insert_date)}` : undefined} />
@@ -66,6 +104,8 @@ export function OverviewTab({
           Earnings, balance, jobs and coverage appear once this Easyfixer is activated. See the <b>Onboarding</b> tab to review &amp; activate.
         </div>
       )}
+
+      {active && efrId != null && <TqiCard efrId={efrId} />}
 
       <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2 [&>*]:h-full">
         {active && efrId != null ? (

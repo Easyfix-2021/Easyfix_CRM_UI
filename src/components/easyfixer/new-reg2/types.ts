@@ -140,6 +140,13 @@ export type VerificationPayload = {
     mandatory_done: number;
     is_complete: boolean;
   };
+  /** Where he was last seen in the technician app. Nulls mean never seen. */
+  app_presence: {
+    last_seen: string | null;
+    app_version: string | null;
+    language: string | null;
+    logged_in: boolean;
+  };
   /** The vertical this technician was onboarded FOR. A label, not a work fence. */
   vertical: {
     vertical_id: number | null;
@@ -224,4 +231,15 @@ export type PincodeChip = {
   // A city's zonal manager is its state's, stored on tbl_city.state_user.
   // Often null: only ~4,100 of ~11,000 active cities have one assigned.
   zonal_manager_name: string | null;
+};
+
+/** TQI — six weighted quality criteria over the last 12 months of closed jobs. */
+export type TqiCriterion = { key: string; label: string; weight: number; percent: number | null };
+export type Tqi = {
+  window_months: number;
+  jobs: number;
+  rated_jobs?: number;
+  /** null when he has completed no jobs in the window — no score, not a zero. */
+  score: number | null;
+  criteria: TqiCriterion[];
 };
