@@ -78,20 +78,6 @@ export function isClientMaterialRateRowValid(value: ClientMaterialRateRowValue):
   return priceValid && txShareValid && statesValid;
 }
 
-function RupeeInput({ value, onChange, placeholder }: {
-  value: number | null;
-  onChange: (v: number | null) => void;
-  placeholder?: string;
-}) {
-  return (
-    <PriceInput
-      value={value ?? ''}
-      onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-      placeholder={placeholder ?? 'Required'}
-    />
-  );
-}
-
 export function ClientMaterialPriceEditor({
   value, onChange, masterStatePrices,
 }: {
@@ -139,11 +125,19 @@ export function ClientMaterialPriceEditor({
       <div className="grid grid-cols-2 gap-3 max-w-sm">
         <div>
           <Label className="block mb-1" required>Price (₹)</Label>
-          <RupeeInput value={value.price} onChange={patchPrice} />
+          <PriceInput
+            value={value.price ?? ''}
+            onChange={(e) => patchPrice(e.target.value === '' ? null : Number(e.target.value))}
+            placeholder="Required"
+          />
         </div>
         <div>
           <Label className="block mb-1">Tx Share (₹)</Label>
-          <RupeeInput value={value.txShare} onChange={patchTxShare} />
+          <PriceInput
+            value={value.txShare ?? ''}
+            onChange={(e) => patchTxShare(e.target.value === '' ? null : Number(e.target.value))}
+            placeholder="Required"
+          />
         </div>
       </div>
       <PriceTree

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PriceInput } from '@/components/ui/price-input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -452,8 +453,8 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
           </div>
           <div>
             <Label className="block mb-1" required>Price (₹)</Label>
-            <Input
-              type="number" min={0} step={1} inputMode="numeric"
+            <PriceInput
+              step={1} inputMode="numeric"
               value={price}
               onChange={(e) => setPrice(e.target.value)}
               placeholder="e.g. 499"

@@ -49,6 +49,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Loader2, RotateCcw, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PriceInput } from '@/components/ui/price-input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { showToast } from '@/components/ui/toast';
@@ -391,7 +392,7 @@ export function ProfileOverviewSection({
                 onChange={(e) => set('couponCode', e.target.value)} />
             </Field>
             <Field label="Monthly Revenue (₹)">
-              <Input type="number" min={0} value={form.monthlyRevenue} disabled={ro}
+              <PriceInput step={1} inputMode="numeric" value={form.monthlyRevenue} disabled={ro}
                 onChange={(e) => set('monthlyRevenue', e.target.value)} />
             </Field>
           </Row>
