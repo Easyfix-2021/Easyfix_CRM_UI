@@ -5,6 +5,8 @@ import { ChevronDown } from 'lucide-react';
 import { useFetch } from '@/lib/hooks';
 import { formatDate } from '@/lib/utils';
 import type { JobComment } from './jobTypes';
+// Shared with JobModal's Comments tab — the same thread, so the same labels.
+import { LEGACY_REMARKS_FOR, jobStageLabel } from '@/lib/job-comment-labels';
 
 /*
  * A pending customer cancel/reschedule request (tbl_job_customer_request),
@@ -117,10 +119,22 @@ export function JobRemarksView({
           <div className="px-3 py-3 text-sm text-muted-foreground">No remarks yet.</div>
         )}
         {!loading && rows.length > 0 && (
+          <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="text-left text-muted-foreground">
                 <th className="px-3 py-1.5 font-medium">Date / Time</th>
+                {/*
+                  * Remarks For + Stage (2026-09-30 per ops). Without them this
+                  * panel showed a reschedule as an undifferentiated remark:
+                  * an operator standing in Schedule & Assign — the very screen
+                  * where they are deciding what to do next — could not see that
+                  * the job had been rescheduled, let alone from which stage.
+                  * Both read the same fields as the Comments tab, via the
+                  * shared lib/job-comment-labels.
+                  */}
+                <th className="px-3 py-1.5 font-medium whitespace-nowrap">Remarks For</th>
+                <th className="px-3 py-1.5 font-medium whitespace-nowrap">Stage</th>
                 <th className="px-3 py-1.5 font-medium">Remarks</th>
                 <th className="px-3 py-1.5 font-medium">By</th>
                 <th className="px-3 py-1.5 font-medium">Reason</th>
@@ -130,6 +144,16 @@ export function JobRemarksView({
               {rows.map((c) => (
                 <tr key={c.id} className="border-t align-top">
                   <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(c.created_on)}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">
+                    {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  {/* Em dash, not blank, for a row with no recorded stage —
+                      mostly Node-era rows (2026-04-29 → 2026-09-30), when most
+                      writers stored none — and a blank cell reads like a
+                      rendering bug rather than "not recorded back then". */}
+                  <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">
+                    {jobStageLabel(c.job_stage) || <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="px-3 py-1.5">{c.comments || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap">{c.remark_by || c.user_name || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-3 py-1.5">{c.enum_desc || <span className="text-muted-foreground">—</span>}</td>
@@ -137,6 +161,7 @@ export function JobRemarksView({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
