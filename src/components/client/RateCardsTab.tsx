@@ -114,12 +114,12 @@ type Props = {
 };
 
 const COST_LABELS: { key: keyof RateCardRow; label: string; group: 'easyfix' | 'overhead' | 'client' }[] = [
-  { key: 'easyfix_direct_fixed',    label: 'Direct Fixed',    group: 'easyfix' },
-  { key: 'easyfix_direct_variable', label: 'Direct Variable', group: 'easyfix' },
-  { key: 'overhead_fixed',          label: 'OH Fixed',        group: 'overhead' },
-  { key: 'overhead_variable',       label: 'OH Variable',     group: 'overhead' },
-  { key: 'client_fixed',            label: 'Client Fixed',    group: 'client' },
-  { key: 'client_variable',         label: 'Client Variable', group: 'client' },
+  { key: 'easyfix_direct_fixed',    label: 'Direct Fixed (₹)',    group: 'easyfix' },
+  { key: 'easyfix_direct_variable', label: 'Direct Variable (%)', group: 'easyfix' },
+  { key: 'overhead_fixed',          label: 'OH Fixed (₹)',        group: 'overhead' },
+  { key: 'overhead_variable',       label: 'OH Variable (%)',     group: 'overhead' },
+  { key: 'client_fixed',            label: 'Client Fixed (₹)',    group: 'client' },
+  { key: 'client_variable',         label: 'Client Variable (%)', group: 'client' },
 ];
 
 /*
