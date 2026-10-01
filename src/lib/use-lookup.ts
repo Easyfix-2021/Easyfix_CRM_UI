@@ -29,7 +29,10 @@ type State = { state_id: number; state_name: string };
 type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number; display: number };
 type ClientLite = { client_id: number; client_name: string; vertical_id: number | null };
-type UserLite = { user_id: number; user_name: string; role_name?: string; week_off_today?: boolean };
+// on_leave_today (Employee Hub leave, 2026-09-30): true for an APPROVED
+// full-day leave today — sits next to week_off_today, never replaces it
+// (the transfer dialogs read both).
+type UserLite = { user_id: number; user_name: string; role_name?: string; week_off_today?: boolean; on_leave_today?: boolean };
 type RoleLite = { role_id: number; role_name: string; role_desc: string | null; role_status: number; group: string };
 type EasyfixerLite = { efr_id: number; efr_name: string; efr_no: string; city_name: string | null; is_technician_verified: boolean };
 type Reason = { id: number; reason: string };
@@ -102,7 +105,7 @@ export function useLookup() {
       verticals: verticals.map<SelectOption>((v) => ({ value: v.vertical_id, label: v.vertical_name })),
       adminUsers: adminUsers.map<SelectOption>((u) => ({
         value: u.user_id,
-        label: `${u.user_name} · ${u.role_name ?? ''}${u.week_off_today ? ' · Week Off Today' : ''}`,
+        label: `${u.user_name} · ${u.role_name ?? ''}${u.week_off_today ? ' · Week Off Today' : ''}${u.on_leave_today ? ' · On Leave Today' : ''}`,
       })),
       roles: roles.map<SelectOption>((r) => ({ value: r.role_id, label: r.role_name })),
       // Easyfixer label embeds mobile + city so the SearchSelect typeahead

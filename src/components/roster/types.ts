@@ -9,13 +9,23 @@
  * see roster-dates.ts for the UTC-safe string helpers that parse them.
  */
 
-export type DayType = 'PR' | 'WO';
-export type CellSource = 'ROSTER' | 'WEEKLY';
+/*
+ * 'LV' / 'SL' (Employee Hub leave, 2026-09-30) only ever appear on a cell for
+ * an APPROVED FULL-day leave — the day is then LOCKED (see `locked` below).
+ * A half-day or a PENDING leave of any duration keeps the planned 'PR'/'WO'
+ * type and rides in `leave` instead — see leave-contract.md §Roster changes.
+ */
+export type DayType = 'PR' | 'WO' | 'LV' | 'SL';
+export type CellSource = 'ROSTER' | 'WEEKLY' | 'LEAVE';
 
 export type RosterDayCell = {
   type: DayType;
   shift: string | null;
   source: CellSource;
+  /** true only for an APPROVED full-day leave — the cell is not editable (grid, fill-pattern, bulk, reset all skip it; a direct PUT 409s). */
+  locked?: true;
+  /** Riding leave for this day: pending (any duration) or an approved half day. Absent/null otherwise. */
+  leave?: { id: number; kind: 'LV' | 'SL'; duration: 'FULL' | 'FIRST_HALF' | 'SECOND_HALF'; status: 'PENDING' | 'APPROVED' } | null;
 };
 
 export type RosterHoliday = { date: string; name: string };
@@ -61,7 +71,11 @@ export type FillPatternBody = {
   shiftStart?: string | null;
   keepManual: boolean;
 };
-export type FillPatternResult = { users: number; cells: number; wo: number; pr: number; keptManual: number };
+export type FillPatternResult = {
+  users: number; cells: number; wo: number; pr: number; keptManual: number;
+  /** Days skipped because they carry an APPROVED full-day leave (locked) — Employee Hub leave, 2026-09-30. */
+  keptLeave?: number;
+};
 
 export type ResetBody = { userIds: number[]; from: string; to: string };
 export type ResetResult = { removed: number };

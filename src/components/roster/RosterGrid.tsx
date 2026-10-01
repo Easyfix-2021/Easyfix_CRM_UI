@@ -38,13 +38,14 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
+import { useMe } from '@/lib/auth-context';
 import { ShiftSelect, DEFAULT_SHIFT } from './ShiftSelect';
 import { cn } from '@/lib/utils';
 import {
   formatRangeLabel, formatYmdLabel, istTodayYmd, nextAnchor, rangeFor, weekdayShort,
   type RosterView,
 } from './roster-dates';
-import type { DayType, RosterCellInput, RosterMember, RosterResponse } from './types';
+import type { CellSource, DayType, RosterCellInput, RosterDayCell, RosterMember, RosterResponse } from './types';
 import { FillPatternDialog } from './FillPatternDialog';
 import { RosterBulkDialog } from './RosterBulkDialog';
 import { RosterCalendarDialog } from './RosterCalendarDialog';
@@ -59,7 +60,7 @@ function cellKey(userId: number, date: string): string {
   return `${userId}|${date}`;
 }
 
-type EffectiveCell = { type: DayType; source: 'ROSTER' | 'WEEKLY'; dirty: boolean };
+type EffectiveCell = { type: DayType; source: CellSource; dirty: boolean };
 
 function effectiveCell(member: RosterMember, date: string, dirty: Map<string, RosterCellInput>): EffectiveCell {
   const d = dirty.get(cellKey(member.userId, date));
@@ -70,6 +71,19 @@ function effectiveCell(member: RosterMember, date: string, dirty: Map<string, Ro
 
 function cellDimmed(member: RosterMember, date: string, win: { today: string; editFrom: string; editTo: string }): boolean {
   return !member.editable || date < win.today || date < win.editFrom || date > win.editTo;
+}
+
+/*
+ * WHY a dimmed cell is locked — the tooltip. One "Past / Locked" for every
+ * reason read as "this date has passed" on a future day of your OWN row,
+ * which is locked by rule (nobody plans their own roster), not by date.
+ */
+function lockReason(member: RosterMember, date: string, win: { today: string; editFrom: string; editTo: string }, meId: number | undefined): string {
+  if (meId != null && member.userId === meId) return 'Your Roster Is Planned By Your Reporting Head';
+  if (!member.editable) return 'Not In Your Team';
+  if (date < win.today) return 'Past Date';
+  if (date < win.editFrom) return 'Today Is Locked — Changes Start Tomorrow';
+  return 'Beyond The Planning Window';
 }
 
 /** PR -> success tokens, WO -> neutral tokens — reused for the chip AND the legend. */
@@ -94,6 +108,29 @@ function DayChip({ type, style, dimmed }: { type: DayType; style: 'solid' | 'das
       {type}
     </span>
   );
+}
+
+/* Locked full-day approved leave — replaces the PR/WO circle entirely
+ * (Employee Hub leave, 2026-09-30). Not clickable; the cell's own wrapper
+ * carries the tooltip. */
+function LeaveChip({ type }: { type: 'LV' | 'SL' }) {
+  return (
+    <span className="inline-flex min-w-[2.25rem] items-center justify-center rounded-full border px-2 py-0.5 text-xs font-semibold bg-urgent-tint text-urgent-strong border-transparent">
+      {type}
+    </span>
+  );
+}
+
+/* The label slot under the circle — pending (amber) or an approved half day
+ * (blue). A full-day approved leave never reaches this (it's the LeaveChip
+ * above instead), so `duration` here is never 'FULL' on the APPROVED branch. */
+function LeaveNote({ leave }: { leave: NonNullable<RosterDayCell['leave']> }) {
+  if (leave.status === 'PENDING') {
+    const text = leave.duration === 'FULL' ? 'Requested' : leave.duration === 'FIRST_HALF' ? 'Req · 1st Half' : 'Req · 2nd Half';
+    return <span className="text-xs font-medium whitespace-nowrap text-warning-strong">{text}</span>;
+  }
+  const half = leave.duration === 'FIRST_HALF' ? '1st Half' : '2nd Half';
+  return <span className="text-xs font-medium whitespace-nowrap text-info-strong">½ {leave.kind} · {half}</span>;
 }
 
 /** Case-insensitive substring match on Emp Code + name — the toolbar's search box. */
@@ -124,6 +161,7 @@ export function RosterGrid() {
   if (teamOf) qs.set('teamOf', teamOf);
   const key = `/admin/roster?${qs.toString()}`;
   const { data, loading, error, refetch } = useFetch<RosterResponse>(key);
+  const meId = useMe().me?.user?.user_id;
 
   const members = data?.members ?? [];
   const managers = data?.managers ?? [];
@@ -206,6 +244,11 @@ export function RosterGrid() {
   }
 
   function toggleCell(member: RosterMember, date: string) {
+    // Defense in depth — the button for a locked (approved full-day leave)
+    // cell isn't rendered at all (see the cell render below), but a locked
+    // day is also never clickable even if this were somehow reached: the
+    // server 409s a direct PUT on one anyway.
+    if (member.days[date]?.locked) return;
     if (!win || cellDimmed(member, date, win)) return;
     const current = effectiveCell(member, date, dirty);
     const nextType: DayType = current.type === 'PR' ? 'WO' : 'PR';
@@ -494,24 +537,43 @@ export function RosterGrid() {
                       </div>
                     </td>
                     {dates.map((date) => {
+                      const cell: RosterDayCell | undefined = member.days[date];
+                      // Backend: a full-day approved leave turns its PR days into LV/SL and
+                      // LOCKS every day in its range — a week off inside it stays WO (locked).
+                      const onLeave = cell?.type === 'LV' || cell?.type === 'SL';
+                      const locked = cell?.locked === true;
                       const dimmed = !win || cellDimmed(member, date, win);
                       const eff = effectiveCell(member, date, dirty);
                       const style: 'solid' | 'dashed' = eff.dirty || eff.source === 'ROSTER' ? 'solid' : 'dashed';
                       const holidayName = holidaysByDate.get(date);
+                      const leave = cell?.leave ?? null;
                       return (
                         <td key={date} className={cn('!text-center', holidayName && 'bg-urgent-tint/30')}>
-                          {dimmed ? (
-                            <div className="flex justify-center py-1 cursor-not-allowed" title="Past / Locked">
+                          {onLeave ? (
+                            <div
+                              className="flex flex-col items-center gap-0.5 py-1 cursor-not-allowed"
+                              title={`Approved ${cell?.type === 'SL' ? 'Sick Leave' : 'Leave'}${leave ? ` — Request #${leave.id}` : ''}`}
+                            >
+                              <LeaveChip type={(cell?.type === 'SL' ? 'SL' : 'LV')} />
+                            </div>
+                          ) : locked ? (
+                            <div className="flex flex-col items-center gap-0.5 py-1 cursor-not-allowed" title="Inside An Approved Leave">
                               <DayChip type={eff.type} style={style} dimmed />
+                            </div>
+                          ) : dimmed ? (
+                            <div className="flex flex-col items-center gap-0.5 py-1 cursor-not-allowed" title={win ? lockReason(member, date, win, meId) : 'Loading'}>
+                              <DayChip type={eff.type} style={style} dimmed />
+                              {leave && <LeaveNote leave={leave} />}
                             </div>
                           ) : (
                             <button
                               type="button"
                               onClick={() => toggleCell(member, date)}
-                              className="flex w-full justify-center py-1 hover:opacity-80"
+                              className="flex w-full flex-col items-center gap-0.5 py-1 hover:opacity-80"
                               title={`${eff.type} — Click To Toggle`}
                             >
                               <DayChip type={eff.type} style={style} />
+                              {leave && <LeaveNote leave={leave} />}
                             </button>
                           )}
                         </td>
@@ -562,8 +624,11 @@ export function RosterGrid() {
           <div className="flex flex-wrap items-center gap-4 border-t px-3 py-2 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="solid" /> Planned PR/WO (Solid)</span>
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="dashed" /> From Weekly Days (Dashed)</span>
-            <span className="flex items-center gap-1.5"><DayChip type="WO" style="solid" dimmed /> Past / Locked</span>
+            <span className="flex items-center gap-1.5"><DayChip type="WO" style="solid" dimmed /> Not Editable (Hover For Why)</span>
             <span className="flex items-center gap-1.5"><span className="rounded-full bg-urgent-tint text-urgent-strong px-1.5 text-xs font-medium">Holiday</span> Public Holiday (Hover For Name)</span>
+            <span className="flex items-center gap-1.5"><LeaveChip type="LV" /> Approved Leave (Locked)</span>
+            <span className="flex items-center gap-1.5"><span className="text-xs font-medium text-warning-strong">Requested</span> Pending Leave Request</span>
+            <span className="flex items-center gap-1.5"><span className="text-xs font-medium text-info-strong">½ LV · 1st Half</span> Approved Half-Day Leave</span>
           </div>
 
           <div className="flex items-center justify-end gap-3 border-t px-3 py-2">
