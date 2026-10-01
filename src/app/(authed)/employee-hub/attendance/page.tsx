@@ -5,8 +5,8 @@
  * the Request Leave flow. Every CRM user gets this page (no action-key
  * gate — see the leave-contract note "NO action-key gate on /admin/leave").
  *
- * "Present" here is PLANNED present from the roster, never a punch feed —
- * the summary card is labelled accordingly (spec §2 "Attendance" row).
+ * "Present" here is PLANNED present from the roster, never a punch feed.
+ * Layout: calendar (2/3) beside My Requests (1/3) on lg+, stacked below.
  */
 
 import { useState } from 'react';
@@ -22,13 +22,12 @@ import type { LeaveMeResponse } from '@/components/employee-hub/leave-types';
 
 const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function SummaryCard({ label, value, sub }: { label: string; value: number; sub?: string }) {
+function SummaryCard({ label, value }: { label: string; value: number }) {
   return (
     <Card>
       <CardContent className="p-3 text-center">
         <div className="text-xl font-semibold tabular-nums">{value}</div>
         <div className="text-xs text-muted-foreground">{label}</div>
-        {sub && <div className="text-xs text-muted-foreground/80">{sub}</div>}
       </CardContent>
     </Card>
   );
@@ -62,39 +61,40 @@ export default function AttendancePage() {
         <Button onClick={() => setRequestOpen(true)}>Request Leave</Button>
       </div>
 
-      <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <Button variant="outline" size="sm" onClick={() => nav(-1)} aria-label="Previous Month">
-              <ChevronLeft className="size-4" />
-            </Button>
-            <div className="text-sm font-semibold">{MONTH_LONG[Number(month.slice(5, 7)) - 1]} {month.slice(0, 4)}</div>
-            <Button variant="outline" size="sm" onClick={() => nav(1)} aria-label="Next Month">
-              <ChevronRight className="size-4" />
-            </Button>
-          </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="min-w-0 lg:col-span-2">
+          <CardContent className="p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Button variant="outline" size="sm" onClick={() => nav(-1)} aria-label="Previous Month">
+                <ChevronLeft className="size-4" />
+              </Button>
+              <div className="text-sm font-semibold">{MONTH_LONG[Number(month.slice(5, 7)) - 1]} {month.slice(0, 4)}</div>
+              <Button variant="outline" size="sm" onClick={() => nav(1)} aria-label="Next Month">
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
 
-          {error && <p className="text-sm text-urgent-strong">{error}</p>}
+            {error && <p className="text-sm text-urgent-strong">{error}</p>}
 
-          <LeaveCalendar days={data?.days ?? []} today={data?.today ?? istTodayYmd()} loading={loading} />
-          <LeaveCalendarLegend />
-        </CardContent>
-      </Card>
+            <LeaveCalendar days={data?.days ?? []} today={data?.today ?? istTodayYmd()} loading={loading} />
+            <LeaveCalendarLegend />
+          </CardContent>
+        </Card>
+
+        <div className="min-w-0">
+          <MyRequestsTable requests={data?.requests ?? []} loading={loading} onChanged={refreshAll} />
+        </div>
+      </div>
 
       {summary && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <SummaryCard label="Total Days" value={summary.totalDays} />
           <SummaryCard label="Elapsed" value={summary.elapsed} />
-          <SummaryCard label="Planned Present" value={summary.plannedPresent} sub="Not Punch-Based" />
+          <SummaryCard label="Present" value={summary.plannedPresent} />
           <SummaryCard label="Leaves" value={summary.leaves} />
           <SummaryCard label="Week Offs & Holidays" value={summary.weekOffsAndHolidays} />
         </div>
       )}
-
-      <div>
-        <h2 className="mb-2 text-sm font-semibold text-muted-foreground">My Requests</h2>
-        <MyRequestsTable requests={data?.requests ?? []} loading={loading} onChanged={refreshAll} />
-      </div>
 
       <RequestLeaveDialog
         open={requestOpen}

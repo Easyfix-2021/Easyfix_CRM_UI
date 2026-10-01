@@ -19,7 +19,7 @@ function chipInfo(day: LeaveCalendarDay): { code: string; cls: string; title: st
   if (day.holiday) return { code: 'HO', cls: 'bg-gold-tint text-gold-strong', title: `Holiday: ${day.holiday}` };
   if (day.type === 'LV') return { code: 'LV', cls: 'bg-urgent-tint text-urgent-strong', title: 'Approved Leave' };
   if (day.type === 'SL') return { code: 'SL', cls: 'bg-urgent-tint text-urgent-strong', title: 'Approved Sick Leave' };
-  if (day.type === 'PR') return { code: 'P', cls: 'bg-success-tint text-success-strong', title: 'Planned Present — Not Punch-Based' };
+  if (day.type === 'PR') return { code: 'P', cls: 'bg-success-tint text-success-strong', title: 'Present' };
   return { code: 'W', cls: 'bg-warning-tint text-warning-strong', title: 'Week Off' };
 }
 
@@ -44,9 +44,9 @@ export function LeaveCalendar({ days, today, loading }: {
   const lead = weekdayIndexMonday0(days[0].date);
 
   return (
-    <div className="grid grid-cols-7 gap-1.5">
+    <div className="grid grid-cols-7 gap-1">
       {HEAD.map((h) => (
-        <div key={h} className="text-center text-xs font-medium text-muted-foreground py-1">{h}</div>
+        <div key={h} className="text-center text-xs font-medium text-muted-foreground py-0.5">{h}</div>
       ))}
       {Array.from({ length: lead }).map((_, i) => <div key={`b${i}`} />)}
       {days.map((day) => {
@@ -57,13 +57,15 @@ export function LeaveCalendar({ days, today, loading }: {
             key={day.date}
             title={chip.title}
             className={cn(
-              'min-h-[68px] rounded-md border p-1.5 flex flex-col gap-1',
+              'min-h-[52px] min-w-0 rounded-md border p-1 flex flex-col gap-0.5',
               day.date === today ? 'border-primary' : 'border-border',
               day.date < today && 'opacity-75',
             )}
           >
-            <div className="text-xs font-semibold">{Number(day.date.slice(8))}</div>
-            <span className={cn('rounded px-1 text-xs font-medium text-center', chip.cls)}>{chip.code}</span>
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-xs font-semibold">{Number(day.date.slice(8))}</span>
+              <span className={cn('rounded px-1 text-xs font-medium text-center', chip.cls)}>{chip.code}</span>
+            </div>
             {note && <span className={cn('truncate text-xs font-medium whitespace-nowrap', note.cls)}>{note.text}</span>}
           </div>
         );
@@ -74,8 +76,8 @@ export function LeaveCalendar({ days, today, loading }: {
 
 export function LeaveCalendarLegend() {
   return (
-    <div className="flex flex-wrap items-center gap-4 border-t px-1 pt-2 text-xs text-muted-foreground">
-      <span className="flex items-center gap-1.5"><span className="rounded bg-success-tint text-success-strong px-1.5 py-0.5 font-medium">P</span> Present (Planned)</span>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-1 pt-2 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1.5"><span className="rounded bg-success-tint text-success-strong px-1.5 py-0.5 font-medium">P</span> Present</span>
       <span className="flex items-center gap-1.5"><span className="rounded bg-warning-tint text-warning-strong px-1.5 py-0.5 font-medium">W</span> Week Off</span>
       <span className="flex items-center gap-1.5"><span className="rounded bg-gold-tint text-gold-strong px-1.5 py-0.5 font-medium">HO</span> Holiday</span>
       <span className="flex items-center gap-1.5"><span className="rounded bg-urgent-tint text-urgent-strong px-1.5 py-0.5 font-medium">LV</span> / <span className="rounded bg-urgent-tint text-urgent-strong px-1.5 py-0.5 font-medium">SL</span> Approved Leave</span>
