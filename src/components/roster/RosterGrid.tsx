@@ -38,6 +38,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
+import { useMe } from '@/lib/auth-context';
 import { ShiftSelect, DEFAULT_SHIFT } from './ShiftSelect';
 import { cn } from '@/lib/utils';
 import {
@@ -70,6 +71,19 @@ function effectiveCell(member: RosterMember, date: string, dirty: Map<string, Ro
 
 function cellDimmed(member: RosterMember, date: string, win: { today: string; editFrom: string; editTo: string }): boolean {
   return !member.editable || date < win.today || date < win.editFrom || date > win.editTo;
+}
+
+/*
+ * WHY a dimmed cell is locked — the tooltip. One "Past / Locked" for every
+ * reason read as "this date has passed" on a future day of your OWN row,
+ * which is locked by rule (nobody plans their own roster), not by date.
+ */
+function lockReason(member: RosterMember, date: string, win: { today: string; editFrom: string; editTo: string }, meId: number | undefined): string {
+  if (meId != null && member.userId === meId) return 'Your Roster Is Planned By Your Reporting Head';
+  if (!member.editable) return 'Not In Your Team';
+  if (date < win.today) return 'Past Date';
+  if (date < win.editFrom) return 'Today Is Locked — Changes Start Tomorrow';
+  return 'Beyond The Planning Window';
 }
 
 /** PR -> success tokens, WO -> neutral tokens — reused for the chip AND the legend. */
@@ -147,6 +161,7 @@ export function RosterGrid() {
   if (teamOf) qs.set('teamOf', teamOf);
   const key = `/admin/roster?${qs.toString()}`;
   const { data, loading, error, refetch } = useFetch<RosterResponse>(key);
+  const meId = useMe().me?.user?.user_id;
 
   const members = data?.members ?? [];
   const managers = data?.managers ?? [];
@@ -546,7 +561,7 @@ export function RosterGrid() {
                               <DayChip type={eff.type} style={style} dimmed />
                             </div>
                           ) : dimmed ? (
-                            <div className="flex flex-col items-center gap-0.5 py-1 cursor-not-allowed" title="Past / Locked">
+                            <div className="flex flex-col items-center gap-0.5 py-1 cursor-not-allowed" title={win ? lockReason(member, date, win, meId) : 'Loading'}>
                               <DayChip type={eff.type} style={style} dimmed />
                               {leave && <LeaveNote leave={leave} />}
                             </div>
@@ -609,7 +624,7 @@ export function RosterGrid() {
           <div className="flex flex-wrap items-center gap-4 border-t px-3 py-2 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="solid" /> Planned PR/WO (Solid)</span>
             <span className="flex items-center gap-1.5"><DayChip type="PR" style="dashed" /> From Weekly Days (Dashed)</span>
-            <span className="flex items-center gap-1.5"><DayChip type="WO" style="solid" dimmed /> Past / Locked</span>
+            <span className="flex items-center gap-1.5"><DayChip type="WO" style="solid" dimmed /> Not Editable (Hover For Why)</span>
             <span className="flex items-center gap-1.5"><span className="rounded-full bg-urgent-tint text-urgent-strong px-1.5 text-xs font-medium">Holiday</span> Public Holiday (Hover For Name)</span>
             <span className="flex items-center gap-1.5"><LeaveChip type="LV" /> Approved Leave (Locked)</span>
             <span className="flex items-center gap-1.5"><span className="text-xs font-medium text-warning-strong">Requested</span> Pending Leave Request</span>
