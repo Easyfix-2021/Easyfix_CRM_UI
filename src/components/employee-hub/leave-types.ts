@@ -9,6 +9,9 @@
  * parseIstDateTime(), never `new Date(str)` directly.
  */
 
+import type { StatusChipTone } from '@/components/ui/StatusChip';
+import { formatYmdLabel } from '@/components/roster/roster-dates';
+
 export type LeaveKind = 'LV' | 'SL';
 export type LeaveDuration = 'FULL' | 'FIRST_HALF' | 'SECOND_HALF';
 export type LeaveStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN' | 'CANCELLED';
@@ -49,6 +52,9 @@ export type LeaveRequestRow = {
   canWithdraw: boolean;
   canCancel: boolean;
 };
+
+/** GET /admin/leave/requests/past — the caller's own requests that My Requests no longer shows. */
+export type LeavePastResponse = { items: LeaveRequestRow[]; total: number };
 
 export type LeaveRules = { lvEarliest: string; slDate: string };
 
@@ -99,4 +105,16 @@ export const LEAVE_DURATION_LABEL: Record<LeaveDuration, string> = {
 
 export function leaveKindLabel(kind: LeaveKind): string {
   return kind === 'LV' ? 'Leave' : 'Sick Leave';
+}
+
+export const LEAVE_STATUS_TONE: Record<LeaveStatus, StatusChipTone> = {
+  PENDING: 'warning',
+  APPROVED: 'success',
+  REJECTED: 'urgent',
+  WITHDRAWN: 'neutral',
+  CANCELLED: 'neutral',
+};
+
+export function leaveDateRangeLabel(r: { fromDate: string; toDate: string }): string {
+  return r.toDate !== r.fromDate ? `${formatYmdLabel(r.fromDate)} – ${formatYmdLabel(r.toDate)}` : formatYmdLabel(r.fromDate);
 }

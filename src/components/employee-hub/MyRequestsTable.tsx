@@ -8,31 +8,24 @@
  */
 
 import { useState } from 'react';
-import { Eye } from 'lucide-react';
+import { Eye, History } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
+import { invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { formatDate } from '@/lib/utils';
 import { formatYmdLabel } from '@/components/roster/roster-dates';
-import { LEAVE_DURATION_LABEL, LEAVE_STATUS_LABEL, leaveKindLabel, type LeaveRequestRow, type LeaveStatus } from './leave-types';
-
-const STATUS_TONE: Record<LeaveStatus, StatusChipTone> = {
-  PENDING: 'warning',
-  APPROVED: 'success',
-  REJECTED: 'urgent',
-  WITHDRAWN: 'neutral',
-  CANCELLED: 'neutral',
-};
-
-function dateRangeLabel(r: LeaveRequestRow): string {
-  return r.toDate !== r.fromDate ? `${formatYmdLabel(r.fromDate)} – ${formatYmdLabel(r.toDate)}` : formatYmdLabel(r.fromDate);
-}
+import {
+  LEAVE_DURATION_LABEL, LEAVE_STATUS_LABEL, LEAVE_STATUS_TONE as STATUS_TONE, leaveDateRangeLabel as dateRangeLabel, leaveKindLabel,
+  type LeaveRequestRow,
+} from './leave-types';
+import { PastRequestsDialog } from './PastRequestsDialog';
 
 /** "13 Oct" — the year is implied by the month the page is showing. */
 const shortYmd = (ymd: string) => formatYmdLabel(ymd).slice(0, 6);
@@ -105,6 +98,7 @@ export function MyRequestsTable({ requests, loading, onChanged }: {
   const confirm = useConfirm();
   const [busyId, setBusyId] = useState<number | null>(null);
   const [viewId, setViewId] = useState<number | null>(null);
+  const [pastOpen, setPastOpen] = useState(false);
   const viewed = requests.find((x) => x.id === viewId) ?? null;
 
   async function withdraw(r: LeaveRequestRow) {
@@ -121,6 +115,8 @@ export function MyRequestsTable({ requests, loading, onChanged }: {
       dismissToast(toastId);
       showToast({ variant: 'success', message: 'Request Withdrawn' });
       setViewId(null);
+      // A withdrawn / cancelled request now belongs in Past Requests — drop its 30 s cache.
+      invalidateFetch((k) => k.startsWith('/admin/leave/requests/past'));
       onChanged();
     } catch (e) {
       dismissToast(toastId);
@@ -145,6 +141,8 @@ export function MyRequestsTable({ requests, loading, onChanged }: {
       dismissToast(toastId);
       showToast({ variant: 'success', message: 'Leave Cancelled' });
       setViewId(null);
+      // A withdrawn / cancelled request now belongs in Past Requests — drop its 30 s cache.
+      invalidateFetch((k) => k.startsWith('/admin/leave/requests/past'));
       onChanged();
     } catch (e) {
       dismissToast(toastId);
@@ -157,7 +155,13 @@ export function MyRequestsTable({ requests, loading, onChanged }: {
   return (
     <Card>
       <CardContent className="p-0">
-        <h2 className="border-b px-3 py-2 text-sm font-semibold text-muted-foreground">My Requests</h2>
+        <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">My Requests</h2>
+          <Button variant="outline" size="sm" onClick={() => setPastOpen(true)}>
+            <History className="mr-1.5 h-4 w-4" />
+            Past Requests
+          </Button>
+        </div>
         <table className="data-table w-full">
           <thead>
             <tr>
@@ -194,6 +198,7 @@ export function MyRequestsTable({ requests, loading, onChanged }: {
           </tbody>
         </table>
       </CardContent>
+      <PastRequestsDialog open={pastOpen} onClose={() => setPastOpen(false)} />
       <RequestDetailDialog
         request={viewed}
         busy={viewed !== null && busyId === viewed.id}
