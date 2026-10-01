@@ -83,6 +83,9 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags, hasAction } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
+// Shared with JobRemarksView — both render the same comment thread and must
+// label it identically. See lib/job-comment-labels.
+import { LEGACY_REMARKS_FOR, jobStageLabel } from '@/lib/job-comment-labels';
 import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 import { parseIstDateTime } from '@/lib/format';
@@ -1509,11 +1512,30 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           </div>
           {/* Audit & History — one-third on lg, full-width below. */}
           <DlCard title="Audit & History" rows={[
-            ['Created By', job.created_by_name],
-            ['Created On', formatDate(job.created_date_time as string)],
+            ['Created By / On', byOn(job.created_by_name, job.created_date_time)],
             ['Approval Sent', formatDate((job as Record<string, unknown>).approval_sent_on_date_time as string)],
-            ['Approved On', formatDate((job as Record<string, unknown>).approved_on_date_time as string)],
-            ['Approved By', (job as Record<string, unknown>).approved_by_client_contact as string],
+            /*
+             * Authorized By / On (2026-09-30 per ops). Two changes here, not one:
+             *
+             * 1. BY IS NOW A NAME. This cell used to render
+             *    approved_by_client_contact raw — a tbl_client_contacts id — so
+             *    an authorized job showed "1639". The backend now resolves it to
+             *    approved_by_name off that table.
+             * 2. ON PREFERS THE NEW COLUMN. tbl_job.approved_by_client_date_time
+             *    was added 2026-09-30 and nothing writes it yet (0 of 481,052
+             *    rows). Falling back to approved_on_date_time — the timestamp the
+             *    client-approval path has always written beside the contact —
+             *    means this reads correctly today AND picks the new column up by
+             *    itself the moment something starts writing it.
+             *
+             * NOT approved_by_client: that is a status flag holding 0/1/2, not a
+             * person (see the backend note on approved_by_name).
+             */
+            ['Authorized By / On', byOn(
+              (job as Record<string, unknown>).approved_by_name,
+              (job as Record<string, unknown>).approved_by_client_date_time
+                ?? (job as Record<string, unknown>).approved_on_date_time,
+            )],
             ['Rejected On', formatDate((job as Record<string, unknown>).approval_reject_date_time as string)],
             ['Last Updated', formatDate((job as Record<string, unknown>).last_update_time as string)],
           ]}/>
@@ -3974,15 +3996,6 @@ type RemarkRow = JobComment & {
   _pending?: true;
 };
 
-// Legacy "Remarks For" by comment_on (jobCommentList.vm:15-28), a mirror of the
-// backend's REMARKS_FOR. Only the fallback: for an older backend, and for a
-// pending row, so it reads the same label before and after the refetch.
-const LEGACY_REMARKS_FOR: Record<number, string> = {
-  1: 'Scheduling', 2: 'CheckIn', 3: 'CheckOut', 4: 'Feedback', 6: 'Canceling',
-  8: 'TX Reschedule', 9: 'TX cancelled', 15: 'Approval', 16: 'Unconfirmed', 17: 'Inquiry',
-  18: 'TX Rejected', 19: 'Escalated', 20: 'Re-Opened Job', 21: 'ReScheduled',
-};
-
 /*
  * Legacy Date/Time: `dd MMM yyyy HH:mm` ("11 Sep 2026 13:29" — JobDaoImpl.java
  * :2846). Parsed and rendered in IST exactly as formatDate does, so the DB's
@@ -4236,9 +4249,19 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
           {/*
             Remarks history in the LEGACY CRM's columns and order (2026-09-11 per
             ops; EasyFix_CRM jobCommentList.vm:4-9):
-              Remarks For | Accountable | Reason | Remarks | Remark By | Date/Time
-            from remarks_for | accountable | enum_desc | comments | remark_by |
-            created_on. remark_by is the backend's resolved author (tbl_user name,
+              Remarks For | Stage | Accountable | Reason | Remarks | Remark By | Date/Time
+            from remarks_for | job_stage | accountable | enum_desc | comments |
+            remark_by | created_on.
+
+            Stage is the one addition to the legacy column set (2026-09-30 per
+            ops). It renders tbl_job_comment.job_stage — the job's status when
+            the remark was filed. Legacy STORED it (JobDaoImpl stamped every
+            reschedule and every remark) but never showed it, so it fills on
+            legacy history too. The Node backend stopped stamping it at the
+            2026-04-29 cutover; reschedule and Add Remarks stamp it again from
+            Easyfix_Backend #62. So a blank Stage mostly means a Node-era row.
+
+            remark_by is the backend's resolved author (tbl_user name,
             else the escalator's stored name, else the technician) — user_name
             alone rendered "Unknown" for every escalation, which never sets
             commented_by. A row with no author at all shows an em dash.
@@ -4257,6 +4280,11 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                     (measured in a static render; wrapping gives 326px). */}
                 <tr>
                   <th className="!text-left w-1 whitespace-nowrap">Remarks For</th>
+                  {/* Stage — the job's status when the remark was filed, so a
+                      reschedule says WHERE in the lifecycle it happened. Sits
+                      beside Remarks For because the two answer the paired
+                      questions: what kind of remark, and at what stage. */}
+                  <th className="!text-left w-1 whitespace-nowrap">Stage</th>
                   <th className="!text-left w-1 whitespace-nowrap">Accountable</th>
                   <th className="!text-left">Reason</th>
                   <th className="!text-left">Remarks</th>
@@ -4272,6 +4300,13 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                   >
                     <td className="!text-left align-top whitespace-nowrap">
                       {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? ''}
+                    </td>
+                    {/* Em dash, not blank, for a row with no recorded stage —
+                        mostly Node-era rows (2026-04-29 → 2026-09-30), when most
+                        writers stored none — and a blank cell reads like a
+                        rendering bug rather than "not recorded back then". */}
+                    <td className="!text-left align-top whitespace-nowrap text-muted-foreground">
+                      {jobStageLabel(c.job_stage) || <span className="italic">—</span>}
                     </td>
                     <td className="!text-left align-top whitespace-nowrap">
                       {c.accountable ?? ''}
@@ -8011,6 +8046,19 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <div><span className="text-xs text-muted-foreground mr-2">Job Description:</span>{String(initial.job_desc ?? '—')}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Product Quantity:</span>{Array.isArray(initial.services) ? initial.services.length : 0}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Job Type:</span><strong>{String(initial.job_type ?? '—')}</strong></div>
+            {/*
+              * Authorized By / On (2026-09-30 per ops) — the same pair the
+              * Audit & History card shows, surfaced here because Confirm &
+              * Schedule is where an agent decides whether the job may proceed,
+              * and "has the client authorized this, and when" is part of that
+              * decision. Same byOn helper and the same fallback, so the two
+              * screens cannot disagree about one job.
+              */}
+            <div><span className="text-xs text-muted-foreground mr-2">Authorized By:</span>{String((initial as Record<string, unknown>).approved_by_name ?? '—')}</div>
+            <div><span className="text-xs text-muted-foreground mr-2">Authorized On:</span>{
+              byOn(null, (initial as Record<string, unknown>).approved_by_client_date_time
+                ?? (initial as Record<string, unknown>).approved_on_date_time) ?? '—'
+            }</div>
           </div>
         </div>
 
@@ -12843,6 +12891,22 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
       </div>
     </div>
   );
+}
+
+/*
+ * "Who / when" as ONE cell — ops asked for the paired facts on one line
+ * (2026-09-30) rather than two rows that always read together anyway.
+ *
+ * Returns null when neither half is known, so DlCard's own em-dash placeholder
+ * does the work. When only one half is known it renders that half alone: a
+ * lone "12 Aug 2026, 12:41 pm" is honest, whereas "— · 12 Aug 2026" reads like
+ * a bug and pads the cell with nothing.
+ */
+function byOn(by: unknown, on: unknown): string | null {
+  const name = typeof by === 'string' ? by.trim() : by == null ? '' : String(by).trim();
+  const when = on == null || on === '' ? '' : formatDate(on as string);
+  if (name && when) return `${name} · ${when}`;
+  return name || when || null;
 }
 
 function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
