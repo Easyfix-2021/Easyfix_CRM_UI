@@ -49,9 +49,10 @@ export const STAGE_LABEL_BY_STATUS: Record<number, string> = Object.fromEntries(
 );
 
 /*
- * '' for a row with no recorded stage. Null is "not recorded" — every row
- * written before 2026-09-30 is one — and NOT status 0; rendering those as
- * "Pending for Scheduling" would be inventing history. statusLabel is the
+ * '' for a row with no recorded stage. Null is "not recorded" — mostly
+ * Node-era rows (2026-04-29 → 2026-09-30) — and NOT status 0; rendering those
+ * as "Pending for Scheduling" would be inventing history. A real 0 IS Pending
+ * for Scheduling and renders as such (legacy reschedule rows carry 0s). statusLabel is the
  * fallback for a status no bucket claims (7 Enquiry, for instance), so an
  * unbucketed stage still reads as something.
  */

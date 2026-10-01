@@ -147,9 +147,10 @@ export function JobRemarksView({
                   <td className="px-3 py-1.5 whitespace-nowrap">
                     {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? <span className="text-muted-foreground">—</span>}
                   </td>
-                  {/* Em dash, not blank, for a row with no recorded stage — every
-                      row written before 2026-09-30 is one, and a blank cell reads
-                      like a rendering bug rather than "not recorded back then". */}
+                  {/* Em dash, not blank, for a row with no recorded stage —
+                      mostly Node-era rows (2026-04-29 → 2026-09-30), when most
+                      writers stored none — and a blank cell reads like a
+                      rendering bug rather than "not recorded back then". */}
                   <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">
                     {jobStageLabel(c.job_stage) || <span className="text-muted-foreground">—</span>}
                   </td>

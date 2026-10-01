@@ -4254,9 +4254,12 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
             remark_by | created_on.
 
             Stage is the one addition to the legacy column set (2026-09-30 per
-            ops): legacy had no such column because legacy never needed to ask
-            where a reschedule happened. It renders tbl_job_comment.job_stage,
-            which only reschedule() stamps so far.
+            ops). It renders tbl_job_comment.job_stage — the job's status when
+            the remark was filed. Legacy STORED it (JobDaoImpl stamped every
+            reschedule and every remark) but never showed it, so it fills on
+            legacy history too. The Node backend stopped stamping it at the
+            2026-04-29 cutover; reschedule and Add Remarks stamp it again from
+            Easyfix_Backend #62. So a blank Stage mostly means a Node-era row.
 
             remark_by is the backend's resolved author (tbl_user name,
             else the escalator's stored name, else the technician) — user_name
@@ -4299,9 +4302,9 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                       {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? ''}
                     </td>
                     {/* Em dash, not blank, for a row with no recorded stage —
-                        every row written before 2026-09-30 is one, and a blank
-                        cell reads like a rendering bug rather than "we did not
-                        record this back then". */}
+                        mostly Node-era rows (2026-04-29 → 2026-09-30), when most
+                        writers stored none — and a blank cell reads like a
+                        rendering bug rather than "not recorded back then". */}
                     <td className="!text-left align-top whitespace-nowrap text-muted-foreground">
                       {jobStageLabel(c.job_stage) || <span className="italic">—</span>}
                     </td>
