@@ -41,13 +41,13 @@ export function TransferOwnerDialog({
 
   async function submit() {
     if (!userId || submitting) return;
-    // Never blocks — just confirms. week_off_today comes from
-    // /shared/lookup/users via useLookup().
+    // Never blocks — just confirms. week_off_today and on_leave_today come
+    // from /shared/lookup/users via useLookup().
     const toUser = lookup.adminUsers.find((u) => u.user_id === userId);
-    if (toUser?.week_off_today) {
+    if (toUser?.week_off_today || toUser?.on_leave_today) {
       const ok = await confirm({
         title: 'Assign Anyway?',
-        description: `${toUser.user_name} Is On Week Off Today. Assign Anyway?`,
+        description: `${toUser.user_name} Is ${toUser.on_leave_today ? 'On Leave' : 'On Week Off'} Today. Assign Anyway?`,
       });
       if (!ok) return;
     }

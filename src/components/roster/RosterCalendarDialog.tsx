@@ -52,6 +52,10 @@ export function RosterCalendarDialog({
   const days: string[] = [];
   for (let d = from; d <= to; d = addDaysYmd(d, 1)) days.push(d);
   const woCount = row ? days.filter((d) => row.days[d]?.type === 'WO').length : 0;
+  // Approved full-day leave (locked) — Employee Hub leave, 2026-09-30. Excluded
+  // from BOTH the Present and Week Off tallies below; it's neither.
+  // By TYPE, not `locked`: a week off inside an approved leave is locked but stays WO.
+  const leaveCount = row ? days.filter((d) => row.days[d]?.type === 'LV' || row.days[d]?.type === 'SL').length : 0;
 
   return (
     <Dialog open={member != null} onOpenChange={guardedOpenChange}>
@@ -68,7 +72,12 @@ export function RosterCalendarDialog({
             <div className="text-sm font-semibold">
               {MONTH_LONG[Number(month.slice(5, 7)) - 1]} {month.slice(0, 4)}
             </div>
-            {row && <div className="text-xs text-muted-foreground">{days.length - woCount} Present · {woCount} Week Off</div>}
+            {row && (
+              <div className="text-xs text-muted-foreground">
+                {days.length - woCount - leaveCount} Present · {woCount} Week Off
+                {leaveCount > 0 && ` · ${leaveCount} Leave`}
+              </div>
+            )}
           </div>
           <Button variant="outline" size="sm" onClick={() => setMonth(addMonthsYmd(month, 1))} aria-label="Next Month">
             <ChevronRight className="size-4" />
@@ -100,6 +109,13 @@ export function RosterCalendarDialog({
                   <div className="text-xs font-semibold">{Number(d.slice(8))}</div>
                   {loading || !c ? (
                     <div className="h-5 rounded bg-muted animate-pulse" />
+                  ) : c.type === 'LV' || c.type === 'SL' ? (
+                    <span
+                      title={`Approved ${c.type === 'SL' ? 'Sick Leave' : 'Leave'}${c.leave ? ` — Request #${c.leave.id}` : ''}`}
+                      className="rounded px-1 text-xs font-medium text-center border bg-urgent-tint text-urgent-strong border-transparent"
+                    >
+                      {c.type === 'SL' ? 'Sick Leave' : 'On Leave'}
+                    </span>
                   ) : (
                     <span
                       className={cn(
@@ -109,6 +125,13 @@ export function RosterCalendarDialog({
                       )}
                     >
                       {c.type === 'PR' ? (c.shift ? shiftLabel(c.shift) : 'Present') : 'Week Off'}
+                    </span>
+                  )}
+                  {/* Pending (any duration) or an approved half day — a locked
+                      full-day leave is already the chip above. */}
+                  {c?.leave && !c.locked && (
+                    <span className={cn('truncate text-xs font-medium text-center', c.leave.status === 'PENDING' ? 'text-warning-strong' : 'text-info-strong')}>
+                      {c.leave.status === 'PENDING' ? 'Requested' : `½ ${c.leave.kind}`}
                     </span>
                   )}
                   {hol && <span className="truncate rounded-full bg-urgent-tint text-urgent-strong px-1.5 text-xs font-medium text-center">Holiday</span>}

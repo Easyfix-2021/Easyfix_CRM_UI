@@ -6,7 +6,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Home, Briefcase, UserCircle2, Users, Building2,
   BarChart3, Settings, Coins, ShoppingBag, Wallet, User, MapPin,
-  Megaphone, GraduationCap, Gift,
+  Megaphone, GraduationCap, Gift, CalendarClock,
   ChevronRight, ChevronDown, Circle, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -108,6 +108,8 @@ const PARENT_META: Record<string, { icon: LucideIcon }> = {
    */
   'HRMS':              { icon: User },
   'User':              { icon: User },
+  // Employee Hub — Attendance & Leaves / Leave Approvals (2026-09-30).
+  'Employee Hub':      { icon: CalendarClock },
   'Settings':          { icon: Settings },
   'Report':            { icon: BarChart3 },
   // NOTE: QuickSight is intentionally NOT a sidebar menu. It is the

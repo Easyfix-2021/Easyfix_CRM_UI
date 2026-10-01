@@ -169,6 +169,17 @@ export const URL_MAP: Record<string, string> = {
    * /coming-soon whatever the SQL says.
    */
   'hrmsCertificates':      '/hrms/certificates',
+  /*
+   * Employee Hub — Attendance & Leaves / Leave Approvals (2026-09-30).
+   * Top-level parent (menu url 'javascript:;', PARENT_META icon in
+   * Sidebar.tsx) with two children seeded by
+   * EasyFix_Backend/migrations/2026-09-30-employee-leave-02-rbac.sql,
+   * granted to every active admin-group role. Email links
+   * (`${base}/employee-hub/...`) point straight at these Next.js paths,
+   * not through this map — this entry is only for the sidebar/tbl_menu url.
+   */
+  'employeeAttendance':      '/employee-hub/attendance',
+  'employeeLeaveApprovals':  '/employee-hub/approvals',
   // Master-data settings ported from legacy CRM.
   'servicecategory':       '/settings/service-categories',
   'servicetype':           '/settings/service-types',
