@@ -8,7 +8,8 @@
  * A live "N working days" preview runs every rule server-side via
  * POST /admin/leave/requests?dryRun=1 (same debounced-preview pattern as
  * FillPatternDialog's Update Roster preview) — its 400/409 message is shown
- * inline rather than only surfacing on Submit.
+ * inline rather than only surfacing on Submit. Reason is mandatory on Submit
+ * only — the dryRun preview deliberately runs without one.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -91,7 +92,7 @@ export function RequestLeaveDialog({ open, onClose, rules, onCreated }: {
     setSubmitting(true);
     const toastId = showToast({ variant: 'loading', message: 'Submitting Request…' });
     try {
-      await api.post('/admin/leave/requests', { kind, fromDate, toDate, duration, reason: reason.trim() || undefined });
+      await api.post('/admin/leave/requests', { kind, fromDate, toDate, duration, reason: reason.trim() });
       dismissToast(toastId);
       showToast({ variant: 'success', message: 'Leave Requested' });
       onCreated();
@@ -110,7 +111,7 @@ export function RequestLeaveDialog({ open, onClose, rules, onCreated }: {
     return reason.trim() !== '' || duration !== 'FULL' || kind !== 'LV' || fromDate !== fixed || toDate !== fixed;
   };
   const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty, when: () => !submitting });
-  const canSubmit = !!fromDate && !!toDate && !previewError && !submitting;
+  const canSubmit = !!fromDate && !!toDate && !!reason.trim() && !previewError && !submitting;
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
@@ -194,12 +195,14 @@ export function RequestLeaveDialog({ open, onClose, rules, onCreated }: {
           </div>
 
           <div>
-            <Label className="mb-1 block">Reason</Label>
+            <Label className="mb-1 block">Reason <span className="text-urgent">*</span></Label>
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               maxLength={500}
-              placeholder="Optional"
+              placeholder="Enter A Reason For The Leave"
+              required
+              aria-required="true"
               className="min-h-[70px] w-full rounded border bg-background px-2 py-1 text-sm"
             />
           </div>

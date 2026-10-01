@@ -23,6 +23,7 @@ import * as React from 'react';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { shouldRetryWebCall } from '@/lib/web-call-retry';
+import { trackMicStreams } from '@/lib/mic-streams';
 
 export type WebCallStatus = 'idle' | 'connecting' | 'ringing' | 'in_progress' | 'ended' | 'failed';
 
@@ -224,6 +225,22 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     return () => { console.error = orig; };
   }, []);
 
+  /*
+   * THE SDK LEAKS THE MIC AFTER EVERY CALL WITH THE NOISE FILTER ON — the raw
+   * mic track is never stopped, so the address-bar mic icon stays until reload
+   * (see lib/mic-streams). Every stream the page acquires is recorded and all
+   * of them are stopped when the call ends, however it ends.
+   */
+  const micRef = React.useRef<ReturnType<typeof trackMicStreams> | null>(null);
+  React.useEffect(() => {
+    const md = navigator.mediaDevices;
+    if (!md?.getUserMedia) return;
+    const tracker = trackMicStreams(md);
+    micRef.current = tracker;
+    return () => { tracker.release(); tracker.restore(); micRef.current = null; };   // unmount (logout) too
+  }, []);
+  const releaseMic = React.useCallback(() => { micRef.current?.release(); }, []);
+
   const resetClient = React.useCallback(() => {
     try { clientRef.current?.logout?.(); } catch { /* ignore */ }
     clientRef.current = null;
@@ -293,8 +310,12 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
       setStatus('in_progress');
       setActive((a) => (a ? { ...a, startedAt: Date.now() } : a));
     });
-    client.on('onCallTerminated', () => setStatus((s) => (s === 'failed' ? s : 'ended')));
+    client.on('onCallTerminated', () => {
+      releaseMic();
+      setStatus((s) => (s === 'failed' ? s : 'ended'));
+    });
     client.on('onCallFailed', (reason: any) => {
+      releaseMic();
       // A hangup before the call connects surfaces here as 'Cancelled' — and an
       // operator-initiated hangup too. Neither is a failure → show "Call Ended".
       const r = String(reason || '');
@@ -344,7 +365,7 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     });
     await loginRef.current;
     return client;
-  }, [reportWebFailure, resetClient]);
+  }, [reportWebFailure, resetClient, releaseMic]);
 
   const startWebCall = React.useCallback(async (target: WebCallTarget, opts: PlaceOpts | undefined, isRetry: boolean) => {
     if (!isRetry) {
@@ -430,8 +451,9 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
      */
     if (!reachedInProgressRef.current) reportWebFailure('Operator ended the call before the browser leg connected');
     try { clientRef.current?.hangup(); } catch { /* ignore */ }
+    releaseMic();
     setStatus((s) => (s === 'connecting' || s === 'ringing' || s === 'in_progress' ? 'ended' : s));
-  }, [reportWebFailure]);
+  }, [reportWebFailure, releaseMic]);
 
   const toggleMute = React.useCallback(() => {
     const c = clientRef.current;
