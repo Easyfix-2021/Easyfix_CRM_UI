@@ -6,6 +6,7 @@ import { SearchMultiSelect } from './search-multi-select';
 import type { SearchOption } from './search-select';
 import { IconButton } from './icon-button';
 import { cn } from '@/lib/utils';
+import { PriceInput } from './price-input';
 
 /*
  * PriceTree — generic shared component for "option-group → price" trees.
@@ -202,43 +203,29 @@ export function PriceTree({
                   )}
                 </div>
                 <div className="w-32 shrink-0">
-                  <div className="relative">
-                    <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={row.price ?? ''}
-                      onChange={(e) => {
-                        const price = e.target.value === '' ? null : Number(e.target.value);
-                        patchRow(row.id, {
-                          price,
-                          ...(deriveSecondaryOnPriceChange ? { secondaryPrice: deriveSecondaryOnPriceChange(price) } : {}),
-                        });
-                      }}
-                      disabled={!canEdit}
-                      placeholder={requirePrice ? 'Required' : 'Pending'}
-                      className="h-9 w-full rounded-md border border-input bg-background pl-5 pr-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-                    />
-                  </div>
+                  <PriceInput
+                    value={row.price ?? ''}
+                    onChange={(e) => {
+                      const price = e.target.value === '' ? null : Number(e.target.value);
+                      patchRow(row.id, {
+                        price,
+                        ...(deriveSecondaryOnPriceChange ? { secondaryPrice: deriveSecondaryOnPriceChange(price) } : {}),
+                      });
+                    }}
+                    disabled={!canEdit}
+                    placeholder={requirePrice ? 'Required' : 'Pending'}
+                  />
                 </div>
                 {showSecondary && (
                   <div className="w-32 shrink-0">
-                    <div className="relative">
-                      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={row.secondaryPrice ?? ''}
-                        onChange={(e) => patchRow(row.id, { secondaryPrice: e.target.value === '' ? null : Number(e.target.value) })}
-                        disabled={!canEdit}
-                        aria-label={secondaryLabel}
-                        title={secondaryLabel}
-                        placeholder={secondaryLabel}
-                        className="h-9 w-full rounded-md border border-input bg-background pl-5 pr-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-                      />
-                    </div>
+                    <PriceInput
+                      value={row.secondaryPrice ?? ''}
+                      onChange={(e) => patchRow(row.id, { secondaryPrice: e.target.value === '' ? null : Number(e.target.value) })}
+                      disabled={!canEdit}
+                      aria-label={secondaryLabel}
+                      title={secondaryLabel}
+                      placeholder={secondaryLabel}
+                    />
                   </div>
                 )}
                 {canEdit && (

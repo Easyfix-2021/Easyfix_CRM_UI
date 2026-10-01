@@ -36,9 +36,11 @@ export type JobComment = {
    * NOT to be confused with `stage` above, which is the COMMENT's own bucket
    * (comment_on). Same word, two different domains.
    *
-   * Null on every row written before 2026-09-30, because nothing stamped it
-   * until reschedule() started to — so treat a null as "not recorded", never as
-   * "status 0". Optional because an older backend does not send the field.
+   * Legacy stamped it on every reschedule and remark (so legacy history has
+   * it); the Node backend mostly stored NULL from the 2026-04-29 cutover until
+   * reschedule and Add Remarks resumed stamping it (Easyfix_Backend #62). Treat
+   * a null as "not recorded", never as "status 0" — 0 is a real status (Pending
+   * for Scheduling). Optional because an older backend does not send the field.
    */
   job_stage?: number | null;
   /*

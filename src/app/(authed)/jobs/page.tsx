@@ -1723,11 +1723,6 @@ export default function JobsPage() {
                   min={1}
                   value={filters.easyfixerId}
                   onChange={(e) => setFilters({ ...filters, easyfixerId: e.target.value.replace(/[^0-9]/g, '') })}
-                  // Mouse-wheel on a focused number input would otherwise
-                  // increment/decrement the value — common UX trap when
-                  // operators scroll the filter card. blur() on wheel
-                  // is the standard de-armer.
-                  onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
                 />
               </div>
               <div>

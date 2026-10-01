@@ -45,6 +45,7 @@ import React, { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Plus, Pencil, Trash2, AlertCircle, Layers, ChevronDown, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PriceInput } from '@/components/ui/price-input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { SearchSelect } from '@/components/ui/search-select';
@@ -833,8 +834,7 @@ function ServiceFormDialog({
             </div>
             <div>
               <Label className="text-xs">Total Charge (₹)</Label>
-              <Input
-                type="number" min={0} step="0.01"
+              <PriceInput
                 value={totalCharge}
                 onChange={(e) => setTotalCharge(e.target.value)}
                 placeholder="0.00"
@@ -851,6 +851,7 @@ function ServiceFormDialog({
                   label="Fixed"
                   enabled={efFixedOn} value={efFixed}
                   onToggle={setEfFixedOn} onValueChange={setEfFixed}
+                  suffix="₹"
                 />
                 <CostPairRow
                   label="Variable"
@@ -867,6 +868,7 @@ function ServiceFormDialog({
                   label="Fixed"
                   enabled={ohFixedOn} value={ohFixed}
                   onToggle={setOhFixedOn} onValueChange={setOhFixed}
+                  suffix="₹"
                 />
                 <CostPairRow
                   label="Variable"
@@ -883,6 +885,7 @@ function ServiceFormDialog({
                   label="Fixed"
                   enabled={clFixedOn} value={clFixed}
                   onToggle={setClFixedOn} onValueChange={setClFixed}
+                  suffix="₹"
                 />
                 <CostPairRow
                   label="Variable"
