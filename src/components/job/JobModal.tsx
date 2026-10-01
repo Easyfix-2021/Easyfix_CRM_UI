@@ -28,6 +28,7 @@ import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
 import { appRequestFromDetail, pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
 import { RescheduleRequestedText } from './RescheduleRequestedText';
 import { BillingChargesTab } from './BillingChargesTab';
+import { AuditCheckoutDialog, completionLedgerKey } from './AuditCheckoutDialog';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
 // both ActionBar and the customer-request "apply" flow use it.
@@ -134,6 +135,19 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
+/*
+ * STATUS 10 MEANS TWO THINGS (2026-09-30): a job the technician closed as
+ * needing ANOTHER visit (Revisit), and a finished job waiting for ops (Under
+ * Audit). Exactly one footer action fits each — completing a revisit posts a
+ * payout for unfinished work; booking a second visit on a finished job sends
+ * the technician back for nothing. A revisit carries a marker the plain close
+ * does not: the checkout's revisit reason / date, or a bumped visit_number.
+ * Same markers as the backend's job-pending-on.js rule 8b (the Ops Desk's
+ * "schedule_visit2"). QA 2026-09-30: 0 of 259 status-10 jobs carry a reason or
+ * date — the app's normal close — so they all read as Under Audit.
+ */
+const isRevisitPending = (job: Record<string, unknown>) => Number(job.job_status) === ST.REVISIT
+  && (job.revisit_reason_id != null || job.revisit_date != null || Number(job.visit_number ?? 1) > 1);
 const canCancel        = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
@@ -879,6 +893,8 @@ function ActionBar({ job, jobId, onChanged }: {
   //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [completeOpen, setCompleteOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
@@ -893,6 +909,16 @@ function ActionBar({ job, jobId, onChanged }: {
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
+  /*
+   * The two moves that finish a job (2026-09-30), ported from the legacy CRM,
+   * which ops were still using for them:
+   *   Audit & Checkout     10 → 3  saveCheckOutJob — gated like the Audit
+   *                                action that opens this workspace.
+   *   Feedback & Complete   3 → 5  saveFeedbackJob — gated like Feedback.
+   * tests/job-status-actions.test.js reads these gates verbatim.
+   */
+  const canAuditCheckout = s === ST.REVISIT && !isRevisitPending(job) && me?.canManageJobCharges === true && transitionAllowed(me?.allowedStages, s, ST.COMPLETED);
+  const canComplete = s === ST.COMPLETED && can.isJobEdit && transitionAllowed(me?.allowedStages, s, ST.COMPLETED_ALT);
   // Legacy Auto-assign / Manual-pick buttons retired (2026-07-09) — assignment
   // now flows exclusively through the Schedule & Assign modal (?action=schedule).
   // Gated off (not deleted) so the dialogs below stay wired for a quick revert.
@@ -951,7 +977,13 @@ function ActionBar({ job, jobId, onChanged }: {
           feedback against an in-progress job lets ops capture sentiment
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
-      {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && !canComplete && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {canComplete && <Button size="sm" onClick={() => setCompleteOpen(true)}>Feedback &amp; Complete</Button>}
+      {canAuditCheckout && (
+        <Button size="sm" onClick={() => { invalidateFetch((k) => k === completionLedgerKey(jobId)); setAuditOpen(true); }}>
+          Audit &amp; Checkout
+        </Button>
+      )}
       {/*
         * NO CRM CHECK IN OR CHECK OUT (2026-09-11, per ops). The technician
         * checks in and out FROM THE APP. Check Out (2/20 → 10 Under Audit) had
@@ -1030,6 +1062,18 @@ function ActionBar({ job, jobId, onChanged }: {
         open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
         jobId={jobId}
         onSaved={() => { setFeedbackOpen(false); onChanged(); }}
+      />
+      <FeedbackDialog
+        complete
+        open={completeOpen} onClose={() => setCompleteOpen(false)}
+        jobId={jobId}
+        onSaved={() => { setCompleteOpen(false); onChanged(); }}
+      />
+      <AuditCheckoutDialog
+        open={auditOpen} onClose={() => setAuditOpen(false)}
+        jobId={jobId}
+        collectedBy={job.collected_by}
+        onDone={() => { setAuditOpen(false); onChanged(); }}
       />
     </div>
   );
@@ -1666,6 +1710,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             clientId={(job as Record<string, unknown>).fk_client_id != null ? Number((job as Record<string, unknown>).fk_client_id) : null}
             efrId={job.fk_easyfixter_id != null ? Number(job.fk_easyfixter_id) : null}
             canManage={canManageJobCharges}
+            chargesLocked={isJobClosed(Number(job.job_status))}
           />
         </Panel>
       )}
@@ -4287,17 +4332,15 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
 /*
  * Single image tile.
  *
- * URL contains `?token=<jwt>` — the image file endpoint accepts the
- * JWT either via Authorization header (default) or query string for
- * exactly this use case (`<img src>` requests carry no Authorization
- * header, and we want "open in new tab" to work too). See
- * EasyFix_Backend/middleware/auth.js for the CSRF/leakage trade-off
- * write-up. The token here is the same one stored in localStorage by
- * the api wrapper.
+ * `url` is the tokenised /images/:id/file, used ONLY for the rare
+ * `mode: 'stream'` row; everything else renders from the token-free URL
+ * that /images/:id/url returns (see the block inside the component).
  *
- * `onError` flips to the "Image not found" empty state when the BE
- * responds 404 (image lost from S3 AND local disk, or imageId stale).
+ * `onError`, or `url: null` from /url, flips to the "Image not found"
+ * empty state (image lost from S3 AND local disk, or imageId stale).
  */
+type ResolvedMedia = { url: string | null; mode?: string };
+
 function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView, isPdf, kind }: {
   id: string;
   url: string;
@@ -4325,7 +4368,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
   /* When provided, clicking the thumbnail opens an in-app ENLARGE lightbox
    * (SkillImageLightbox) instead of opening the raw file in a new browser tab.
    * Ctrl/middle-click still opens the new tab (the <a> href is preserved). */
-  onView?: (v: { url: string; name: string }) => void;
+  onView?: (v: NonNullable<SkillImageLightboxValue>) => void;
   /* When provided, renders a top-right X overlay that calls this on
    * click (with stopPropagation so the tile's "open in new tab"
    * behaviour is preserved for clicks elsewhere on the tile). */
@@ -4363,6 +4406,67 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
   }, [url]);
 
   /*
+   * No tile puts the session JWT in a URL (2026-09-30). Each asks
+   * GET /images/:id/url WITH the Authorization header and uses the plain
+   * S3-presigned / legacy-host URL it returns — for the thumbnail, the href,
+   * and (re-fetched fresh on click, since a presigned URL lives 5 min) the
+   * lightbox or PDF tab. <img>/<video> fetch that URL themselves: no CORS,
+   * no Blob. `mode: 'stream'` (bytes only on the BE's local disk — the rare
+   * S3-write fallback) has no such URL; that one case still uses the
+   * tokenised /file, as the BE route documents.
+   */
+  const urlKey = `/admin/jobs/images/${id}/url`;
+  const srcOf = (r: ResolvedMedia | null) => (r ? (r.url ?? (r.mode === 'stream' ? authedUrl : null)) : null);
+  // Videos have no thumbnail, so they resolve only on click.
+  const { data: resolved, error: resolveError } = useFetch<ResolvedMedia>(kind === 'video' ? null : urlKey);
+  const thumbSrc = srcOf(resolved);
+  const missing = (resolved != null && thumbSrc == null) || (!resolved && !!resolveError);
+
+  const [opening, setOpening] = useState(false);
+  const openFresh = async () => {
+    if (opening) return;
+    // A tab opened AFTER an await has lost the click's user activation and is
+    // popup-blocked, so open it now and point it once the URL arrives.
+    const tab = isPdf || !onView ? window.open('', '_blank') : null;
+    if (tab) tab.opener = null;
+    setOpening(true);
+    try {
+      const src = srcOf(await api.get<ResolvedMedia>(urlKey));
+      if (!src) { tab?.close(); showToast({ variant: 'error', message: 'File not found' }); return; }
+      if (tab) tab.location.href = src;
+      else onView?.({
+        url: src, name: label, kind: kind === 'video' ? 'video' : 'image',
+        refresh: async () => srcOf(await api.get<ResolvedMedia>(urlKey)),
+      });
+    } catch (e) {
+      tab?.close();
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load file' });
+    } finally {
+      setOpening(false);
+    }
+  };
+  /*
+   * href only when a real, token-free URL is in hand (images/PDFs) so
+   * Ctrl/Cmd-click still opens a native tab. ponytail: an S3 href goes stale
+   * after the 5-min presign; a plain click always re-resolves, only a late
+   * modifier-click hits the expiry.
+   */
+  const href = kind !== 'video' ? resolved?.url ?? undefined : undefined;
+  const handleOpen = (e: React.MouseEvent) => {
+    if (href && (e.metaKey || e.ctrlKey || e.shiftKey)) return;
+    e.preventDefault();
+    void openFresh();
+  };
+  const anchorProps = href
+    ? { href, target: '_blank', rel: 'noopener noreferrer' }
+    : {
+        role: 'button', tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openFresh(); }
+        },
+      };
+
+  /*
    * Compact tile dimensions match the Confirm-mode staged-file preview
    * (72×72 with a tiny caption row beneath). Default tile is the
    * larger ~128px variant used on the read-only Images tab where
@@ -4376,31 +4480,31 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         title={pendingDelete ? `${tooltip} — marked for deletion (click ↺ to undo)` : tooltip}
       >
         <a
-          href={authedUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => { if (onView && !isPdf && kind !== 'video') { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
-          className="block w-full h-full"
+          {...anchorProps}
+          onClick={handleOpen}
+          className="block w-full h-full cursor-pointer"
         >
           {kind === 'video' ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
               <Video className="h-5 w-5" />
-              <span className="text-xs">Video</span>
+              <span className="text-xs">{opening ? 'Loading…' : 'Video'}</span>
             </div>
           ) : isPdf ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
               <FileText className="h-5 w-5" />
               <span className="text-xs">PDF</span>
             </div>
-          ) : broken ? (
+          ) : broken || missing ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-xs text-muted-foreground p-1 text-center">
               <span className="text-base leading-none">⚠️</span>
               <span className="mt-0.5">Lost</span>
             </div>
+          ) : !thumbSrc ? (
+            <div className="w-full h-full bg-muted animate-pulse" aria-label={`Loading ${label}`} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={authedUrl}
+              src={thumbSrc}
               alt={label}
               /*
                * Pending-delete visual treatment (2026-05-28). Drops
@@ -4465,33 +4569,33 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
     <div className={`relative ${deleting ? 'opacity-50 pointer-events-none' : ''}`}>
       <a
         key={id}
-        href={authedUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => { if (onView && !isPdf && kind !== 'video') { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
-        className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
+        {...anchorProps}
+        onClick={handleOpen}
+        className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow cursor-pointer"
         title={tooltip}
       >
         {kind === 'video' ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
             <Video className="h-7 w-7" />
-            <span className="text-xs">Play video</span>
+            <span className="text-xs">{opening ? 'Loading…' : 'Play video'}</span>
           </div>
         ) : isPdf ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
             <FileText className="h-7 w-7" />
             <span className="text-xs">Open PDF</span>
           </div>
-        ) : broken ? (
+        ) : broken || missing ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground">
             <span className="text-base">⚠️</span>
             <span>Image not found</span>
             <span className="text-xs">Re-upload to restore</span>
           </div>
+        ) : !thumbSrc ? (
+          <div className="h-32 w-full bg-muted animate-pulse" aria-label={`Loading ${label}`} />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={authedUrl}
+            src={thumbSrc}
             alt={label}
             className="w-full h-32 object-cover bg-muted"
             loading="lazy"
@@ -4793,7 +4897,7 @@ function videoSourceBadge(source?: string | null): { label: string; cls: string 
  * up to several customer-shared videos and the Confirm-modal scroll area is
  * tall — kicking off N range-byte metadata fetches on open is wasted bandwidth
  * for the operator's machine. A play-glyph + source badge always overlay;
- * clicking opens the full video in a new tab via the redirect endpoint.
+ * clicking plays it in the lightbox (URL from /videos/:id/url, never a token).
  *
  * Read-only: no delete affordance here in v1.
  */
@@ -4801,22 +4905,25 @@ function JobVideosStrip({ videos, compact = false }: {
   videos: Array<{ media_id: number; s3_key?: string; content_type?: string | null; source?: string | null }>;
   compact?: boolean;
 }) {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
+  const [lightbox, setLightbox] = useState<SkillImageLightboxValue>(null);
   if (!videos || videos.length === 0) return null;
   const tileSize = compact ? 'w-[72px] h-[72px]' : 'w-32 h-32';
   return (
-    <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
-      {videos.map((v) => (
-        <LazyVideoPosterTile
-          key={v.media_id}
-          mediaId={v.media_id}
-          url={`${apiBase}/admin/jobs/videos/${v.media_id}/file`}
-          source={v.source}
-          contentType={v.content_type}
-          tileSize={tileSize}
-        />
-      ))}
-    </div>
+    <>
+      <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
+        {videos.map((v) => (
+          <LazyVideoPosterTile
+            key={v.media_id}
+            mediaId={v.media_id}
+            source={v.source}
+            contentType={v.content_type}
+            tileSize={tileSize}
+            onPlay={setLightbox}
+          />
+        ))}
+      </div>
+      <SkillImageLightbox value={lightbox} onClose={() => setLightbox(null)} />
+    </>
   );
 }
 
@@ -4828,16 +4935,42 @@ function JobVideosStrip({ videos, compact = false }: {
  * frame stays mounted (no unmount on scroll-out) — re-mounting on every scroll
  * would defeat the bandwidth savings.
  */
-function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
+function LazyVideoPosterTile({ mediaId, source, contentType, tileSize, onPlay }: {
   mediaId: number;
-  url: string;
   source?: string | null;
   contentType?: string | null;
   tileSize: string;
+  onPlay: (v: NonNullable<SkillImageLightboxValue>) => void;
 }) {
-  const ref = React.useRef<HTMLAnchorElement | null>(null);
+  const ref = React.useRef<HTMLButtonElement | null>(null);
   const [visible, setVisible] = React.useState(false);
   const badge = videoSourceBadge(source);
+  /*
+   * The poster and the player both come from /videos/:id/url, fetched WITH the
+   * Authorization header (2026-09-30). This tile used to point <video src> and
+   * its <a href> at /videos/:id/file with no token at all; a <video> sends no
+   * header, so every tile 401'd. Resolved only once visible — same bandwidth
+   * rule as the poster — and re-resolved on click, since presigns live 5 min.
+   */
+  const urlKey = `/admin/jobs/videos/${mediaId}/url`;
+  const { data: resolved } = useFetch<{ url: string | null }>(urlKey, { enabled: visible });
+  const [opening, setOpening] = React.useState(false);
+  const play = async () => {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const r = await api.get<{ url: string | null }>(urlKey);
+      if (!r.url) { showToast({ variant: 'error', message: 'Video file not found' }); return; }
+      onPlay({
+        url: r.url, name: `Customer video #${mediaId}`, kind: 'video',
+        refresh: async () => (await api.get<{ url: string | null }>(urlKey)).url,
+      });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load video' });
+    } finally {
+      setOpening(false);
+    }
+  };
 
   React.useEffect(() => {
     if (visible) return; // already loaded, no need to watch any more
@@ -4863,21 +4996,21 @@ function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
   }, [visible]);
 
   return (
-    <a
+    <button
+      type="button"
       ref={ref}
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
+      onClick={() => { void play(); }}
+      disabled={opening}
       className={`relative ${tileSize} rounded border bg-ink-900 overflow-hidden flex items-center justify-center group`}
       title={`Customer video #${mediaId}${badge ? ` · via ${badge.label}` : ''}${contentType ? ` · ${contentType}` : ''}`}
     >
       {/* Poster frame — only rendered once the tile is visible. `#t=0.1` makes
           the browser seek to the first 100ms and render that frame from the
           range-byte response; no autoplay, no full download. */}
-      {visible && (
+      {visible && resolved?.url && (
         // eslint-disable-next-line jsx-a11y/media-has-caption
         <video
-          src={`${url}#t=0.1`}
+          src={`${resolved.url}#t=0.1`}
           preload="metadata"
           muted
           playsInline
@@ -4897,7 +5030,7 @@ function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
       <span className="absolute z-10 bottom-0 right-0 left-0 text-xs text-center bg-black/55 text-white py-0.5">
         Video #{mediaId}
       </span>
-    </a>
+    </button>
   );
 }
 
@@ -12546,8 +12679,15 @@ type FeedbackData = {
   happy_with_service?: number | null;
 };
 
-function FeedbackDialog({ open, onClose, jobId, onSaved }: {
-  open: boolean; onClose: () => void; jobId: number; onSaved: () => void;
+/*
+ * `complete` = Feedback & Complete (3 → 5), legacy's saveFeedbackJob: the
+ * Easyfixer rating is mandatory there, and the save is followed by the move to
+ * Completed, which stamps feedback_date_time / fk_feedback_by and records the
+ * rating against the technician (setStatus). Without it this is the plain
+ * feedback editor.
+ */
+function FeedbackDialog({ open, onClose, jobId, onSaved, complete = false }: {
+  open: boolean; onClose: () => void; jobId: number; onSaved: () => void; complete?: boolean;
 }) {
   const [efrRating, setEfrRating] = useState('');
   const [efxRating, setEfxRating] = useState('');
@@ -12582,6 +12722,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
     const ex = efxRating ? Number(efxRating) : undefined;
     if (er != null && (er < 1 || er > 5)) { setErr('Easyfixer rating must be 1–5'); return; }
     if (ex != null && (ex < 1 || ex > 5)) { setErr('EasyFix service rating must be 1–5'); return; }
+    if (complete && er == null) { setErr('Easyfixer rating is required to complete the job'); return; }
     if (er == null && ex == null && happy === '') {
       setErr('Enter at least one feedback field'); return;
     }
@@ -12592,6 +12733,10 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
         easyfixRating: ex,
         happyWithService: happy === '' ? undefined : Number(happy),
       });
+      if (complete) {
+        await api.patch(`/admin/jobs/${jobId}/status`, { status: ST.COMPLETED_ALT });
+        showToast({ variant: 'success', message: 'Job Completed' });
+      }
       onSaved();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Save failed');
@@ -12601,7 +12746,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Customer Feedback</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{complete ? 'Feedback & Complete' : 'Customer Feedback'}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           {loadingExisting && <div className="text-xs text-muted-foreground">Loading existing feedback…</div>}
           <div className="grid grid-cols-2 gap-3">
@@ -12639,7 +12784,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
           {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
-            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save Feedback'}</Button>
+            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : complete ? 'Save & Complete' : 'Save Feedback'}</Button>
           </div>
         </div>
       </DialogContent>

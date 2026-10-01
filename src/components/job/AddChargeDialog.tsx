@@ -19,6 +19,10 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
  *   incentive → reason + tx/client charge + optional document name
  *   travel    → from/to city, distance, tx/client unit, tx/client charge,
  *               + optional document name
+ *   material  → name, description, units + UOM, Tx / Cx unit price; the two
+ *               charges are units x unit price, shown read-only and derived
+ *               again by the server (legacy audit screen's addAndUpdateMaterial,
+ *               2026-09-30)
  *
  * Client-side guard (mirrors the BE rule): Client Charge >= Tx Charge,
  * shown as an inline error. `editing` swaps POST → PATCH and pre-fills.
@@ -29,12 +33,13 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
  * through JobDocumentsCard's multipart endpoint.
  */
 
-export type ChargeMode = 'penalty' | 'travel' | 'incentive';
+export type ChargeMode = 'penalty' | 'travel' | 'incentive' | 'material';
 
 const TITLE: Record<ChargeMode, string> = {
   penalty: 'Penalty',
   travel: 'Travel',
   incentive: 'Incentive',
+  material: 'Material',
 };
 
 function num(v: string): number {
@@ -69,6 +74,11 @@ export function AddChargeDialog({
   const [distance, setDistance] = useState('');
   const [txUnit, setTxUnit] = useState('');
   const [clientUnit, setClientUnit] = useState('');
+  // Material-only fields (tx/client unit above double as its unit prices)
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [units, setUnits] = useState('');
+  const [uom, setUom] = useState('');
 
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -87,9 +97,17 @@ export function AddChargeDialog({
     setDistance(editing?.total_distance != null ? String(editing.total_distance) : '');
     setTxUnit(editing?.tx_unit != null ? String(editing.tx_unit) : '');
     setClientUnit(editing?.cx_unit != null ? String(editing.cx_unit) : '');
+    setName(editing?.name ?? '');
+    setDescription(editing?.description ?? '');
+    setUnits(editing?.unit != null ? String(editing.unit) : '');
+    setUom(editing?.uom ?? '');
   }, [open, editing]);
 
   const isTravel = mode === 'travel';
+  const isMaterial = mode === 'material';
+  // Live units x unit price, as legacy's screen shows it before posting.
+  const matTx = num(units) * num(txUnit);
+  const matClient = num(units) * num(clientUnit);
   const canHaveDocument = mode === 'travel' || mode === 'incentive';
 
   // Discard-changes guard for Esc / X / overlay-click close paths.
@@ -104,13 +122,19 @@ export function AddChargeDialog({
         || toCity !== (editing.to_city_name ?? '')
         || distance !== (editing.total_distance != null ? String(editing.total_distance) : '')
         || txUnit !== (editing.tx_unit != null ? String(editing.tx_unit) : '')
-        || clientUnit !== (editing.cx_unit != null ? String(editing.cx_unit) : '');
+        || clientUnit !== (editing.cx_unit != null ? String(editing.cx_unit) : '')
+        || name !== (editing.name ?? '')
+        || description !== (editing.description ?? '')
+        || units !== (editing.unit != null ? String(editing.unit) : '')
+        || uom !== (editing.uom ?? '');
     }
-    return Boolean(reason || txCharge || clientCharge || documentName || fromCity || toCity || distance || txUnit || clientUnit || approvalNeeded);
+    return Boolean(reason || txCharge || clientCharge || documentName || fromCity || toCity || distance || txUnit || clientUnit || approvalNeeded
+      || name || description || units || uom);
   };
   const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty, when: () => !saving });
 
   async function submit() {
+    if (isMaterial) return submitMaterial();
     const tx = num(txCharge);
     const client = num(clientCharge);
 
@@ -182,6 +206,39 @@ export function AddChargeDialog({
     }
   }
 
+  async function submitMaterial() {
+    const u = num(units);
+    const tu = num(txUnit);
+    const cu = num(clientUnit);
+    if (!name.trim()) { setErr('Material name is required.'); return; }
+    if (!Number.isInteger(u) || u < 1) { setErr('Enter valid units (a whole number, 1 or more).'); return; }
+    if (!Number.isInteger(tu) || tu < 0) { setErr('Enter a valid Tx unit price.'); return; }
+    if (!Number.isInteger(cu) || cu < 0) { setErr('Enter a valid Client unit price.'); return; }
+    // Legacy: "Tx unit charge should be less and equal then Cx unit charge".
+    if (tu > cu) { setErr('Tx unit price must be less than or equal to Client unit price.'); return; }
+    const body = {
+      name: name.trim(), unit: u, txUnit: tu, clientUnit: cu,
+      ...(description.trim() ? { description: description.trim() } : {}),
+      ...(uom.trim() ? { uom: uom.trim() } : {}),
+    };
+    setSaving(true);
+    setErr(null);
+    try {
+      if (editing) await api.updateJobCharge(jobId, editing.id, body);
+      else await api.addJobMaterial(jobId, body);
+      showToast({ variant: 'success', message: `Material ${editing ? 'Updated' : 'Added'}` });
+      onSaved();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Save failed';
+      setErr(msg);
+      showToast({ variant: 'error', message: msg });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const digits = (v: string) => v.replace(/[^\d]/g, '');
+
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
@@ -190,10 +247,49 @@ export function AddChargeDialog({
           <DialogDescription>
             {isTravel
               ? 'Record a travel charge for this job.'
-              : `Record ${mode === 'penalty' ? 'a penalty' : 'an incentive'} against this job.`}
+              : isMaterial
+                ? 'Record a material used on this job, priced per unit.'
+                : `Record ${mode === 'penalty' ? 'a penalty' : 'an incentive'} against this job.`}
           </DialogDescription>
         </DialogHeader>
 
+        {isMaterial ? (
+        <div className="space-y-3">
+          <div>
+            <Label className="mb-1 block text-sm font-medium">Material Name *</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} />
+          </div>
+          <div>
+            <Label className="mb-1 block text-sm font-medium">Description</Label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} maxLength={255} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="mb-1 block text-sm font-medium">Units *</Label>
+              <Input value={units} onChange={(e) => setUnits(digits(e.target.value))} inputMode="numeric" className="font-mono" />
+            </div>
+            <div>
+              <Label className="mb-1 block text-sm font-medium">Unit of Measure</Label>
+              <Input value={uom} onChange={(e) => setUom(e.target.value)} maxLength={45} placeholder="e.g. Nos, m, kg" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="mb-1 block text-sm font-medium">Tx Unit Price (₹) *</Label>
+              <Input value={txUnit} onChange={(e) => setTxUnit(digits(e.target.value))} inputMode="numeric" className="font-mono" />
+            </div>
+            <div>
+              <Label className="mb-1 block text-sm font-medium">Client Unit Price (₹) *</Label>
+              <Input value={clientUnit} onChange={(e) => setClientUnit(digits(e.target.value))} inputMode="numeric" className="font-mono" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 rounded-md bg-muted/40 px-3 py-2 text-sm">
+            <div>Tx Charge: <span className="font-mono">₹{Number.isFinite(matTx) ? matTx.toLocaleString('en-IN') : '—'}</span></div>
+            <div>Client Charge: <span className="font-mono">₹{Number.isFinite(matClient) ? matClient.toLocaleString('en-IN') : '—'}</span></div>
+          </div>
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
+        </div>
+        ) : (
         <div className="space-y-3">
           {isTravel ? (
             <>
@@ -279,6 +375,7 @@ export function AddChargeDialog({
 
           {err && <div className="text-sm text-urgent-strong">{err}</div>}
         </div>
+        )}
 
         <div className="mt-2 flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
